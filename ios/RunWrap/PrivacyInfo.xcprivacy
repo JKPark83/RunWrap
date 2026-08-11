@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 추적 없음: 광고 식별자·서드파티 SDK를 쓰지 않는다 (기획서 §6) -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!-- 수집하는 데이터 없음. 건강 데이터는 기기에서만 처리하고, 날씨 조회에는
+	     좌표(소수 2자리)만 실어 보내며 저장·연결하지 않는다 — 애플 기준 "수집"에 해당하지 않는다 -->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<!-- Required Reason API: 이 앱에서 쓰는 것은 UserDefaults뿐이다.
+	     (파일 타임스탬프·디스크 공간·부팅 시각·키보드 API는 사용하지 않는다) -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- CA92.1 — 앱 자신의 설정(프로필·알림 설정)만 읽고 쓴다 -->
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
