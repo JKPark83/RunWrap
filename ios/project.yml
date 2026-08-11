@@ -1,0 +1,24 @@
+name: RunnerReport
+options:
+  bundleIdPrefix: com.jkpark
+  deploymentTarget:
+    iOS: "17.0"   # SwiftData(2단계 이후 리포트 캐시) 기준. 기획서 §11 참조
+targets:
+  RunnerReport:
+    type: application
+    platform: iOS
+    sources: [RunnerReport]
+    entitlements:
+      path: RunnerReport/RunnerReport.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+    info:
+      path: RunnerReport/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: 러너 리포트   # 가칭 — 앱 이름은 미결정(기획서 §11)
+        NSHealthShareUsageDescription: 애플워치로 기록한 러닝(거리·시간·심박)을 읽어 리포트를 만들기 위해 사용합니다. 데이터는 기기 밖으로 나가지 않습니다.
+    settings:
+      base:
+        DEVELOPMENT_TEAM: WDNVP9B8A9        # 무료 팀 (7일 서명)
+        PRODUCT_BUNDLE_IDENTIFIER: com.jkpark.runnerreport

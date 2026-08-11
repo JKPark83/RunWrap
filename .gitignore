@@ -1,0 +1,6 @@
+.DS_Store
+build/
+*.xcodeproj
+# xcodegen이 project.yml의 info/entitlements 섹션에서 생성
+ios/RunnerReport/Info.plist
+ios/RunnerReport/RunnerReport.entitlements
