@@ -1,10 +1,10 @@
 import SwiftUI
 
 @main
-struct RunnerReportApp: App {
+struct RunWrapApp: App {
     var body: some Scene {
         WindowGroup {
-            WorkoutListScreen()
+            RootView()
         }
     }
 }

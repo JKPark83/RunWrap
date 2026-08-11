@@ -39,8 +39,11 @@ struct WorkoutListScreen: View {
                 Button("다시 확인") { Task { await health.load() } }
             }
         case .loaded(let runs):
-            List(runs) { run in
-                RunRow(run: run)
+            List {
+                ReportSection(runs: runs)
+                Section("최근 러닝") {
+                    ForEach(runs) { RunRow(run: $0) }
+                }
             }
             .refreshable { await health.load() }
         }
@@ -73,25 +76,37 @@ struct RunRow: View {
             Text(run.start.formatted(date: .abbreviated, time: .shortened))
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 14) {
-                if let km = run.distanceKm {
-                    stat(String(format: "%.2f km", km), icon: "road.lanes")
-                }
-                stat(Self.duration(run.durationSec), icon: "stopwatch")
-                if let pace = run.paceSecPerKm {
-                    stat(Self.pace(pace), icon: "speedometer")
-                }
-                if let bpm = run.avgHeartRate {
-                    stat("\(Int(bpm.rounded()))", icon: "heart.fill")
-                }
-            }
-            .font(.subheadline.monospacedDigit())
+            // 단일 Text로 합쳐야 좁은 화면·큰 글자에서 말줄임 없이 줄 전체가 균일하게 축소된다
+            stats
+                .font(.subheadline.monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
         .padding(.vertical, 2)
     }
 
-    private func stat(_ text: String, icon: String) -> some View {
-        Label(text, systemImage: icon)
+    private var stats: Text {
+        var parts: [Text] = []
+        if let km = run.distanceKm {
+            parts.append(stat(String(format: "%.2f km", km), icon: "road.lanes"))
+        }
+        parts.append(stat(Self.duration(run.durationSec), icon: "stopwatch"))
+        if let pace = run.paceSecPerKm {
+            parts.append(stat(Self.pace(pace), icon: "speedometer"))
+        }
+        if let bpm = run.avgHeartRate {
+            parts.append(stat("\(Int(bpm.rounded()))", icon: "heart.fill"))
+        }
+        var line = Text(verbatim: "")
+        for (i, part) in parts.enumerated() {
+            line = i == 0 ? part : Text("\(line)   \(part)")
+        }
+        return line
+    }
+
+    private func stat(_ text: String, icon: String) -> Text {
+        let icon = Text(Image(systemName: icon)).foregroundStyle(.tint)
+        return Text("\(icon) \(text)")
     }
 
     static func duration(_ seconds: Double) -> String {
