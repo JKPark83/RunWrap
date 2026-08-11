@@ -50,6 +50,12 @@ xcodebuild -project RunWrap.xcodeproj -scheme RunWrap \
 - UI 단일 원본은 claude.design "Runner Report" 시안 — 폰트는 시안 수치를
   `.system(size:)`로 고정한다 (Dynamic Type 미적용은 의도된 트레이드오프).
 - 기존 컴포넌트를 재사용한다: `.rrCard()`, `ToneBadge`, `Eyebrow`, `Format.*`, RRCharts.
+- 막대 차트는 각 막대 위에 값을 작게 표시한다. 공간이 좁거나 다른 글자 영역과
+  겹치면 상시 표시 대신 탭 시 팝업(`ChartCallout`)으로 보여준다.
+- 추세(라인) 차트는 포인트를 탭하면 해당 데이터 값을 확인할 수 있어야 한다.
+- 주(週) 표기는 "Week 33" 같은 ISO 주차 번호를 노출하지 않는다 —
+  `Format.weekLabel`로 "8월 2째주"(화면 헤더 등에서 연도가 필요하면 `withYear`로
+  "2026년 8월 2째주") 형식을 쓴다. 달·연도는 그 주 목요일 기준.
 - 화면 파일명은 `~Screen.swift`. 화면 전용 하위 뷰·헬퍼는 같은 파일에 private으로 둔다.
 
 ### HealthKit
