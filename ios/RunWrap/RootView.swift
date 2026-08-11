@@ -1,9 +1,12 @@
 import SwiftUI
 
-/// 앱 루트 — 연결 상태에 따라 온보딩 / 로딩 / 오류 / 메인 탭 분기
+/// 앱 루트 — 연결 상태에 따라 온보딩 / 로딩 / 오류 / 메인 탭 분기.
+/// HealthStore는 RunWrapApp이 소유하고 environmentObject로 내려온다 (계획서 M8).
 struct RootView: View {
-    @StateObject private var health = HealthStore()
+    @EnvironmentObject private var health: HealthStore
     @AppStorage("didConnectHealth") private var didConnectHealth = false
+    /// 프로필(목적·레벨) 설정 완료 여부 — M2 이전 사용자는 다음 실행에 한 번 노출된다
+    @AppStorage(ProfileKey.didSetProfile) private var didSetProfile = false
 
     var body: some View {
         Group {
@@ -29,10 +32,14 @@ struct RootView: View {
                         .buttonStyle(.borderedProminent)
                 }
             case .loaded:
-                MainTabs()
+                // 권한 연결 뒤 프로필 스텝을 한 번 거친다 (계획서 M2)
+                if didSetProfile {
+                    MainTabs()
+                } else {
+                    ProfileSetupScreen()
+                }
             }
         }
-        .environmentObject(health)
         .tint(RR.brand)
         .task {
             // 이미 연결했던 사용자는 온보딩 없이 바로 조회
@@ -46,7 +53,7 @@ struct RootView: View {
     }
 }
 
-/// 시안의 2탭 구조 — 리포트 / 통계
+/// 3탭 구조 — 리포트 / 통계 / 오늘 (계획서 M6에서 '오늘' 추가)
 private struct MainTabs: View {
     var body: some View {
         TabView {
@@ -54,6 +61,8 @@ private struct MainTabs: View {
                 .tabItem { Label("리포트", systemImage: "figure.run") }
             NavigationStack { StatsScreen() }
                 .tabItem { Label("통계", systemImage: "chart.bar.xaxis") }
+            NavigationStack { TodayScreen() }
+                .tabItem { Label("오늘", systemImage: "sun.max") }
         }
     }
 }

@@ -4,6 +4,7 @@ import SwiftUI
 struct StatsScreen: View {
     @EnvironmentObject private var health: HealthStore
     @State private var monthIndex = 0   // availableMonths 기준 (0 = 이번 달)
+    @State private var progressMetric: ProgressMetric = .pace
 
     var body: some View {
         Group {
@@ -11,6 +12,8 @@ struct StatsScreen: View {
                 let months = MonthlyStats.availableMonths(in: runs)
                 let index = min(monthIndex, months.count - 1)
                 let stats = MonthlyStats.compute(runs: runs, month: months[index])
+                let series = MonthlySeries.compute(runs: runs, now: Date())
+                let records = PersonalRecords.compute(runs: runs)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -25,6 +28,9 @@ struct StatsScreen: View {
                         monthSelector(months: months, index: index)
                         distanceCard(stats)
                         tileGrid(stats)
+                        if series != nil || !records.isEmpty {
+                            progressSection(series: series, records: records)
+                        }
                         sessionList(stats)
                     }
                     .padding(.horizontal, 18)
@@ -202,6 +208,143 @@ struct StatsScreen: View {
         .rrCard(radius: 20)
     }
 
+    // MARK: 발전상 — 월별 추이 + 최고 기록 (기획서 §4.7, 계획서 M3)
+
+    /// 추이 차트의 지표 세그먼트
+    private enum ProgressMetric: String, CaseIterable {
+        case pace = "페이스", ef = "EF", distance = "거리"
+
+        var caption: String {
+            switch self {
+            case .pace: "월 평균 페이스 · 내려갈수록 빨라진 것"
+            case .ef: "심박당 속도(EF) 월 평균 · 올라갈수록 좋아진 것"
+            case .distance: "월 누적 거리"
+            }
+        }
+    }
+
+    private func progressSection(series: MonthlySeries?,
+                                 records: [PersonalRecords.Entry]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("발전상")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("최근 12개월")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 10)
+
+            if let series { progressChartCard(series) }
+            if !records.isEmpty { recordsCard(records) }
+        }
+    }
+
+    private func progressChartCard(_ series: MonthlySeries) -> some View {
+        let points = metricPoints(progressMetric, in: series)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                ForEach(ProgressMetric.allCases, id: \.self) { metric in
+                    Button {
+                        progressMetric = metric
+                    } label: {
+                        Text(metric.rawValue)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(progressMetric == metric ? .white : RR.text2)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(progressMetric == metric ? RR.brand : RR.surface2,
+                                        in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+
+            if points.count >= 2 {
+                TrendLineChart(points: points.map(\.value),
+                               tint: RR.brand,
+                               endLabels: (points.first!.label, points.last!.label),
+                               pointLabels: points.map(\.label),
+                               valueText: metricValueText(progressMetric))
+                    .padding(.top, 14)
+            } else {
+                // EF처럼 월별 표본 가드에 걸린 지표는 점이 모자랄 수 있다
+                Text("이 지표는 아직 월별 기록이 부족해요. 심박이 함께 찍힌 러닝이 달마다 3회쯤 쌓이면 그려집니다.")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(4)
+                    .foregroundStyle(RR.text3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 20)
+            }
+
+            Text(progressMetric.caption)
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 8)
+        }
+        .padding(EdgeInsets(top: 16, leading: 18, bottom: 14, trailing: 18))
+        .rrCard()
+    }
+
+    /// 지표별 (축 라벨, 값) 시리즈 — 가드로 점이 없는 달은 건너뛴다
+    private func metricPoints(_ metric: ProgressMetric,
+                              in series: MonthlySeries) -> [(label: String, value: Double)] {
+        switch metric {
+        case .pace: series.points.compactMap { p in p.avgPaceSec.map { (p.label, $0) } }
+        case .ef: series.points.compactMap { p in p.avgEF.map { (p.label, $0) } }
+        case .distance: series.points.map { ($0.label, $0.totalKm) }
+        }
+    }
+
+    /// 지표별 탭 콜아웃 수치 표기
+    private func metricValueText(_ metric: ProgressMetric) -> (Double) -> String {
+        switch metric {
+        case .pace: { Format.paceKm($0) }
+        case .ef: { String(format: "EF %.2f", $0) }
+        case .distance: { Format.km($0) + " km" }
+        }
+    }
+
+    private func recordsCard(_ records: [PersonalRecords.Entry]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(records.enumerated()), id: \.element.label) { index, entry in
+                HStack(spacing: 12) {
+                    Text(entry.label)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(RR.brand)
+                        .frame(width: 44, alignment: .center)
+                        .padding(.vertical, 5)
+                        .background(RR.brandSoft,
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Text(Format.duration(entry.timeSec))
+                        .font(.system(size: 17, weight: .bold, design: .monospaced))
+                        .foregroundStyle(RR.text)
+                    Spacer()
+                    Text(recordDate(entry.date))
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(RR.text3)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                if index < records.count - 1 {
+                    Divider().overlay(RR.line).padding(.leading, 66)
+                }
+            }
+        }
+        .rrCard(radius: 20)
+    }
+
+    private func recordDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy.M.d"
+        return formatter.string(from: date)
+    }
+
     // MARK: 세션 목록
 
     private func sessionList(_ stats: MonthlyStats) -> some View {
@@ -264,10 +407,13 @@ struct StatsScreen: View {
             .frame(width: 38, alignment: .leading)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(run.displayTitle)
-                    .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundStyle(RR.text)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(run.displayTitle)
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                        .lineLimit(1)
+                    if run.isIndoor { IndoorBadge() }
+                }
                 Text(run.metaLine)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(RR.text2)

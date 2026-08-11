@@ -130,7 +130,20 @@ extension View {
     func rrCard(radius: CGFloat = 24) -> some View { modifier(RRCardModifier(radius: radius)) }
 }
 
-/// 화면 상단 모노스페이스 아이브로 라벨 (예: "WEEK 32 · THIS WEEK")
+/// 실내(트레드밀) 세션 표시용 소형 텍스트 배지 — 상태(톤)가 아니라 종류 표시라
+/// RRTone 매핑을 쓰지 않는다 (계획서 M1). 시안: 10px/650, brandSoft 배경
+struct IndoorBadge: View {
+    var body: some View {
+        Text("실내")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(RR.brand)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2.5)
+            .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
+
+/// 화면 상단 모노스페이스 아이브로 라벨 (예: "2026년 8월 2째주 · 이번 주")
 struct Eyebrow: View {
     let text: String
 
@@ -162,4 +175,25 @@ enum Format {
     static func paceKm(_ secPerKm: Double) -> String { pace(secPerKm) + "/km" }
 
     static func km(_ value: Double) -> String { String(format: "%.1f", value) }
+
+    /// "4,120" — 천 단위 구분 정수 (칼로리 카드)
+    static func kcal(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? "0"
+    }
+
+    /// "8월 2째주" — 차트 주 라벨. 두 달에 걸친 주는 그 주의 목요일이 속한 달로
+    /// 정하고(ISO 8601 관행), 째주 순번도 목요일 날짜 기준(1–7일 → 1째주)이다.
+    /// withYear를 켜면 "2026년 8월 2째주" — 연도도 목요일 기준(연말·연초에 걸친 주 대응).
+    static func weekLabel(weekStart: Date, withYear: Bool = false) -> String {
+        var calendar = Calendar(identifier: .iso8601)  // 월요일 시작
+        calendar.timeZone = .current
+        let thursday = calendar.date(byAdding: .day, value: 3, to: weekStart) ?? weekStart
+        let month = calendar.component(.month, from: thursday)
+        let ordinal = (calendar.component(.day, from: thursday) + 6) / 7
+        let label = "\(month)월 \(ordinal)째주"
+        return withYear ? "\(calendar.component(.year, from: thursday))년 \(label)" : label
+    }
 }

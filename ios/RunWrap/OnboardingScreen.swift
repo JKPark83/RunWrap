@@ -90,3 +90,100 @@ struct OnboardingScreen: View {
         }
     }
 }
+
+/// 온보딩 2단계 — 권한 요청 뒤 목적·레벨 선택 (계획서 M2).
+/// @AppStorage 대신 @State + 명시적 저장을 쓴다: "시작하기"를 누르기 전에는
+/// 프로필이 확정되지 않은 상태라 저장소에 흘리지 않는다.
+struct ProfileSetupScreen: View {
+    @State private var goal: RunGoal = .training
+    @State private var level: RunLevel = .beginner  // 온보딩 기본은 초보 — 쉬운 문장부터
+    @AppStorage(ProfileKey.didSetProfile) private var didSetProfile = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Spacer(minLength: 30)
+
+            Eyebrow(text: "Profile")
+            Text("어떤 러닝을 하시나요?")
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(RR.text)
+                .padding(.top, 8)
+            Text("리포트 카드의 구성과 문장 톤을 여기에 맞춰 드려요. 설정에서 언제든 바꿀 수 있습니다.")
+                .font(.system(size: 14))
+                .lineSpacing(4)
+                .foregroundStyle(RR.text2)
+                .padding(.top, 10)
+
+            optionGroup(title: "러닝 목적") {
+                ForEach(RunGoal.allCases, id: \.self) { item in
+                    optionCard(label: item.label, caption: item.caption,
+                               isSelected: goal == item) { goal = item }
+                }
+            }
+            .padding(.top, 26)
+
+            optionGroup(title: "러닝 레벨") {
+                ForEach(RunLevel.allCases, id: \.self) { item in
+                    optionCard(label: item.label, caption: item.caption,
+                               isSelected: level == item) { level = item }
+                }
+            }
+            .padding(.top, 18)
+
+            Spacer(minLength: 24)
+
+            Button {
+                UserDefaults.standard.set(goal.rawValue, forKey: ProfileKey.goal)
+                UserDefaults.standard.set(level.rawValue, forKey: ProfileKey.level)
+                didSetProfile = true
+            } label: {
+                Text("시작하기")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(RR.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .padding(.bottom, 12)
+        }
+        .padding(.horizontal, 26)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(RR.bg.ignoresSafeArea())
+    }
+
+    private func optionGroup(title: String, @ViewBuilder rows: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(RR.text2)
+            rows()
+        }
+    }
+
+    private func optionCard(label: String, caption: String,
+                            isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(label)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                    Text(caption)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(isSelected ? RR.brand : RR.text3.opacity(0.5))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(RR.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .strokeBorder(isSelected ? RR.brand : RR.line, lineWidth: isSelected ? 1.5 : 1))
+    }
+}

@@ -34,6 +34,9 @@ struct Insight: Identifiable, Equatable {
 /// 해당 지표를 아예 내지 않는다 — 틀린 인사이트는 없느니만 못하다.
 struct ReportEngine {
     var now = Date()
+    /// 문장 난이도 — 초보자는 지표 용어(ACWR·EF) 대신 쉬운 표현을 쓴다 (계획서 M2).
+    /// 엔진은 순수 로직 유지: 프로필 저장소를 모르고 값 타입으로만 주입받는다.
+    var level: RunLevel = .experienced
 
     func insights(from runs: [RunSummary]) -> [Insight] {
         [weeklyDistanceChange(runs), acwr(runs), heartRateEfficiency(runs)]
@@ -49,18 +52,23 @@ struct ReportEngine {
         let change = (recent - previous) / previous * 100
         let pct = String(format: "%+.0f%%", change)
         let detail = String(format: "최근 7일 %.1fkm · 이전 7일 %.1fkm.", recent, previous)
+        let easy = level == .beginner
         switch change {
         case 10...:
             return Insight(kind: .weeklyDistanceChange, tone: .warning,
-                           headline: "지난주 대비 \(pct) — 과부하 구간입니다",
-                           detail: detail + " 주간 증가 폭은 10% 이내가 안전합니다.")
+                           headline: easy ? "지난주보다 \(pct) 더 달렸어요 — 몸이 따라오기 벅찰 수 있어요"
+                                          : "지난주 대비 \(pct) — 과부하 구간입니다",
+                           detail: detail + (easy ? " 거리는 한 주에 10%씩만 늘리는 게 안전해요."
+                                                  : " 주간 증가 폭은 10% 이내가 안전합니다."))
         case ..<(-30):
             return Insight(kind: .weeklyDistanceChange, tone: .neutral,
-                           headline: "지난주 대비 \(pct) — 훈련량이 크게 줄었습니다",
+                           headline: easy ? "지난주보다 \(pct) — 많이 쉬어간 주예요"
+                                          : "지난주 대비 \(pct) — 훈련량이 크게 줄었습니다",
                            detail: detail)
         default:
             return Insight(kind: .weeklyDistanceChange, tone: .positive,
-                           headline: "지난주 대비 \(pct) — 안정적인 훈련량입니다",
+                           headline: easy ? "지난주 대비 \(pct) — 딱 좋은 만큼 달리고 있어요"
+                                          : "지난주 대비 \(pct) — 안정적인 훈련량입니다",
                            detail: detail)
         }
     }
@@ -76,24 +84,32 @@ struct ReportEngine {
         guard chronic >= 3 else { return nil }  // 주 평균 3km 미만이면 지표가 무의미하다
         let ratio = acute / chronic
         let value = String(format: "%.1f", ratio)
-        let detail = String(format: "최근 7일 %.1fkm ÷ 4주 주평균 %.1fkm. 적정 범위는 0.8~1.3.",
-                            acute, chronic)
+        let easy = level == .beginner
+        let detail = easy
+            ? String(format: "최근 7일 %.1fkm를 지난 4주 주평균 %.1fkm와 비교한 값이에요.",
+                     acute, chronic)
+            : String(format: "최근 7일 %.1fkm ÷ 4주 주평균 %.1fkm. 적정 범위는 0.8~1.3.",
+                     acute, chronic)
         switch ratio {
         case 1.5...:
             return Insight(kind: .acwr, tone: .warning,
-                           headline: "이번 주 부하가 4주 평균의 \(value)배 — 부상 위험 구간입니다",
+                           headline: easy ? "몸이 익숙한 양보다 \(value)배 달렸어요 — 부상을 조심할 때예요"
+                                          : "이번 주 부하가 4주 평균의 \(value)배 — 부상 위험 구간입니다",
                            detail: detail)
         case 1.3..<1.5:
             return Insight(kind: .acwr, tone: .neutral,
-                           headline: "이번 주 부하가 4주 평균의 \(value)배 — 다소 높습니다",
+                           headline: easy ? "평소보다 조금 많이 달리고 있어요"
+                                          : "이번 주 부하가 4주 평균의 \(value)배 — 다소 높습니다",
                            detail: detail)
         case 0.8..<1.3:
             return Insight(kind: .acwr, tone: .positive,
-                           headline: "이번 주 부하가 4주 평균의 \(value)배 — 적정 범위입니다",
+                           headline: easy ? "몸이 감당할 수 있는 만큼 달리고 있어요"
+                                          : "이번 주 부하가 4주 평균의 \(value)배 — 적정 범위입니다",
                            detail: detail)
         default:
             return Insight(kind: .acwr, tone: .neutral,
-                           headline: "이번 주 부하가 4주 평균의 \(value)배 — 회복 주간 수준입니다",
+                           headline: easy ? "이번 주는 평소보다 많이 쉬었어요"
+                                          : "이번 주 부하가 4주 평균의 \(value)배 — 회복 주간 수준입니다",
                            detail: detail)
         }
     }
@@ -108,19 +124,25 @@ struct ReportEngine {
         guard recent.count >= 3, previous.count >= 3 else { return nil }  // 표본이 적으면 잡음이 크다
         let change = (average(recent) - average(previous)) / average(previous) * 100
         let pct = String(format: "%+.1f%%", change)
-        let detail = "심박당 속도(EF)의 최근 2주 평균을 직전 2주와 비교한 값입니다."
+        let easy = level == .beginner
+        let detail = easy
+            ? "심장이 뛰는 것에 비해 얼마나 빨리 달리는지를 2주 단위로 비교한 값이에요."
+            : "심박당 속도(EF)의 최근 2주 평균을 직전 2주와 비교한 값입니다."
         switch change {
         case 3...:
             return Insight(kind: .heartRateEfficiency, tone: .positive,
-                           headline: "같은 심박으로 더 빨리 달리고 있습니다 (\(pct)) — 체력이 오르는 중",
+                           headline: easy ? "같은 힘으로 더 빨리 달리고 있어요 — 체력이 늘고 있다는 뜻이에요"
+                                          : "같은 심박으로 더 빨리 달리고 있습니다 (\(pct)) — 체력이 오르는 중",
                            detail: detail)
         case ..<(-3):
             return Insight(kind: .heartRateEfficiency, tone: .neutral,
-                           headline: "심박 효율 \(pct) — 피로 누적이나 더위 영향일 수 있습니다",
+                           headline: easy ? "요즘 페이스가 조금 처졌어요 — 피곤하거나 더위 탓일 수 있어요"
+                                          : "심박 효율 \(pct) — 피로 누적이나 더위 영향일 수 있습니다",
                            detail: detail)
         default:
             return Insight(kind: .heartRateEfficiency, tone: .neutral,
-                           headline: "심박 효율이 지난 2주와 비슷합니다 — 컨디션 유지 중",
+                           headline: easy ? "체력이 지난 2주와 비슷하게 유지되고 있어요"
+                                          : "심박 효율이 지난 2주와 비슷합니다 — 컨디션 유지 중",
                            detail: detail)
         }
     }

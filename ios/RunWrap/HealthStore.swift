@@ -19,10 +19,16 @@ final class HealthStore: ObservableObject {
     // 시뮬레이터에는 워치 기록이 없다 — 권한 단계 없이 바로 합성 데이터를 보여준다
     @Published private(set) var state: State = .loaded(DemoData.runs)
     @Published private(set) var vitals: VitalsSnapshot? = DemoData.vitals
+    @Published private(set) var bodyMass: [(date: Date, kg: Double)] = DemoData.bodyMass
+    @Published private(set) var vo2Max: [(date: Date, value: Double)] = DemoData.vo2Max
     #else
     @Published private(set) var state: State = .idle
     /// 체력 배터리용 활력징후 — 러닝 목록과 별개로 실패해도 리포트는 뜬다
     @Published private(set) var vitals: VitalsSnapshot?
+    /// 몸무게 추이(다이어트 카드)용 최근 8주 표본 — 주 단위 평균은 엔진이 계산한다
+    @Published private(set) var bodyMass: [(date: Date, kg: Double)] = []
+    /// 심폐 체력 카드용 최근 12주 VO₂max 표본 (ml/kg/min) — 주 단위 평균은 엔진이 계산한다
+    @Published private(set) var vo2Max: [(date: Date, value: Double)] = []
     #endif
 
     private let store = HKHealthStore()
@@ -33,6 +39,13 @@ final class HealthStore: ObservableObject {
         HKQuantityType(.distanceWalkingRunning),
         HKQuantityType(.heartRate),
         HKQuantityType(.stepCount),                     // 세션 상세: 케이던스
+        HKQuantityType(.activeEnergyBurned),            // 다이어트 카드: 세션 소모 칼로리
+        HKQuantityType(.bodyMass),                      // 다이어트 카드: 몸무게 추이
+        HKQuantityType(.vo2Max),                        // 리포트: 심폐 체력(VO₂max) 추이
+        HKQuantityType(.runningVerticalOscillation),    // 주법 리포트: 수직 진폭 (기획서 §4.8, 실외 전용)
+        HKQuantityType(.runningGroundContactTime),      // 주법 리포트: 지면 접촉 시간
+        HKQuantityType(.runningStrideLength),           // 주법 리포트: 보폭 — 케이던스 우선 산출 재료
+        HKQuantityType(.runningPower),                  // 주법 리포트: 러닝 파워
         HKCharacteristicType(.dateOfBirth),             // 심박 존: HRmax 추정 (Tanaka)
         HKQuantityType(.heartRateVariabilitySDNN),      // 체력 배터리: 회복 신호
         HKQuantityType(.restingHeartRate),
@@ -64,6 +77,8 @@ final class HealthStore: ObservableObject {
         #if targetEnvironment(simulator)
         state = .loaded(DemoData.runs)
         vitals = DemoData.vitals
+        bodyMass = DemoData.bodyMass
+        vo2Max = DemoData.vo2Max
         #else
         guard HKHealthStore.isHealthDataAvailable() else {
             state = .unavailable
@@ -75,11 +90,47 @@ final class HealthStore: ObservableObject {
             // 업데이트로 읽기 항목이 늘 수 있어 매번 요청 — 이미 응답한 항목은 시트가 뜨지 않는다
             try? await store.requestAuthorization(toShare: [], read: readTypes)
             let workouts = try await fetchRunningWorkouts(limit: 100)
-            state = .loaded(workouts.map(Self.summary(of:)))
+            var summaries = workouts.map(Self.summary(of:))
+            // 케이던스 백필 — 주법 추이(계획서 M4) 재료. 걸음 수는 워크아웃 통계에 없어
+            // 워크아웃마다 쿼리해야 한다 — 추이 창인 최근 28일만 채워 쿼리 수를 줄인다.
+            let cadenceCutoff = Date().addingTimeInterval(-28 * 86_400)
+            for (index, workout) in workouts.enumerated() where workout.startDate >= cadenceCutoff {
+                summaries[index].cadenceSpm = await cadenceSpm(of: workout)
+            }
+            state = .loaded(summaries)
             vitals = await fetchVitals()
+            bodyMass = await fetchBodyMass()
+            vo2Max = await fetchVo2Max()
         } catch {
             state = .failed(error.localizedDescription)
         }
+        #endif
+    }
+
+    // MARK: - 백그라운드 워크아웃 감지 (계획서 M8)
+
+    /// 새 워크아웃 저장을 감지하는 옵저버 — 러닝 종료 직후 알림(보조 경로)의 재료.
+    /// 등록 직후에도 한 번 불리므로 중복 알림 필터링은 호출부(onUpdate) 몫이다.
+    private var workoutObserver: HKObserverQuery?
+
+    /// 옵저버 등록 + 백그라운드 딜리버리 켜기 — 앱 기동마다 호출해도 안전 (재등록 가드).
+    /// 시뮬레이터는 백그라운드 딜리버리를 지원하지 않아 no-op.
+    func startObservingWorkouts(onUpdate: @escaping @Sendable () async -> Void) {
+        #if !targetEnvironment(simulator)
+        guard HKHealthStore.isHealthDataAvailable(), workoutObserver == nil else { return }
+        let query = HKObserverQuery(sampleType: .workoutType(),
+                                    predicate: HKQuery.predicateForWorkouts(with: .running)) { _, done, error in
+            // 계약: 성패와 무관하게 completionHandler를 반드시 부른다 —
+            // 3회 미호출이 쌓이면 background delivery 자체가 끊긴다
+            Task {
+                if error == nil { await onUpdate() }
+                done()
+            }
+        }
+        store.execute(query)
+        workoutObserver = query
+        // 실패해도 조용히 넘어간다 — 포그라운드 재계산이 1차 경로, 옵저버는 보조
+        store.enableBackgroundDelivery(for: .workoutType(), frequency: .immediate) { _, _ in }
         #endif
     }
 
@@ -96,6 +147,37 @@ final class HealthStore: ObservableObject {
                 } else {
                     continuation.resume(returning: (samples as? [HKWorkout]) ?? [])
                 }
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - 케이던스 백필 (주법 추이)
+
+    /// 워크아웃 평균 케이던스(spm) = 걸음 수 합 ÷ 분.
+    /// 연결 샘플 우선, 없으면 기록 기기로 좁힌 시간 범위 폴백 —
+    /// 아이폰·워치 이중 기록 합산을 피하는 이유는 WorkoutDetailStore.fetchStepSum 참고.
+    private func cadenceSpm(of workout: HKWorkout) async -> Double? {
+        guard workout.duration > 60 else { return nil }
+        if let steps = await stepSum(predicate: HKQuery.predicateForObjects(from: workout)),
+           steps > 0 {
+            return steps / (workout.duration / 60)
+        }
+        let sameSource = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            HKQuery.predicateForSamples(withStart: workout.startDate,
+                                        end: workout.endDate, options: []),
+            HKQuery.predicateForObjects(from: workout.sourceRevision.source),
+        ])
+        guard let steps = await stepSum(predicate: sameSource), steps > 0 else { return nil }
+        return steps / (workout.duration / 60)
+    }
+
+    private func stepSum(predicate: NSPredicate) async -> Double? {
+        await withCheckedContinuation { continuation in
+            let query = HKStatisticsQuery(quantityType: HKQuantityType(.stepCount),
+                                          quantitySamplePredicate: predicate,
+                                          options: .cumulativeSum) { _, stats, _ in
+                continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: .count()))
             }
             store.execute(query)
         }
@@ -186,6 +268,28 @@ final class HealthStore: ObservableObject {
         return total / 3_600
     }
 
+    /// 최근 8주 몸무게 표본 — 다이어트 카드의 재료 (계획서 M2)
+    private func fetchBodyMass(now: Date = .now) async -> [(date: Date, kg: Double)] {
+        let samples = (try? await quantitySamples(HKQuantityType(.bodyMass),
+                                                  from: now.addingTimeInterval(-56 * 86_400),
+                                                  to: now)) ?? []
+        return samples.map { (date: $0.startDate,
+                              kg: $0.quantity.doubleValue(for: .gramUnit(with: .kilo))) }
+    }
+
+    /// 최근 12주 VO₂max 표본 — 심폐 체력 추이 카드의 재료.
+    /// 워치가 야외 러닝·걷기 세션에서 추정해 기록한다 (실내 세션에는 없다).
+    private func fetchVo2Max(now: Date = .now) async -> [(date: Date, value: Double)] {
+        // ml/(kg·min) — HKUnit(from:) 문자열 파싱 대신 명시적으로 조립한다
+        let unit = HKUnit.literUnit(with: .milli)
+            .unitDivided(by: HKUnit.gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        let samples = (try? await quantitySamples(HKQuantityType(.vo2Max),
+                                                  from: now.addingTimeInterval(-84 * 86_400),
+                                                  to: now)) ?? []
+        return samples.map { (date: $0.startDate,
+                              value: $0.quantity.doubleValue(for: unit)) }
+    }
+
     private func quantitySamples(_ type: HKQuantityType,
                                  from: Date,
                                  to: Date) async throws -> [HKQuantitySample] {
@@ -212,10 +316,17 @@ final class HealthStore: ObservableObject {
         let bpm = workout.statistics(for: HKQuantityType(.heartRate))?
             .averageQuantity()?
             .doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+        let kcal = workout.statistics(for: HKQuantityType(.activeEnergyBurned))?
+            .sumQuantity()?
+            .doubleValue(for: .kilocalorie())
+        // 실내 여부 — 메타데이터 부재 시 야외 취급 (미기록 = 야외 가정, 기획서 §4.6)
+        let isIndoor = (workout.metadata?[HKMetadataKeyIndoorWorkout] as? Bool) ?? false
         return RunSummary(id: workout.uuid,
                           start: workout.startDate,
                           durationSec: workout.duration,
                           distanceMeters: distance,
-                          avgHeartRate: bpm)
+                          avgHeartRate: bpm,
+                          calories: kcal,
+                          isIndoor: isIndoor)
     }
 }

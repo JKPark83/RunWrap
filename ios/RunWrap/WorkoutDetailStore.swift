@@ -17,23 +17,34 @@ struct WorkoutDetail {
     var cadenceSpm: Double?
     var elevationM: Double?
     var hrMaxEstimated = false    // true면 생년월일이 없어 HRmax 190 폴백
+
+    // 러닝 다이내믹스 (기획서 §4.8, 계획서 M4) — 실외 세션에만 기록된다 (실내는 애플이 기록하지 않음)
+    var verticalOscillationCm: Double?
+    var groundContactMs: Double?
+    var strideLengthM: Double?
+    var runningPowerW: Double?
 }
 
 @MainActor
 final class WorkoutDetailStore: ObservableObject {
     @Published private(set) var detail: WorkoutDetail?
     @Published private(set) var isLoading = false
+    /// 주법 기준선 재료 — 최근 28일 야외 세션들의 다이내믹스 스냅샷 (계획서 M4)
+    @Published private(set) var formSnapshots: [FormSnapshot] = []
 
     private let store = HKHealthStore()
 
-    func load(run: RunSummary) async {
+    /// others: 기준선 재료 후보(전체 목록 그대로) — 창·표본 가드는 FormEngine이 건다
+    func load(run: RunSummary, others: [RunSummary] = []) async {
         guard detail == nil, !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         #if targetEnvironment(simulator)
         detail = Self.synthetic(for: run)
+        formSnapshots = Self.syntheticSnapshots(others: others, excluding: run.id)
         #else
         detail = await fetch(run: run)
+        formSnapshots = await fetchFormSnapshots(others: others, excluding: run.id)
         #endif
     }
 
@@ -45,10 +56,22 @@ final class WorkoutDetailStore: ObservableObject {
         guard HKHealthStore.isHealthDataAvailable(),
               let workout = try? await fetchWorkout(id: run.id) else { return detail }
 
-        detail.route = (try? await fetchRoute(of: workout)) ?? []
+        // 실내(트레드밀) 세션에는 경로·고도가 없다 — 쿼리 자체를 생략한다 (계획서 M1)
+        if !run.isIndoor {
+            detail.route = (try? await fetchRoute(of: workout)) ?? []
 
-        if let elevation = workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity {
-            detail.elevationM = elevation.doubleValue(for: .meter())
+            if let elevation = workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity {
+                detail.elevationM = elevation.doubleValue(for: .meter())
+            }
+
+            // 러닝 다이내믹스 — 실내에는 기록되지 않는다(애플 공식). isIndoor 분기에 더해
+            // 쿼리가 비면 nil로 남아 화면의 미노출 가드와 이중으로 걸린다 (계획서 M4)
+            detail.verticalOscillationCm = await average(.runningVerticalOscillation,
+                                                         unit: .meterUnit(with: .centi), in: workout)
+            detail.groundContactMs = await average(.runningGroundContactTime,
+                                                   unit: .secondUnit(with: .milli), in: workout)
+            detail.strideLengthM = await average(.runningStrideLength, unit: .meter(), in: workout)
+            detail.runningPowerW = await average(.runningPower, unit: .watt(), in: workout)
         }
 
         if let hrSamples = try? await fetchQuantitySamples(.heartRate, in: workout), !hrSamples.isEmpty {
@@ -61,10 +84,46 @@ final class WorkoutDetailStore: ObservableObject {
             detail.splits = Self.splits(from: distanceSamples)
         }
 
-        if let steps = try? await fetchStepSum(in: workout), workout.duration > 60 {
+        // 케이던스: ① 평균 속도 ÷ 평균 보폭 (다이내믹스가 있는 워치)
+        //          ② 걸음 수 합 ÷ 분 (실내·구형 워치 폴백) — 계획서 M4
+        if let stride = detail.strideLengthM, stride > 0,
+           let meters = run.distanceMeters, workout.duration > 60 {
+            detail.cadenceSpm = (meters / workout.duration) / stride * 60
+        } else if let steps = try? await fetchStepSum(in: workout), workout.duration > 60 {
             detail.cadenceSpm = steps / (workout.duration / 60)
         }
         return detail
+    }
+
+    /// 워크아웃 구간 샘플 평균 — 다이내믹스는 세션 평균 하나면 충분하다 (계획서 M4)
+    private func average(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
+                         in workout: HKWorkout) async -> Double? {
+        guard let samples = try? await fetchQuantitySamples(id, in: workout),
+              !samples.isEmpty else { return nil }
+        return samples.map { $0.quantity.doubleValue(for: unit) }.reduce(0, +)
+            / Double(samples.count)
+    }
+
+    /// 기준선 재료 수집 — 최근 28일 야외 세션의 케이던스·진폭·접촉시간.
+    /// 케이던스는 목록(HealthStore)이 백필한 값을 재사용해 세션당 쿼리를 줄인다.
+    private func fetchFormSnapshots(others: [RunSummary],
+                                    excluding id: UUID) async -> [FormSnapshot] {
+        let cutoff = Date().addingTimeInterval(-FormEngine.windowDays * 86_400)
+        let candidates = others
+            .filter { !$0.isIndoor && $0.id != id && $0.start >= cutoff }
+            .prefix(20)  // 쿼리 상한 — 기준선 평균에는 20회면 충분하다
+        var snapshots: [FormSnapshot] = []
+        for other in candidates {
+            guard let workout = try? await fetchWorkout(id: other.id) else { continue }
+            snapshots.append(FormSnapshot(
+                id: other.id, start: other.start,
+                cadenceSpm: other.cadenceSpm,
+                verticalOscillationCm: await average(.runningVerticalOscillation,
+                                                     unit: .meterUnit(with: .centi), in: workout),
+                groundContactMs: await average(.runningGroundContactTime,
+                                               unit: .secondUnit(with: .milli), in: workout)))
+        }
+        return snapshots
     }
 
     private func fetchWorkout(id: UUID) async throws -> HKWorkout? {
@@ -225,16 +284,19 @@ final class WorkoutDetailStore: ObservableObject {
         let km = run.distanceKm ?? 8
         let basePace = run.paceSecPerKm ?? 360
 
-        // 한강 언저리 순환 코스 느낌의 타원 + 흔들림
-        let center = (lat: 37.520 + rng.unit() * 0.02, lon: 126.94 + rng.unit() * 0.03)
-        let radius = 0.0016 * km.squareRoot()
-        let points = 140
-        detail.route = (0...points).map { i in
-            let t = Double(i) / Double(points) * 2 * .pi
-            let wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
-            return CLLocationCoordinate2D(
-                latitude: center.lat + radius * wobble * sin(t) * 0.72,
-                longitude: center.lon + radius * wobble * cos(t))
+        // 실내(트레드밀)에는 경로·고도가 없다 — 스플릿·존·케이던스는 그대로 만든다 (계획서 M1)
+        if !run.isIndoor {
+            // 한강 언저리 순환 코스 느낌의 타원 + 흔들림
+            let center = (lat: 37.520 + rng.unit() * 0.02, lon: 126.94 + rng.unit() * 0.03)
+            let radius = 0.0016 * km.squareRoot()
+            let points = 140
+            detail.route = (0...points).map { i in
+                let t = Double(i) / Double(points) * 2 * .pi
+                let wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
+                return CLLocationCoordinate2D(
+                    latitude: center.lat + radius * wobble * sin(t) * 0.72,
+                    longitude: center.lon + radius * wobble * cos(t))
+            }
         }
 
         // 스플릿: 기본 페이스 ± 8초 흔들림, 마지막 1/4은 점점 처진다 (시안의 후반 드리프트)
@@ -254,9 +316,49 @@ final class WorkoutDetailStore: ObservableObject {
         detail.zones = zones
         detail.hrMaxEstimated = true
 
-        detail.cadenceSpm = 168 + rng.unit() * 14
-        detail.elevationM = 30 + rng.unit() * 70
+        let dynamics = syntheticDynamics(for: run)
+        detail.cadenceSpm = dynamics.cadenceSpm
+        detail.verticalOscillationCm = dynamics.oscillationCm
+        detail.groundContactMs = dynamics.contactMs
+        detail.strideLengthM = dynamics.strideM
+        detail.runningPowerW = dynamics.powerW
+        if !run.isIndoor {
+            detail.elevationM = 30 + rng.unit() * 70
+        }
         return detail
+    }
+
+    /// 다이내믹스 합성 — 상세와 기준선 스냅샷이 같은 값을 보도록 시드를 분리해 둔다.
+    /// 실내는 다이내믹스 미기록(애플 공식)이라 케이던스만 만든다 (계획서 M4).
+    static func syntheticDynamics(for run: RunSummary)
+        -> (cadenceSpm: Double, oscillationCm: Double?, contactMs: Double?,
+            strideM: Double?, powerW: Double?) {
+        var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)) &+ 0x51DE)
+        let cadence = 163 + rng.unit() * 14
+        guard !run.isIndoor else {
+            return (cadenceSpm: cadence, oscillationCm: nil, contactMs: nil,
+                    strideM: nil, powerW: nil)
+        }
+        let speed = (run.distanceMeters ?? 8_000) / max(run.durationSec, 60)  // m/s
+        return (cadenceSpm: cadence,
+                oscillationCm: 6.6 + rng.unit() * 2.6,
+                contactMs: 225 + rng.unit() * 60,
+                strideM: speed / cadence * 60,  // 속도 ÷ 케이던스 = 걸음당 거리 — 값끼리 정합
+                powerW: 205 + rng.unit() * 70)
+    }
+
+    /// 기준선 스냅샷 합성 — 필터 기준은 실기기 fetchFormSnapshots와 동일
+    static func syntheticSnapshots(others: [RunSummary], excluding id: UUID) -> [FormSnapshot] {
+        let cutoff = Date().addingTimeInterval(-FormEngine.windowDays * 86_400)
+        return others
+            .filter { !$0.isIndoor && $0.id != id && $0.start >= cutoff }
+            .map { other in
+                let dynamics = syntheticDynamics(for: other)
+                return FormSnapshot(id: other.id, start: other.start,
+                                    cadenceSpm: dynamics.cadenceSpm,
+                                    verticalOscillationCm: dynamics.oscillationCm,
+                                    groundContactMs: dynamics.contactMs)
+            }
     }
 
     /// 재현 가능한 경량 난수 (SplitMix64)

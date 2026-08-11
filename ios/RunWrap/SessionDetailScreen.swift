@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import PhotosUI
 
 /// 세션 상세 — 지도 헤더 + 지표 그리드 + 구간 페이스 + 심박 존 (시안 "세션 상세 · 지도")
 struct SessionDetailScreen: View {
@@ -7,20 +8,26 @@ struct SessionDetailScreen: View {
     /// 이번 주가 과부하일 때만 전달 — 이 세션의 기여도를 배지로 보여준다
     var weeklyContext: WeeklyReport.DistanceCard? = nil
 
+    @EnvironmentObject private var health: HealthStore
     @StateObject private var store = WorkoutDetailStore()
     @Environment(\.dismiss) private var dismiss
+    @State private var showShare = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                mapHeader
+                // 실내 세션은 경로가 없어 지도 헤더 자체를 걸어 두지 않는다 (기획서 §4.6)
+                if !run.isIndoor { mapHeader }
 
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 7) {
                         Eyebrow(text: dateLine)
-                        Text(run.displayTitle)
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(RR.text)
+                        HStack(spacing: 8) {
+                            Text(run.displayTitle)
+                                .font(.system(size: 26, weight: .bold))
+                                .foregroundStyle(RR.text)
+                            if run.isIndoor { IndoorBadge() }
+                        }
                     }
 
                     if let badge = contributionBadge {
@@ -40,17 +47,41 @@ struct SessionDetailScreen: View {
                     if let zones = store.detail?.zones {
                         zonesCard(zones, hrMaxEstimated: store.detail?.hrMaxEstimated ?? false)
                     }
-                    shareTeaser
+                    if let detail = store.detail, hasDynamics(detail) {
+                        formCard(detail)
+                    }
+                    if run.isIndoor {
+                        Text("실내 러닝에는 경로·고도 데이터가 없어서 해당 섹션이 표시되지 않아요.")
+                            .font(.system(size: 11.5))
+                            .lineSpacing(3)
+                            .foregroundStyle(RR.text3)
+                            .padding(.horizontal, 4)
+                    }
+                    shareSection
                 }
                 .padding(.horizontal, 18)
             }
+            .padding(.top, run.isIndoor ? 44 : 0)  // 지도 헤더가 없으면 뒤로가기 버튼 자리 확보
             .padding(.bottom, 26)
         }
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea(edges: run.isIndoor ? [] : .top)
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .topLeading) { backButton }
-        .task { await store.load(run: run) }
+        .task {
+            // 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4)
+            if case .loaded(let all) = health.state {
+                await store.load(run: run, others: all)
+            } else {
+                await store.load(run: run)
+            }
+        }
+        .sheet(isPresented: $showShare) {
+            ShareSheetView(run: run,
+                           zones: store.detail?.zones,
+                           route: store.detail?.route ?? [],
+                           weeklySummary: weeklySummaryLine)
+        }
     }
 
     // MARK: 지도 헤더
@@ -59,7 +90,7 @@ struct SessionDetailScreen: View {
         ZStack(alignment: .bottomLeading) {
             Group {
                 if let route = store.detail?.route, route.count >= 2 {
-                    Map(initialPosition: .region(region(for: route)),
+                    Map(initialPosition: .region(RouteSnapshot.region(for: route)),
                         interactionModes: []) {
                         MapPolyline(coordinates: route)
                             .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
@@ -113,17 +144,6 @@ struct SessionDetailScreen: View {
         }
         .padding(.leading, 14)
         .padding(.top, 8)
-    }
-
-    private func region(for route: [CLLocationCoordinate2D]) -> MKCoordinateRegion {
-        let lats = route.map(\.latitude)
-        let lons = route.map(\.longitude)
-        let center = CLLocationCoordinate2D(
-            latitude: (lats.min()! + lats.max()!) / 2,
-            longitude: (lons.min()! + lons.max()!) / 2)
-        return MKCoordinateRegion(center: center, span: MKCoordinateSpan(
-            latitudeDelta: max((lats.max()! - lats.min()!) * 1.4, 0.008),
-            longitudeDelta: max((lons.max()! - lons.min()!) * 1.4, 0.008)))
     }
 
     // MARK: 텍스트 조각
@@ -252,43 +272,311 @@ struct SessionDetailScreen: View {
         .rrCard(radius: 22)
     }
 
-    // MARK: 스토리 공유 티저 (로드맵 3단계)
+    // MARK: 주법 (러닝 다이내믹스) — 기획서 §4.8, 계획서 M4
 
-    private var shareTeaser: some View {
-        HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(RR.text3, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                .frame(width: 52, height: 92)
-                .overlay {
-                    Text("9:16")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(RR.text3)
-                }
-                .opacity(0.6)
+    /// 다이내믹스가 하나라도 있어야 카드를 건다 — 실내(미기록)·구형 워치의 이중 미노출 가드
+    private func hasDynamics(_ detail: WorkoutDetail) -> Bool {
+        detail.verticalOscillationCm != nil || detail.groundContactMs != nil
+            || detail.strideLengthM != nil || detail.runningPowerW != nil
+    }
 
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 7) {
-                    Text("스토리 카드로 공유")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(RR.text2)
-                    Text("준비 중")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(RR.brand)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(RR.brandSoft,
-                                    in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                }
-                Text("경로와 핵심 지표를 9:16 카드로 만들어 인스타그램 스토리에 바로 올리는 기능이 준비되고 있습니다.")
-                    .font(.system(size: 12.5))
-                    .lineSpacing(3)
+    private func formCard(_ detail: WorkoutDetail) -> some View {
+        let session = FormSnapshot(id: run.id, start: run.start,
+                                   cadenceSpm: detail.cadenceSpm ?? run.cadenceSpm,
+                                   verticalOscillationCm: detail.verticalOscillationCm,
+                                   groundContactMs: detail.groundContactMs)
+        let engine = FormEngine()
+        let advice = engine.baseline(of: store.formSnapshots, excluding: run.id)
+            .map { engine.advice(session: session, baseline: $0) }
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("주법")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("running dynamics")
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(RR.text3)
             }
+
+            dynamicsGrid(detail)
+                .padding(.top, 4)
+
+            Divider().overlay(RR.line)
+
+            Group {
+                if let advice, !advice.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        ForEach(advice, id: \.message) { adviceRow($0) }
+                    }
+                } else if advice != nil {
+                    Text("평소 주법 리듬을 그대로 유지했어요. 지금 폼이 흔들리지 않게 이어가면 됩니다.")
+                        .font(.system(size: 12.5))
+                        .lineSpacing(4)
+                        .foregroundStyle(RR.text2)
+                } else {
+                    Text("최근 4주 야외 러닝이 5회 모이면 내 기준선과 비교한 주법 조언이 나와요.")
+                        .font(.system(size: 12.5))
+                        .lineSpacing(4)
+                        .foregroundStyle(RR.text3)
+                }
+            }
+            .padding(.top, 13)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(RR.surface2, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .strokeBorder(RR.line, style: StrokeStyle(lineWidth: 1, dash: [5, 5])))
+        .padding(18)
+        .rrCard(radius: 22)
+    }
+
+    private func dynamicsGrid(_ detail: WorkoutDetail) -> some View {
+        let cells: [(String, String, String)] = [
+            ("수직 진폭", detail.verticalOscillationCm.map { String(format: "%.1f", $0) } ?? "—", "cm"),
+            ("지면 접촉", detail.groundContactMs.map { "\(Int($0.rounded()))" } ?? "—", "ms"),
+            ("보폭", detail.strideLengthM.map { String(format: "%.2f", $0) } ?? "—", "m"),
+            ("러닝 파워", detail.runningPowerW.map { "\(Int($0.rounded()))" } ?? "—", "W"),
+        ]
+        return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(cell.0)
+                        .font(.system(size: 11))
+                        .foregroundStyle(RR.text3)
+                    Text(cell.1)
+                        .font(.system(size: 17, weight: .bold, design: .monospaced))
+                        .foregroundStyle(RR.text)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Text(cell.2)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(RR.text3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 14)
+            }
+        }
+    }
+
+    private func adviceRow(_ item: FormAdvice) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: item.kind == .sensor
+                  ? "exclamationmark.triangle.fill" : "shoeprints.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(item.kind == .sensor ? RR.warn : RR.brand)
+                .padding(.top, 2)
+            Text(item.message)
+                .font(.system(size: 12.5))
+                .lineSpacing(4)
+                .foregroundStyle(RR.text2)
+        }
+    }
+
+    // MARK: 스토리 공유 (기획서 §4.4, 계획서 M5)
+
+    private var shareSection: some View {
+        Button {
+            showShare = true
+        } label: {
+            HStack(spacing: 14) {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(RR.brandSoft)
+                    .frame(width: 52, height: 92)
+                    .overlay {
+                        VStack(spacing: 5) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(RR.brand)
+                            Text("9:16")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(RR.brand)
+                        }
+                    }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("스토리 카드로 공유")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(RR.text)
+                    Text("경로와 핵심 지표를 9:16 카드로 만들어 저장하거나 스토리에 올려보세요.")
+                        .font(.system(size: 12.5))
+                        .lineSpacing(3)
+                        .foregroundStyle(RR.text3)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(16)
+            .rrCard(radius: 22)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 카드 하단 주간 요약 — 최근 7일 러닝 횟수·거리 (기획서 §4.4)
+    private var weeklySummaryLine: String? {
+        guard case .loaded(let all) = health.state else { return nil }
+        let recent = all.filter { $0.start >= Date().addingTimeInterval(-7 * 86_400) }
+        guard !recent.isEmpty else { return nil }
+        let km = recent.compactMap(\.distanceKm).reduce(0, +)
+        return "최근 7일 \(recent.count)회 · \(Format.km(km)) km"
+    }
+}
+
+// MARK: - 공유 시트 (계획서 M5)
+
+/// 스타일 토글 + 카드 미리보기 + 사진 저장(add-only) + 공유 시트
+private struct ShareSheetView: View {
+    let run: RunSummary
+    var zones: [Double]?
+    var route: [CLLocationCoordinate2D]
+    var weeklySummary: String?
+
+    private enum CardStyle: String, CaseIterable {
+        case minimal = "미니멀"
+        case photo = "사진"
+    }
+
+    @State private var style: CardStyle = .minimal
+    @State private var photoItem: PhotosPickerItem?
+    @State private var photo: UIImage?
+    @State private var photoVersion = 0
+    @State private var routeImage: UIImage?
+    @State private var rendered: UIImage?
+    @State private var saveMessage: String?
+    /// 미리보기와 렌더 이미지가 같은 모드로 그려지도록 명시적으로 주입한다
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("스토리 카드")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(RR.text)
+                .padding(.top, 24)
+
+            Picker("카드 스타일", selection: $style) {
+                ForEach(CardStyle.allCases, id: \.self) { Text($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 60)
+
+            cardPreview
+                .padding(.top, 4)
+
+            if style == .photo {
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Label(photo == nil ? "배경 사진 선택" : "사진 바꾸기", systemImage: "photo")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(RR.brand)
+                }
+            }
+
+            actionRow
+                .padding(.horizontal, 22)
+                .padding(.top, 2)
+
+            if let saveMessage {
+                Text(saveMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(RR.text3)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .background(RR.bg.ignoresSafeArea())
+        .presentationDragIndicator(.visible)
+        .task {
+            guard routeImage == nil, route.count >= 2 else { return }
+            routeImage = await RouteSnapshot.image(route: route,
+                                                  size: CGSize(width: 360, height: 240))
+        }
+        .task(id: renderKey) {
+            rendered = ShareCardRenderer.render(currentCard)
+        }
+        .onChange(of: photoItem) { _, item in
+            Task {
+                guard let item,
+                      let data = try? await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data) else { return }
+                photo = image
+                photoVersion += 1
+            }
+        }
+    }
+
+    /// 스타일·사진·경로 이미지가 바뀔 때만 다시 렌더한다
+    private var renderKey: String {
+        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)"
+    }
+
+    @ViewBuilder
+    private var currentCard: some View {
+        Group {
+            switch style {
+            case .minimal:
+                ShareCardView(run: run, zones: zones,
+                              routeImage: routeImage, weeklySummary: weeklySummary)
+            case .photo:
+                PhotoCardView(run: run, photo: photo)
+            }
+        }
+        .environment(\.colorScheme, colorScheme)
+    }
+
+    private var cardPreview: some View {
+        currentCard
+            .frame(width: 360, height: 640)
+            .scaleEffect(0.52)
+            .frame(width: 360 * 0.52, height: 640 * 0.52)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(RR.line))
+            .shadow(color: .black.opacity(0.10), radius: 14, y: 8)
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 12) {
+            Button {
+                Task { await save() }
+            } label: {
+                Label("사진에 저장", systemImage: "square.and.arrow.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(RR.surface,
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(RR.line))
+            }
+            .buttonStyle(.plain)
+            .disabled(rendered == nil)
+
+            if let rendered {
+                ShareLink(item: Image(uiImage: rendered),
+                          preview: SharePreview("러닝 스토리 카드",
+                                                image: Image(uiImage: rendered))) {
+                    Label("공유", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(RR.brand,
+                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func save() async {
+        guard let rendered else { return }
+        do {
+            try await ShareCardRenderer.saveToPhotos(rendered)
+            saveMessage = "사진 앱에 저장했어요"
+        } catch {
+            saveMessage = "저장하지 못했어요 — 설정에서 사진 추가 권한을 확인해 주세요"
+        }
     }
 }

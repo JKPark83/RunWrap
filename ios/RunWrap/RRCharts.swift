@@ -3,13 +3,28 @@ import SwiftUI
 // 시안의 SVG 차트들을 SwiftUI Path로 옮긴 경량 차트 모음.
 // 데이터 축·색은 전부 호출부(카드)가 결정한다.
 
-/// 주간 막대 차트 — 마지막(현재) 주 강조 + 선택적 상한 점선
+/// 주간 막대 차트 — 마지막(현재) 주 강조 + 선택적 상한 점선.
+/// 주가 많아 폭이 모자라면 슬롯 폭을 유지한 채 가로 스크롤로 넘긴다 (최신 주가
+/// 오른쪽 끝, 과거는 왼쪽으로 스크롤). 각 막대 위에 값을 작게 상시 표시하고
+/// (작업 지침 차트 규칙), 막대를 탭하면 주·수치 콜아웃을 띄운다.
 struct WeeklyBarsChart: View {
     let weeks: [WeeklyReport.WeekBar]
     var currentColor: Color = RR.brand
     var cap: Double? = nil
     var capLabel: String? = nil
     var chartHeight: CGFloat = 76
+    /// 탭 콜아웃 수치 표기 — 다이어트 카드는 kcal을 주입한다
+    var valueText: (Double) -> String = { Format.km($0) + " km" }
+    /// 막대 위 상시 표시용 짧은 수치 — 단위 없이 숫자만 (슬롯 폭이 좁다)
+    var barValueText: (Double) -> String = { Format.km($0) }
+
+    @State private var selected: Int? = nil   // WeekBar.index
+
+    /// 스크롤 모드에서 주 하나가 차지하는 최소 폭 — "12월 4째주" 라벨이 들어가는 폭
+    private let minSlot: CGFloat = 56
+    private let labelHeight: CGFloat = 22
+    /// 막대 위 값 텍스트가 차지하는 높이 — 막대·상한선 스케일은 이만큼 뺀 높이를 쓴다
+    private let valueReserve: CGFloat = 13
 
     private var scaleMax: Double {
         let peak = max(weeks.map(\.km).max() ?? 1, cap ?? 0)
@@ -17,24 +32,64 @@ struct WeeklyBarsChart: View {
     }
 
     var body: some View {
+        GeometryReader { geo in
+            let count = max(weeks.count, 1)
+            let scrollable = CGFloat(count) * minSlot > geo.size.width
+            let slot = scrollable ? minSlot : geo.size.width / CGFloat(count)
+
+            ScrollView(.horizontal) {
+                content(slot: slot, width: slot * CGFloat(count))
+            }
+            .scrollDisabled(!scrollable)
+            .scrollIndicators(.hidden)
+            .defaultScrollAnchor(.trailing)   // 최신 주부터 보인다
+            // 잘린 게 아니라 과거로 이어진다는 신호 — 스크롤 가능할 때만
+            .overlay(alignment: .leading) {
+                if scrollable {
+                    LinearGradient(colors: [RR.surface, RR.surface.opacity(0)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 22)
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(height: chartHeight + labelHeight)
+    }
+
+    private func content(slot: CGFloat, width: CGFloat) -> some View {
         VStack(spacing: 0) {
             ZStack(alignment: .topLeading) {
-                HStack(alignment: .bottom, spacing: 10) {
+                HStack(alignment: .bottom, spacing: 0) {
                     ForEach(weeks) { week in
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(week.isCurrent ? currentColor : RR.barFill)
-                            .frame(height: barHeight(week.km))
-                            .frame(maxWidth: .infinity, alignment: .bottom)
+                        VStack(spacing: 3) {
+                            if week.km > 0 {
+                                Text(barValueText(week.km))
+                                    .font(.system(size: 8.5,
+                                                  weight: week.isCurrent ? .semibold : .regular,
+                                                  design: .monospaced))
+                                    .foregroundStyle(week.isCurrent ? currentColor : RR.text3)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(week.isCurrent ? currentColor : RR.barFill)
+                                .frame(width: max(6, slot - 10), height: barHeight(week.km))
+                        }
+                        .opacity(selected == nil || selected == week.index ? 1 : 0.45)
+                        .frame(width: slot, height: chartHeight, alignment: .bottom)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selected = selected == week.index ? nil : week.index
+                        }
                     }
                 }
-                .frame(height: chartHeight, alignment: .bottom)
 
                 if let cap, cap <= scaleMax {
-                    let y = chartHeight * (1 - cap / scaleMax)
+                    let y = chartHeight - (chartHeight - valueReserve) * cap / scaleMax
                     Line()
                         .stroke(RR.dang.opacity(0.65),
                                 style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-                        .frame(height: 1)
+                        .frame(width: width, height: 1)
                         .offset(y: y)
                     if let capLabel {
                         Text(capLabel)
@@ -43,23 +98,40 @@ struct WeeklyBarsChart: View {
                             .offset(x: 2, y: max(0, y - 15))
                     }
                 }
+
+                if let selected, let week = weeks.first(where: { $0.index == selected }) {
+                    ChartCallout(text: "\(week.label) · \(valueText(week.km))")
+                        .position(x: calloutX(slot: slot, width: width, index: selected), y: 13)
+                }
             }
-            HStack(spacing: 10) {
+            .frame(height: chartHeight)
+
+            HStack(spacing: 0) {
                 ForEach(weeks) { week in
                     Text(week.label)
                         .font(.system(size: 9.5, weight: week.isCurrent ? .bold : .regular,
                                       design: .monospaced))
                         .foregroundStyle(week.isCurrent ? currentColor : RR.text3)
-                        .frame(maxWidth: .infinity)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(width: slot)
                 }
             }
             .padding(.top, 8)
         }
+        .frame(width: width)
+    }
+
+    /// 콜아웃이 차트 밖으로 잘리지 않게 중심 x를 안쪽으로 조인다
+    private func calloutX(slot: CGFloat, width: CGFloat, index: Int) -> CGFloat {
+        let margin: CGFloat = 62
+        let x = slot * (CGFloat(index) + 0.5)
+        return min(max(x, margin), max(width - margin, margin))
     }
 
     private func barHeight(_ km: Double) -> CGFloat {
         let minimal: CGFloat = 4  // 0이어도 흔적은 보이게
-        return max(minimal, chartHeight * CGFloat(km / scaleMax))
+        return max(minimal, (chartHeight - valueReserve) * CGFloat(km / scaleMax))
     }
 
     private struct Line: Shape {
@@ -69,6 +141,22 @@ struct WeeklyBarsChart: View {
             p.addLine(to: CGPoint(x: rect.width, y: rect.midY))
             return p
         }
+    }
+}
+
+/// 차트 탭 콜아웃 — 선택한 지점의 시기·수치를 담는 작은 말풍선
+struct ChartCallout: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(RR.text)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(RR.surface2, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(RR.line))
+            .fixedSize()
     }
 }
 
@@ -91,7 +179,7 @@ struct AcwrGauge: View {
                 segment(1.3...1.5, color: RR.warn, center: center, radius: radius, scale: s)
                 segment(1.5...2.0, color: RR.dang, center: center, radius: radius, scale: s)
 
-                needle(center: center, radius: radius, scale: s)
+                marker(center: center, radius: radius, scale: s)
 
                 Text(String(format: "%.2f", ratio))
                     .font(.system(size: 36 * s, weight: .bold, design: .monospaced))
@@ -130,30 +218,35 @@ struct AcwrGauge: View {
         .stroke(color, style: StrokeStyle(lineWidth: 15 * scale, lineCap: .butt))
     }
 
-    private func needle(center: CGPoint, radius: CGFloat, scale: CGFloat) -> some View {
+    /// 값 위치 마커 — 호를 가로지르는 짧은 눈금. 예전의 중심축 바늘은 가운데
+    /// 큰 숫자를 관통해 겹쳐 보였다 — 바늘 대신 호 위 마커로 위치만 표시한다.
+    private func marker(center: CGPoint, radius: CGFloat, scale: CGFloat) -> some View {
         let a = angle(ratio).radians
-        let tip = CGPoint(x: center.x + cos(a) * radius * 0.88,
-                          y: center.y + sin(a) * radius * 0.88)
-        return ZStack {
-            Path { p in
-                p.move(to: center)
-                p.addLine(to: tip)
-            }
-            .stroke(RR.text, style: StrokeStyle(lineWidth: 3.4 * scale, lineCap: .round))
-            Circle().fill(RR.text).frame(width: 14 * scale, height: 14 * scale)
-                .position(center)
-            Circle().fill(RR.surface).frame(width: 5 * scale, height: 5 * scale)
-                .position(center)
+        let inner = CGPoint(x: center.x + cos(a) * (radius - 13 * scale),
+                            y: center.y + sin(a) * (radius - 13 * scale))
+        let outer = CGPoint(x: center.x + cos(a) * (radius + 13 * scale),
+                            y: center.y + sin(a) * (radius + 13 * scale))
+        return Path { p in
+            p.move(to: inner)
+            p.addLine(to: outer)
         }
+        .stroke(RR.text, style: StrokeStyle(lineWidth: 4 * scale, lineCap: .round))
     }
 }
 
-/// 추세 라인 차트 — 그라디언트 채움 + 끝점 도트 (EF 카드)
+/// 추세 라인 차트 — 그라디언트 채움 + 끝점 도트 (EF 카드).
+/// 차트를 탭하면 가장 가까운 점의 시기·수치를 콜아웃으로 띄운다 (다시 탭하면 닫힘).
 struct TrendLineChart: View {
     let points: [Double]
     var tint: Color = RR.pos
     var height: CGFloat = 96
     var endLabels: (String, String)? = nil  // (왼쪽, 오른쪽) 축 라벨
+    /// 탭 콜아웃에 함께 보여줄 시기 라벨 (points와 병행 배열)
+    var pointLabels: [String]? = nil
+    /// 탭 콜아웃 수치 표기 — EF·kg·페이스 등 단위는 호출부가 정한다
+    var valueText: (Double) -> String = { String(format: "%.2f", $0) }
+
+    @State private var selected: Int? = nil
 
     var body: some View {
         VStack(spacing: 4) {
@@ -188,7 +281,19 @@ struct TrendLineChart: View {
                             .stroke(RR.surface, lineWidth: 2.5)
                             .frame(width: 10, height: 10)
                             .position(pts[pts.count - 1])
+
+                        if let selected, pts.indices.contains(selected) {
+                            selectionMarks(at: pts[selected], index: selected, in: geo.size)
+                        }
                     }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(coordinateSpace: .local) { location in
+                    guard !pts.isEmpty,
+                          let nearest = pts.indices.min(by: {
+                              abs(pts[$0].x - location.x) < abs(pts[$1].x - location.x)
+                          }) else { return }
+                    selected = selected == nearest ? nil : nearest
                 }
             }
             .frame(height: height)
@@ -203,6 +308,28 @@ struct TrendLineChart: View {
                 .foregroundStyle(RR.text3)
             }
         }
+    }
+
+    /// 선택 표식 — 세로 가이드선 + 링 도트 + 콜아웃
+    @ViewBuilder
+    private func selectionMarks(at pt: CGPoint, index: Int, in size: CGSize) -> some View {
+        Path { p in
+            p.move(to: CGPoint(x: pt.x, y: size.height))
+            p.addLine(to: CGPoint(x: pt.x, y: pt.y))
+        }
+        .stroke(RR.line, style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+
+        Circle()
+            .fill(tint)
+            .stroke(RR.surface, lineWidth: 2.5)
+            .frame(width: 10, height: 10)
+            .position(pt)
+
+        let label = pointLabels.flatMap { $0.indices.contains(index) ? $0[index] : nil }
+        ChartCallout(text: label.map { "\($0) · \(valueText(points[index]))" }
+                        ?? valueText(points[index]))
+            .position(x: min(max(pt.x, 56), max(size.width - 56, 56)),
+                      y: max(pt.y - 24, 12))
     }
 
     private func normalized(in size: CGSize) -> [CGPoint] {
@@ -250,10 +377,13 @@ struct SparkLine: View {
 /// 구간별(km) 페이스 막대 — 평균 대비 느린 구간은 경고색.
 /// 구간이 많아 폭이 모자라면 막대 폭을 유지한 채 가로 스크롤로 넘긴다
 /// (예전에는 폭에 억지로 밀어넣어 롱런 후반 구간이 카드 밖으로 잘렸다).
+/// 막대가 좁아 값 상시 표시가 불가능한 차트 — 탭 콜아웃으로 대신한다 (작업 지침 차트 규칙).
 struct SplitBarsChart: View {
     let splits: [WorkoutDetail.Split]
     var slowThresholdSec: Double = 8
     var height: CGFloat = 64
+
+    @State private var selected: Int? = nil   // Split.index
 
     /// 스크롤 모드에서 막대 하나가 차지하는 최소 폭 (막대 + 간격)
     private let slot: CGFloat = 10
@@ -301,16 +431,38 @@ struct SplitBarsChart: View {
         let span = max((speeds.max() ?? 1) - minSpeed, 0.0001)
         let barW = barWidth(in: width)
 
-        return HStack(alignment: .bottom, spacing: gap) {
-            ForEach(splits) { split in
-                let t = CGFloat((1 / split.paceSecPerKm - minSpeed) / span)
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(split.paceSecPerKm > avgPace + slowThresholdSec
-                          ? RR.warn : RR.brand.opacity(0.8))
-                    .frame(width: barW, height: height * (0.45 + 0.55 * t))
+        return ZStack(alignment: .topLeading) {
+            HStack(alignment: .bottom, spacing: gap) {
+                ForEach(splits) { split in
+                    let t = CGFloat((1 / split.paceSecPerKm - minSpeed) / span)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(split.paceSecPerKm > avgPace + slowThresholdSec
+                              ? RR.warn : RR.brand.opacity(0.8))
+                        .opacity(selected == nil || selected == split.index ? 1 : 0.55)
+                        .frame(width: barW, height: height * (0.45 + 0.55 * t))
+                        .frame(height: height, alignment: .bottom)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selected = selected == split.index ? nil : split.index
+                        }
+                }
+            }
+
+            if let selected,
+               let offset = splits.firstIndex(where: { $0.index == selected }) {
+                ChartCallout(text: "\(splits[offset].index)km · "
+                             + Format.pace(splits[offset].paceSecPerKm))
+                    .position(x: calloutX(barW: barW, width: width, offset: offset), y: 13)
             }
         }
         .frame(height: height, alignment: .bottom)
+    }
+
+    /// 콜아웃이 차트 밖으로 잘리지 않게 중심 x를 안쪽으로 조인다
+    private func calloutX(barW: CGFloat, width: CGFloat, offset: Int) -> CGFloat {
+        let margin: CGFloat = 56
+        let x = CGFloat(offset) * (barW + gap) + barW / 2
+        return min(max(x, margin), max(width - margin, margin))
     }
 
     /// km 눈금 — 막대와 같은 슬롯에 얹어 스크롤해도 어긋나지 않는다
