@@ -21,6 +21,8 @@ final class HealthStore: ObservableObject {
     @Published private(set) var vitals: VitalsSnapshot? = DemoData.vitals
     @Published private(set) var bodyMass: [(date: Date, kg: Double)] = DemoData.bodyMass
     @Published private(set) var vo2Max: [(date: Date, value: Double)] = DemoData.vo2Max
+    @Published private(set) var crossTrainings: [CrossTraining] = DemoData.crossTrainings
+    @Published private(set) var hrrTrend: [(date: Date, value: Double)] = DemoData.hrrTrend
     #else
     @Published private(set) var state: State = .idle
     /// 체력 배터리용 활력징후 — 러닝 목록과 별개로 실패해도 리포트는 뜬다
@@ -29,30 +31,13 @@ final class HealthStore: ObservableObject {
     @Published private(set) var bodyMass: [(date: Date, kg: Double)] = []
     /// 심폐 체력 카드용 최근 12주 VO₂max 표본 (ml/kg/min) — 주 단위 평균은 엔진이 계산한다
     @Published private(set) var vo2Max: [(date: Date, value: Double)] = []
+    /// 최근 2주 비러닝 운동 — 주간 리포트 보조 문장 재료. ACWR에는 절대 섞지 않는다 (제안 문서 A3)
+    @Published private(set) var crossTrainings: [CrossTraining] = []
+    /// 심폐 체력 카드 보조 지표용 최근 12주 심박 회복(HRR) 표본 (bpm)
+    @Published private(set) var hrrTrend: [(date: Date, value: Double)] = []
     #endif
 
     private let store = HKHealthStore()
-
-    private let readTypes: Set<HKObjectType> = [
-        .workoutType(),
-        HKSeriesType.workoutRoute(),                    // 세션 상세: 경로
-        HKQuantityType(.distanceWalkingRunning),
-        HKQuantityType(.heartRate),
-        HKQuantityType(.stepCount),                     // 세션 상세: 케이던스
-        HKQuantityType(.activeEnergyBurned),            // 다이어트 카드: 세션 소모 칼로리
-        HKQuantityType(.bodyMass),                      // 다이어트 카드: 몸무게 추이
-        HKQuantityType(.vo2Max),                        // 리포트: 심폐 체력(VO₂max) 추이
-        HKQuantityType(.runningVerticalOscillation),    // 주법 리포트: 수직 진폭 (기획서 §4.8, 실외 전용)
-        HKQuantityType(.runningGroundContactTime),      // 주법 리포트: 지면 접촉 시간
-        HKQuantityType(.runningStrideLength),           // 주법 리포트: 보폭 — 케이던스 우선 산출 재료
-        HKQuantityType(.runningPower),                  // 주법 리포트: 러닝 파워
-        HKCharacteristicType(.dateOfBirth),             // 심박 존: HRmax 추정 (Tanaka)
-        HKQuantityType(.heartRateVariabilitySDNN),      // 체력 배터리: 회복 신호
-        HKQuantityType(.restingHeartRate),
-        HKQuantityType(.respiratoryRate),
-        HKQuantityType(.appleSleepingWristTemperature),
-        HKCategoryType(.sleepAnalysis),
-    ]
 
     /// 최초 연결: 권한 요청 → 바로 조회
     func connect() async {
@@ -65,11 +50,21 @@ final class HealthStore: ObservableObject {
         }
         state = .loading
         do {
-            try await store.requestAuthorization(toShare: [], read: readTypes)
+            try await store.requestAuthorization(toShare: [], read: HealthPermissions.standard)
             await load()
         } catch {
             state = .failed(error.localizedDescription)
         }
+        #endif
+    }
+
+    /// 다이어트 목표를 고른 사용자에게만 몸무게 읽기를 요청 — 기능별 권한 분리
+    /// (HealthPermissions.diet). 목표 선택 직후(온보딩·설정)에서 부른다.
+    func requestDietAccess() async {
+        #if !targetEnvironment(simulator)
+        guard HKHealthStore.isHealthDataAvailable() else { return }
+        try? await store.requestAuthorization(toShare: [], read: HealthPermissions.diet)
+        bodyMass = await fetchBodyMass()
         #endif
     }
 
@@ -79,6 +74,8 @@ final class HealthStore: ObservableObject {
         vitals = DemoData.vitals
         bodyMass = DemoData.bodyMass
         vo2Max = DemoData.vo2Max
+        crossTrainings = DemoData.crossTrainings
+        hrrTrend = DemoData.hrrTrend
         #else
         guard HKHealthStore.isHealthDataAvailable() else {
             state = .unavailable
@@ -88,7 +85,7 @@ final class HealthStore: ObservableObject {
         if case .loaded = state {} else { state = .loading }
         do {
             // 업데이트로 읽기 항목이 늘 수 있어 매번 요청 — 이미 응답한 항목은 시트가 뜨지 않는다
-            try? await store.requestAuthorization(toShare: [], read: readTypes)
+            try? await store.requestAuthorization(toShare: [], read: HealthPermissions.standard)
             let workouts = try await fetchRunningWorkouts(limit: 100)
             var summaries = workouts.map(Self.summary(of:))
             // 케이던스 백필 — 주법 추이(계획서 M4) 재료. 걸음 수는 워크아웃 통계에 없어
@@ -101,6 +98,8 @@ final class HealthStore: ObservableObject {
             vitals = await fetchVitals()
             bodyMass = await fetchBodyMass()
             vo2Max = await fetchVo2Max()
+            crossTrainings = await fetchCrossTrainings()
+            hrrTrend = await fetchHrrTrend()
         } catch {
             state = .failed(error.localizedDescription)
         }
@@ -197,7 +196,81 @@ final class HealthStore: ObservableObject {
         snapshot.wristTempC = await reading(.appleSleepingWristTemperature,
                                             unit: .degreeCelsius(), now: now)
         snapshot.sleepHours = await lastNightSleepHours(now: now)
+        snapshot.hrr = await hrrReading(now: now)
+        snapshot.sleepNights = await fetchSleepNights(now: now)
         return snapshot
+    }
+
+    /// 심박 회복(HRR) 스냅샷 — 야외 러닝 종료 후 워치가 자동 기록하는 1분 하락 폭 (제안 문서 B1).
+    /// 매일 생기는 지표가 아니라 일 단위 기준선 대신 표본 단위로 만든다:
+    /// 최근 표본 = 오늘 값, 그보다 앞선 표본들의 평균 = 기저,
+    /// Reading.baselineDays 자리에는 기저 '표본 수'를 넣는다 (엔진의 hrrMinBaselineCount 가드용).
+    private func hrrReading(now: Date) async -> VitalsSnapshot.Reading? {
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        let samples = (try? await quantitySamples(HKQuantityType(.heartRateRecoveryOneMinute),
+                                                  from: now.addingTimeInterval(-42 * 86_400),
+                                                  to: now)) ?? []
+        let sorted = samples.sorted { $0.startDate < $1.startDate }
+        // 마지막 러닝이 오래됐으면 "오늘의 회복"을 말할 수 없다 — 3일 지난 값은 침묵 (미노출 가드)
+        guard let latest = sorted.last,
+              latest.startDate >= now.addingTimeInterval(-3 * 86_400) else { return nil }
+        let baseline = sorted.dropLast().map { $0.quantity.doubleValue(for: bpm) }
+        guard !baseline.isEmpty else { return nil }
+        return .init(today: latest.quantity.doubleValue(for: bpm),
+                     baseline: baseline.reduce(0, +) / Double(baseline.count),
+                     baselineDays: baseline.count)
+    }
+
+    /// 최근 2주 밤별 수면 상세 — 수면 질(깊은+렘 비율)·취침 규칙성 팩터의 재료 (제안 문서 A5).
+    /// 밤 구분: 잠든 구간의 종료 시각이 속한 날짜(기상일)로 묶고, 3시간 미만은 낮잠으로 보고 버린다.
+    private func fetchSleepNights(now: Date) async -> [VitalsSnapshot.SleepNight] {
+        let samples = (try? await categorySamples(HKCategoryType(.sleepAnalysis),
+                                                  from: now.addingTimeInterval(-14 * 86_400),
+                                                  to: now)) ?? []
+        let asleepValues = Set(HKCategoryValueSleepAnalysis.allAsleepValues.map(\.rawValue))
+        let stageValues: Set<Int> = [HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                                     HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                                     HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+        let deepRemValues: Set<Int> = [HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                                       HKCategoryValueSleepAnalysis.asleepREM.rawValue]
+
+        let calendar = Calendar.current
+        let byNight = Dictionary(grouping: samples.filter { asleepValues.contains($0.value) }) {
+            calendar.startOfDay(for: $0.endDate)
+        }
+        return byNight.compactMap { night, nightSamples -> VitalsSnapshot.SleepNight? in
+            // 워치+아이폰 이중 기록 대비 구간 병합으로 총 수면을 센다 (lastNightSleepHours와 같은 이유)
+            let intervals = nightSamples.map { (start: $0.startDate, end: $0.endDate) }
+                .sorted { $0.start < $1.start }
+            var merged: [(start: Date, end: Date)] = []
+            for interval in intervals {
+                if let last = merged.last, interval.start <= last.end {
+                    if interval.end > last.end { merged[merged.count - 1].end = interval.end }
+                } else {
+                    merged.append(interval)
+                }
+            }
+            let asleepHours = merged.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) } / 3_600
+            guard asleepHours >= 3 else { return nil }
+
+            // 단계 비율은 단계를 기록한 소스(워치)의 표본만으로 계산 —
+            // 아이폰의 asleepUnspecified가 분모에 섞이면 비율이 왜곡된다
+            let stageSec = nightSamples.filter { stageValues.contains($0.value) }
+                .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
+            let deepRemSec = nightSamples.filter { deepRemValues.contains($0.value) }
+                .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
+
+            // 취침 시각: 정오(전날 12:00) 기준 경과 분 — 자정 넘김(23시=660, 새벽 1시=780)을
+            // 연속값으로 다뤄 표준편차 계산이 깨지지 않게 한다
+            let bedtime = merged.first.map {
+                $0.start.timeIntervalSince(night.addingTimeInterval(-12 * 3_600)) / 60
+            }
+            return VitalsSnapshot.SleepNight(date: night,
+                                             asleepHours: asleepHours,
+                                             deepRemFraction: stageSec > 0 ? deepRemSec / stageSec : nil,
+                                             bedtimeMinutes: bedtime)
+        }
+        .sorted { $0.date < $1.date }
     }
 
     /// 최근 29일 표본 → 오늘 값 + 그 이전 일평균 기준선
@@ -277,6 +350,66 @@ final class HealthStore: ObservableObject {
                               kg: $0.quantity.doubleValue(for: .gramUnit(with: .kilo))) }
     }
 
+    /// 최근 12주 심박 회복(HRR) 표본 — 심폐 체력 카드의 보조 지표 재료 (제안 문서 B1).
+    /// 야외 러닝 종료 직후 워치가 자동 기록한다 (실내·중도 종료 세션에는 없을 수 있다).
+    private func fetchHrrTrend(now: Date = .now) async -> [(date: Date, value: Double)] {
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        let samples = (try? await quantitySamples(HKQuantityType(.heartRateRecoveryOneMinute),
+                                                  from: now.addingTimeInterval(-84 * 86_400),
+                                                  to: now)) ?? []
+        return samples.map { (date: $0.startDate,
+                              value: $0.quantity.doubleValue(for: bpm)) }
+    }
+
+    // MARK: - 크로스 트레이닝 (비러닝 운동)
+
+    /// 최근 2주 비러닝 워크아웃 — 주간 리포트 보조 문장(CrossTrainingEngine) 재료 (제안 문서 A3).
+    /// 러닝만 빼고 전부 가져와 종류 매핑은 앱에서 한다 — 종류별 쿼리 N번보다 싸다.
+    private func fetchCrossTrainings(now: Date = .now) async -> [CrossTraining] {
+        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            HKQuery.predicateForSamples(withStart: now.addingTimeInterval(-14 * 86_400), end: now),
+            NSCompoundPredicate(notPredicateWithSubpredicate:
+                HKQuery.predicateForWorkouts(with: .running)),
+        ])
+        let byRecent = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+        let workouts: [HKWorkout] = (try? await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: .workoutType(),
+                                      predicate: predicate,
+                                      limit: 200,
+                                      sortDescriptors: [byRecent]) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: (samples as? [HKWorkout]) ?? [])
+                }
+            }
+            store.execute(query)
+        }) ?? []
+        return workouts.map { workout in
+            CrossTraining(start: workout.startDate,
+                          durationSec: workout.duration,
+                          kind: Self.crossKind(of: workout.workoutActivityType),
+                          kcal: workout.statistics(for: HKQuantityType(.activeEnergyBurned))?
+                              .sumQuantity()?
+                              .doubleValue(for: .kilocalorie()))
+        }
+    }
+
+    /// HealthKit 운동 종류 → 크로스 트레이닝 종류 — 러너가 실제로 병행하는 종목 위주로 추리고
+    /// 나머지는 other로 뭉친다 (종류별 문장을 다 만들 수는 없다)
+    private static func crossKind(of type: HKWorkoutActivityType) -> CrossTraining.Kind {
+        switch type {
+        case .cycling: .cycling
+        case .traditionalStrengthTraining, .functionalStrengthTraining, .coreTraining: .strength
+        case .swimming: .swimming
+        case .hiking: .hiking
+        case .walking: .walking
+        case .yoga, .pilates: .yoga
+        case .highIntensityIntervalTraining: .hiit
+        default: .other
+        }
+    }
+
     /// 최근 12주 VO₂max 표본 — 심폐 체력 추이 카드의 재료.
     /// 워치가 야외 러닝·걷기 세션에서 추정해 기록한다 (실내 세션에는 없다).
     private func fetchVo2Max(now: Date = .now) async -> [(date: Date, value: Double)] {
@@ -288,6 +421,25 @@ final class HealthStore: ObservableObject {
                                                   to: now)) ?? []
         return samples.map { (date: $0.startDate,
                               value: $0.quantity.doubleValue(for: unit)) }
+    }
+
+    private func categorySamples(_ type: HKCategoryType,
+                                 from: Date,
+                                 to: Date) async throws -> [HKCategorySample] {
+        let predicate = HKQuery.predicateForSamples(withStart: from, end: to)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: type,
+                                      predicate: predicate,
+                                      limit: HKObjectQueryNoLimit,
+                                      sortDescriptors: nil) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
+                }
+            }
+            store.execute(query)
+        }
     }
 
     private func quantitySamples(_ type: HKQuantityType,
@@ -321,12 +473,30 @@ final class HealthStore: ObservableObject {
             .doubleValue(for: .kilocalorie())
         // 실내 여부 — 메타데이터 부재 시 야외 취급 (미기록 = 야외 가정, 기획서 §4.6)
         let isIndoor = (workout.metadata?[HKMetadataKeyIndoorWorkout] as? Bool) ?? false
+        // 날씨 — 워치가 야외 세션에 자동으로 붙인다. 추가 쿼리 없이 열 보정 재료가 된다 (제안 문서 A1)
+        let tempC = (workout.metadata?[HKMetadataKeyWeatherTemperature] as? HKQuantity)?
+            .doubleValue(for: .degreeCelsius())
+        let humidity = (workout.metadata?[HKMetadataKeyWeatherHumidity] as? HKQuantity)
+            .flatMap(Self.humidityPercent)
         return RunSummary(id: workout.uuid,
                           start: workout.startDate,
                           durationSec: workout.duration,
                           distanceMeters: distance,
                           avgHeartRate: bpm,
                           calories: kcal,
-                          isIndoor: isIndoor)
+                          isIndoor: isIndoor,
+                          weatherTempC: tempC,
+                          weatherHumidityPct: humidity)
+    }
+
+    /// 습도 메타데이터를 0~100(%)로 정규화 — 기록 주체에 따라 0~1(비율)로도,
+    /// %×100으로도 관측된 사례가 있어 방어적으로 맞춘다. 그래도 벗어나면 nil
+    /// (HeatEngine의 1...100 가드와 이중 방어).
+    private static func humidityPercent(_ quantity: HKQuantity) -> Double? {
+        let raw = quantity.doubleValue(for: .percent())
+        if raw <= 1 { return raw * 100 }
+        if raw <= 100 { return raw }
+        if raw <= 10_000 { return raw / 100 }
+        return nil
     }
 }

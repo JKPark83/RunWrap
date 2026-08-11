@@ -143,7 +143,7 @@ struct IndoorBadge: View {
     }
 }
 
-/// 화면 상단 모노스페이스 아이브로 라벨 (예: "2026년 8월 2째주 · 이번 주")
+/// 화면 상단 모노스페이스 아이브로 라벨 (예: "2026년 8월 2째주")
 struct Eyebrow: View {
     let text: String
 

@@ -95,6 +95,7 @@ struct OnboardingScreen: View {
 /// @AppStorage 대신 @State + 명시적 저장을 쓴다: "시작하기"를 누르기 전에는
 /// 프로필이 확정되지 않은 상태라 저장소에 흘리지 않는다.
 struct ProfileSetupScreen: View {
+    @EnvironmentObject private var health: HealthStore
     @State private var goal: RunGoal = .training
     @State private var level: RunLevel = .beginner  // 온보딩 기본은 초보 — 쉬운 문장부터
     @AppStorage(ProfileKey.didSetProfile) private var didSetProfile = false
@@ -135,6 +136,9 @@ struct ProfileSetupScreen: View {
             Button {
                 UserDefaults.standard.set(goal.rawValue, forKey: ProfileKey.goal)
                 UserDefaults.standard.set(level.rawValue, forKey: ProfileKey.level)
+                // 몸무게(bodyMass)는 다이어트 목적일 때만 쓰는 데이터라
+                // 이때만 추가로 권한을 요청한다 (기능별 권한 분리)
+                if goal == .diet { Task { await health.requestDietAccess() } }
                 didSetProfile = true
             } label: {
                 Text("시작하기")

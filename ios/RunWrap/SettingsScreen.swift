@@ -3,6 +3,7 @@ import SwiftUI
 /// 설정 — 프로필(목적·레벨) 변경. 진입: 리포트 홈 헤더의 기어 아이콘 (계획서 M2).
 /// 이후 마일스톤의 알림 토글·목표 입력도 이 화면에 추가된다.
 struct SettingsScreen: View {
+    @EnvironmentObject private var health: HealthStore
     @AppStorage(ProfileKey.goal) private var goalRaw = RunGoal.training.rawValue
     @AppStorage(ProfileKey.level) private var levelRaw = RunLevel.experienced.rawValue
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
@@ -23,6 +24,8 @@ struct SettingsScreen: View {
                         optionRow(label: goal.label, caption: goal.caption,
                                   isSelected: goalRaw == goal.rawValue) {
                             goalRaw = goal.rawValue
+                            // 몸무게 읽기는 다이어트 목적 전용 — 이때만 추가 권한 요청
+                            if goal == .diet { Task { await health.requestDietAccess() } }
                         }
                     }
                 }

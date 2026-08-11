@@ -41,11 +41,17 @@ struct SessionDetailScreen: View {
                     }
 
                     statsGrid
+                    if let heat = heatAdjustment {
+                        heatCard(heat)
+                    }
                     if let detail = store.detail, detail.splits.count >= 3 {
                         splitsCard(detail)
                     }
-                    if let zones = store.detail?.zones {
-                        zonesCard(zones, hrMaxEstimated: store.detail?.hrMaxEstimated ?? false)
+                    if let drift = store.detail?.drift {
+                        driftCard(drift)
+                    }
+                    if let detail = store.detail, let zones = detail.zones {
+                        zonesCard(zones, detail: detail)
                     }
                     if let detail = store.detail, hasDynamics(detail) {
                         formCard(detail)
@@ -204,6 +210,108 @@ struct SessionDetailScreen: View {
         .rrCard(radius: 22)
     }
 
+    // MARK: 열 보정 페이스 (제안 문서 A1)
+
+    /// 야외 + 날씨 메타데이터 + 열 점수 38 초과일 때만 — 수치 가드는 HeatEngine이 건다
+    private var heatAdjustment: HeatEngine.Adjustment? {
+        guard !run.isIndoor, let pace = run.paceSecPerKm else { return nil }
+        return HeatEngine.adjustment(paceSecPerKm: pace,
+                                     tempC: run.weatherTempC,
+                                     humidityPct: run.weatherHumidityPct)
+    }
+
+    private func heatCard(_ heat: HeatEngine.Adjustment) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("열 보정 페이스")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("heat adjusted")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(Format.pace(heat.adjustedPaceSecPerKm))
+                    .font(.system(size: 26, weight: .bold, design: .monospaced))
+                    .foregroundStyle(RR.text)
+                Text("/km 상당")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+                Spacer()
+                Text("더위 몫 \(Int(heat.deltaSecPerKm.rounded()))초/km")
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(RR.warn)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(RR.warnSoft,
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .padding(.top, 12)
+
+            heatSentence(heat)
+                .font(.system(size: 12.5))
+                .lineSpacing(4)
+                .padding(.top, 10)
+        }
+        .padding(18)
+        .rrCard(radius: 22)
+    }
+
+    private func heatSentence(_ heat: HeatEngine.Adjustment) -> Text {
+        Text("기온 \(Int(heat.tempC.rounded()))°C · 습도 \(Int(heat.humidityPct.rounded()))%에서 뛰었어요. 서늘한 날이었다면 ")
+            .foregroundStyle(RR.text2)
+            + Text(Format.paceKm(heat.adjustedPaceSecPerKm)).foregroundStyle(RR.pos).fontWeight(.semibold)
+            + Text(" 수준 — 더위 몫까지 뛰었으니 오늘 기록, 억울해하지 않으셔도 됩니다.")
+            .foregroundStyle(RR.text2)
+    }
+
+    // MARK: 심박 드리프트 (Pw:HR 디커플링, 제안 문서 A2)
+
+    private func driftCard(_ drift: DriftEngine.Result) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("심박 드리프트")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("hr decoupling")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(String(format: "%+.1f%%", drift.decouplingPct))
+                    .font(.system(size: 26, weight: .bold, design: .monospaced))
+                    .foregroundStyle(drift.tone.color)
+                Spacer()
+                ToneBadge(tone: drift.tone)
+            }
+            .padding(.top, 12)
+
+            Text(driftSentence(drift))
+                .font(.system(size: 12.5))
+                .lineSpacing(4)
+                .foregroundStyle(RR.text2)
+                .padding(.top, 10)
+        }
+        .padding(18)
+        .rrCard(radius: 22)
+    }
+
+    /// 사실 먼저, 위트는 뒤 — 톤별 문장은 Friel 5% 기준을 그대로 옮긴다
+    private func driftSentence(_ drift: DriftEngine.Result) -> String {
+        switch drift.tone {
+        case .improving:
+            "후반에 오히려 심박 효율이 좋아졌어요. 엔진이 늦게 데워지는 타입이거나 컨디션이 계속 올라왔거나 — 어느 쪽이든 좋은 신호입니다."
+        case .caution:
+            "같은 페이스인데 후반 심박이 \(Int(drift.decouplingPct.rounded()))% 더 들었어요. 이 거리엔 유산소 기반이 아직 덜 자랐다는 신호 — 편한 페이스 러닝을 늘리면 따라옵니다."
+        default:
+            "전·후반 심박 효율 차이가 5% 안이에요. 오늘 페이스는 몸이 끝까지 감당했다는 뜻입니다."
+        }
+    }
+
     // MARK: 구간별 페이스
 
     private func splitsCard(_ detail: WorkoutDetail) -> some View {
@@ -252,7 +360,7 @@ struct SessionDetailScreen: View {
 
     // MARK: 심박 구간
 
-    private func zonesCard(_ zones: [Double], hrMaxEstimated: Bool) -> some View {
+    private func zonesCard(_ zones: [Double], detail: WorkoutDetail) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("심박 구간")
                 .font(.system(size: 15, weight: .bold))
@@ -261,12 +369,18 @@ struct SessionDetailScreen: View {
             ZoneBarView(fractions: zones)
                 .padding(.top, 14)
 
-            if hrMaxEstimated {
-                Text("최대 심박 190 bpm 추정 기준 · 건강 앱에 생년월일을 넣으면 더 정확해져요")
-                    .font(.system(size: 11))
-                    .foregroundStyle(RR.text3)
-                    .padding(.top, 12)
+            VStack(alignment: .leading, spacing: 5) {
+                // 세션 최고 심박 — HRmax 대비 %로 강도를 한눈에 (제안 문서 A4)
+                if let peak = detail.maxHeartRateBpm, let hrMax = detail.hrMaxBpm, hrMax > 0 {
+                    Text("최고 심박 \(Int(peak.rounded())) bpm · \(detail.hrMaxEstimated ? "추정 " : "")HRmax의 \(Int((peak / hrMax * 100).rounded()))%")
+                }
+                if detail.hrMaxEstimated {
+                    Text("최대 심박 190 bpm 추정 기준 · 건강 앱에 생년월일을 넣으면 더 정확해져요")
+                }
             }
+            .font(.system(size: 11))
+            .foregroundStyle(RR.text3)
+            .padding(.top, 12)
         }
         .padding(18)
         .rrCard(radius: 22)

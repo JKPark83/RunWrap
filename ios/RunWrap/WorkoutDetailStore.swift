@@ -17,6 +17,11 @@ struct WorkoutDetail {
     var cadenceSpm: Double?
     var elevationM: Double?
     var hrMaxEstimated = false    // true면 생년월일이 없어 HRmax 190 폴백
+    /// 세션 최고 심박(bpm)과 존 계산에 쓴 HRmax — 존 카드의 "최고 심박 · HRmax 대비 %" 라인 재료
+    var maxHeartRateBpm: Double?
+    var hrMaxBpm: Double?
+    /// 심박 드리프트(Pw:HR 디커플링) — 존·스플릿용 샘플을 재사용해 추가 쿼리 없음 (제안 문서 A2)
+    var drift: DriftEngine.Result?
 
     // 러닝 다이내믹스 (기획서 §4.8, 계획서 M4) — 실외 세션에만 기록된다 (실내는 애플이 기록하지 않음)
     var verticalOscillationCm: Double?
@@ -74,14 +79,33 @@ final class WorkoutDetailStore: ObservableObject {
             detail.runningPowerW = await average(.runningPower, unit: .watt(), in: workout)
         }
 
-        if let hrSamples = try? await fetchQuantitySamples(.heartRate, in: workout), !hrSamples.isEmpty {
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+        let hrSamples = (try? await fetchQuantitySamples(.heartRate, in: workout)) ?? []
+        if !hrSamples.isEmpty {
             let (hrMax, estimated) = heartRateMax()
             detail.zones = Self.zoneFractions(samples: hrSamples, hrMax: hrMax)
             detail.hrMaxEstimated = estimated
+            detail.hrMaxBpm = hrMax
+            detail.maxHeartRateBpm = hrSamples.map { $0.quantity.doubleValue(for: bpmUnit) }.max()
         }
 
-        if let distanceSamples = try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout) {
+        let distanceSamples = (try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout)) ?? []
+        if !distanceSamples.isEmpty {
             detail.splits = Self.splits(from: distanceSamples)
+        }
+
+        // 심박 드리프트 — 존·스플릿용으로 이미 가져온 샘플을 재사용한다 (추가 쿼리 없음, 제안 문서 A2)
+        if !hrSamples.isEmpty, !distanceSamples.isEmpty {
+            detail.drift = DriftEngine.compute(
+                hrSamples: hrSamples.map {
+                    (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
+                },
+                distanceSamples: distanceSamples.map {
+                    (start: $0.startDate, end: $0.endDate,
+                     meters: $0.quantity.doubleValue(for: .meter()))
+                },
+                start: workout.startDate,
+                durationSec: workout.duration)
         }
 
         // 케이던스: ① 평균 속도 ÷ 평균 보폭 (다이내믹스가 있는 워치)
@@ -324,6 +348,19 @@ final class WorkoutDetailStore: ObservableObject {
         detail.runningPowerW = dynamics.powerW
         if !run.isIndoor {
             detail.elevationM = 30 + rng.unit() * 70
+        }
+
+        // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다
+        detail.hrMaxBpm = 190  // 합성은 생년월일이 없어 폴백 HRmax와 맞춘다
+        detail.maxHeartRateBpm = min((run.avgHeartRate ?? 150) + 22 + rng.unit() * 12, 188)
+        if run.durationSec >= 1_800 {
+            // 후반 처짐 스플릿과 결이 맞는 완만한 양수 디커플링 (2~8%)
+            let decoupling = 2 + rng.unit() * 6
+            let firstEF = 1.9 + rng.unit() * 0.4
+            detail.drift = DriftEngine.Result(decouplingPct: decoupling,
+                                              firstHalfEF: firstEF,
+                                              secondHalfEF: firstEF / (1 + decoupling / 100),
+                                              tone: decoupling < 5 ? .steady : .caution)
         }
         return detail
     }

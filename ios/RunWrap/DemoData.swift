@@ -15,18 +15,20 @@ enum DemoData {
     /// 이 구간만은 손으로 조정한 값을 유지한다.
     /// 케이던스는 최근 2주 평균 168 vs 이전 2주 165.4로 심어
     /// 주법 추이 카드가 개선 톤(+2 spm 이상)으로 계산되게 한다 (계획서 M4).
+    /// 날씨는 야외 세션 일부에만 심는다 — 한여름(열 점수 46 초과, 보정 큼)·
+    /// 초여름(38~46 구간)·선선한 날(38 이하 → 보정 카드 미노출 가드 확인)을 섞는다.
     private static var recentTuned: [RunSummary] {
         [
-            run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171),
-            run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170),
+            run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171, tempC: 28, humidityPct: 72),
+            run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170, tempC: 26, humidityPct: 65),
             run(daysAgo: 5, km: 6.6, minPerKm: 6.0, hr: 144, indoor: true, cadence: 169),
-            run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167),
-            run(daysAgo: 10, km: 6, minPerKm: 5.8, hr: 148, cadence: 166),
+            run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167, tempC: 30, humidityPct: 78),
+            run(daysAgo: 10, km: 6, minPerKm: 5.8, hr: 148, cadence: 166, tempC: 22, humidityPct: 55),
             run(daysAgo: 12, km: 4, minPerKm: 6.0, hr: 145, indoor: true, cadence: 165),
-            run(daysAgo: 16, km: 6, minPerKm: 6.1, hr: 153, cadence: 166),
+            run(daysAgo: 16, km: 6, minPerKm: 6.1, hr: 153, cadence: 166, tempC: 27, humidityPct: 70),
             run(daysAgo: 18, km: 5, minPerKm: 6.0, hr: 152, indoor: true, cadence: 165),
             run(daysAgo: 20, km: 5, minPerKm: 6.2, hr: 154, cadence: 166),
-            run(daysAgo: 23, km: 6, minPerKm: 6.0, hr: 153, cadence: 165),
+            run(daysAgo: 23, km: 6, minPerKm: 6.0, hr: 153, cadence: 165, tempC: 25, humidityPct: 68),
             run(daysAgo: 26, km: 5, minPerKm: 6.1, hr: 155, indoor: true, cadence: 165),
         ]
     }
@@ -52,7 +54,8 @@ enum DemoData {
 
     private static func run(daysAgo: Double, km: Double, minPerKm: Double,
                             hr: Double, indoor: Bool = false,
-                            cadence: Double? = nil) -> RunSummary {
+                            cadence: Double? = nil,
+                            tempC: Double? = nil, humidityPct: Double? = nil) -> RunSummary {
         RunSummary(id: UUID(),
                    start: Date().addingTimeInterval(-daysAgo * 86_400),
                    durationSec: km * minPerKm * 60,
@@ -60,7 +63,9 @@ enum DemoData {
                    avgHeartRate: hr,
                    calories: km * 62,  // 체중 70kg 언저리 러닝 소모 근사 (≈1.036 kcal/kg/km)
                    isIndoor: indoor,
-                   cadenceSpm: cadence)
+                   cadenceSpm: cadence,
+                   weatherTempC: tempC,
+                   weatherHumidityPct: humidityPct)
     }
 
     /// 합성 몸무게 — 8주에 걸친 완만한 감량(약 −1.3kg), 주 2~3회 측정 (계획서 M2)
@@ -92,14 +97,64 @@ enum DemoData {
 
     /// 합성 활력징후 — 과부하 주간 시나리오에 맞춘 "회복 덜 됨" 상태
     ///
-    /// HRV 하락 + 안정 심박 상승 + 수면 부족 + ACWR 초과가 겹쳐
-    /// 체력 배터리가 20%대(주의)로 계산되도록 맞춰 놓았다.
+    /// HRV 하락 + 안정 심박 상승 + 심박 회복 소폭 하락 + 수면 질 저하 + ACWR 초과가
+    /// 겹쳐 체력 배터리가 20%대(주의)로 계산되도록 맞춰 놓았다.
+    /// 포인트 합: HRV −6, 안정 심박 −6, HRR −1, 수면 +1, 수면 질 −8, ACWR −2 → 50−22 = 28.
+    /// 수면 시간은 7.1h로 충분한데 깊은잠+렘이 뚝 떨어진 시나리오 — "잤는데 얕게 잔 날".
     static var vitals: VitalsSnapshot {
-        VitalsSnapshot(hrvMs: .init(today: 55, baseline: 62, baselineDays: 28),
-                       restingHR: .init(today: 54, baseline: 51, baselineDays: 28),
+        VitalsSnapshot(hrvMs: .init(today: 57, baseline: 62, baselineDays: 28),
+                       restingHR: .init(today: 53, baseline: 51, baselineDays: 28),
+                       hrr: .init(today: 30, baseline: 31, baselineDays: 9),  // baselineDays 자리는 표본 수
                        respiratoryRate: .init(today: 14.6, baseline: 14.2, baselineDays: 28),
                        wristTempC: .init(today: 36.5, baseline: 36.4, baselineDays: 21),
-                       sleepHours: 6.8)
+                       sleepHours: 7.1,
+                       sleepNights: sleepNights)
+    }
+
+    /// 합성 밤별 수면 — 최근 14일. 마지막 밤만 깊은잠+렘 비율을 0.27로 떨어뜨려
+    /// (평소 0.34~0.38, 상대 하락 20% 이상) 수면 질 감점(−8pt)이 데모에서 보이게 한다.
+    /// 취침 시각은 23:30 전후 ±40분(정오 기준 650~730분)으로 규칙적이라
+    /// 수면 리듬 감점(SD > 90분)은 트리거하지 않는다.
+    private static var sleepNights: [VitalsSnapshot.SleepNight] {
+        var rng = SplitMix64(seed: 0x5EE9)
+        return (0..<14).map { i in
+            let daysAgo = Double(13 - i)
+            let isLatest = i == 13
+            return VitalsSnapshot.SleepNight(
+                date: Date().addingTimeInterval(-daysAgo * 86_400),
+                asleepHours: 6.5 + rng.unit() * 1.2,
+                deepRemFraction: isLatest ? 0.27 : 0.34 + rng.unit() * 0.04,
+                bedtimeMinutes: 690 + (rng.unit() - 0.5) * 80)
+        }
+    }
+
+    /// 합성 심박 회복(HRR) — 12주에 걸친 완만한 상승(주 +0.45bpm), 주 1~2회 야외 러닝 후 기록.
+    /// 84일 창 추세(ReportEngine.hrrTrend)가 개선 톤(+2bpm 초과)으로 계산되게 한다.
+    /// 배터리의 오늘 값(30, 기준선 31 대비 소폭 하락)과는 창이 다르다 —
+    /// 12주 추세는 오르는 중인데 오늘 하루만 살짝 낮은, 흔한 과부하 주간 그림.
+    static var hrrTrend: [(date: Date, value: Double)] {
+        var rng = SplitMix64(seed: 0x48EA)
+        return (0..<12).flatMap { week -> [(date: Date, value: Double)] in
+            let count = 1 + Int(rng.next() % 2)
+            return (0..<count).map { slot in
+                let daysAgo = Double(week) * 7 + Double(slot) * 3 + rng.unit() * 2
+                let value = 31.2 - Double(week) * 0.45 + (rng.unit() - 0.5) * 1.5  // 과거일수록 낮다
+                return (date: Date().addingTimeInterval(-daysAgo * 86_400), value: value)
+            }
+        }
+    }
+
+    /// 합성 크로스 트레이닝 — 이번 주 자전거 90분 + 근력 45분 (계 2시간 15분).
+    /// 걷기 25분 세션은 CrossTrainingEngine의 30분 미만 걷기 가드에 걸러지는 걸 확인하는 재료.
+    static var crossTrainings: [CrossTraining] {
+        [
+            CrossTraining(start: Date().addingTimeInterval(-2 * 86_400),
+                          durationSec: 90 * 60, kind: .cycling, kcal: 520),
+            CrossTraining(start: Date().addingTimeInterval(-4 * 86_400),
+                          durationSec: 45 * 60, kind: .strength, kcal: 210),
+            CrossTraining(start: Date().addingTimeInterval(-5 * 86_400),
+                          durationSec: 25 * 60, kind: .walking, kcal: 90),
+        ]
     }
 }
 

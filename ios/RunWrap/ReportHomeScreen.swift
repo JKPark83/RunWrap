@@ -27,6 +27,10 @@ struct ReportHomeScreen: View {
                                                                        now: Date()),
                                       vo2Max: ReportEngine.vo2MaxTrend(samples: health.vo2Max,
                                                                        now: Date()),
+                                      hrr: ReportEngine.hrrTrend(samples: health.hrrTrend,
+                                                                 now: Date()),
+                                      cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
+                                                                        runs: runs, now: Date()),
                                       form: FormTrend.compute(runs: runs, now: Date()),
                                       guide: trainingGuide(runs: runs, goal: goal, level: level,
                                                            batteryTone: battery?.tone))
@@ -62,6 +66,10 @@ struct ReportHomeContent: View {
     var weight: WeightTrend? = nil
     /// 심폐 체력(VO₂max) 추이 — 목적 무관 노출 (표본 부족이면 엔진이 nil을 준다)
     var vo2Max: Vo2MaxTrend? = nil
+    /// 심박 회복(HRR) 추이 — 심폐 체력 카드의 보조 라인 (제안 문서 B1, 표본 부족이면 nil)
+    var hrr: HrrTrend? = nil
+    /// 크로스 트레이닝 주간 요약 — 비러닝 운동 보조 카드 (제안 문서 A3, 20분 미만이면 nil)
+    var cross: CrossTrainingEngine.Summary? = nil
     /// 주간 케이던스 추이 — 최근 28일 케이던스 표본이 부족하면 엔진이 nil을 준다 (계획서 M4)
     var form: FormTrend? = nil
     /// 훈련 가이드 — 훈련 모드 + 목표 레이스 설정 시에만 값이 온다 (계획서 M7)
@@ -96,6 +104,8 @@ struct ReportHomeContent: View {
                     if let efficiency = report.efficiency { efficiencyCard(efficiency) }
                 }
 
+                if let cross { crossTrainingCard(cross) }
+
                 if let vo2Max { vo2MaxCard(vo2Max) }
 
                 if let form { formTrendCard(form) }
@@ -117,7 +127,11 @@ struct ReportHomeContent: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(RR.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .background(
+                            LinearGradient(colors: [RR.brand, RR.brand.opacity(0.82)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .shadow(color: RR.brand.opacity(0.28), radius: 10, y: 4)
                     }
                     .padding(.top, 2)
                 }
@@ -132,7 +146,7 @@ struct ReportHomeContent: View {
     private var header: some View {
         HStack(alignment: .bottom, spacing: 12) {
             VStack(alignment: .leading, spacing: 7) {
-                Eyebrow(text: "\(report.weekLabel) · 이번 주")
+                Eyebrow(text: report.weekLabel)
                 Text("주간 리포트")
                     .font(.system(size: 31, weight: .bold))
                     .foregroundStyle(RR.text)
@@ -167,7 +181,8 @@ struct ReportHomeContent: View {
 
     private func dietCaloriesCard(_ card: WeeklyReport.DietCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            dietBadge(label: "칼로리", code: "BURNING", color: RR.brand, soft: RR.brandSoft)
+            cardHeader(icon: "flame.fill", title: "칼로리", code: "BURNING",
+                       tint: RR.brand, soft: RR.brandSoft)
 
             Text("이번 주 \(Format.kcal(card.weekKcal)) kcal를 태웠어요")
                 .font(.system(size: 21, weight: .bold))
@@ -197,7 +212,8 @@ struct ReportHomeContent: View {
 
     private func weightCard(_ w: WeightTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            dietBadge(label: "몸무게", code: "WEIGHT", color: w.tone.color, soft: w.tone.softColor)
+            cardHeader(icon: "scalemass.fill", title: "몸무게", code: "WEIGHT",
+                       tint: w.tone.color, soft: w.tone.softColor)
 
             Text(weightHeadline(w))
                 .font(.system(size: 21, weight: .bold))
@@ -238,7 +254,8 @@ struct ReportHomeContent: View {
 
     private var streakCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            dietBadge(label: "연속 기록", code: "STREAK", color: RR.brand, soft: RR.brandSoft)
+            cardHeader(icon: "medal.fill", title: "연속 기록", code: "STREAK",
+                       tint: RR.brand, soft: RR.brandSoft)
 
             Text("\(report.streakWeeks)주 연속 달리고 있어요")
                 .font(.system(size: 21, weight: .bold))
@@ -260,7 +277,8 @@ struct ReportHomeContent: View {
     /// 심폐 체력 추이 카드 — 목적과 무관한 기초 체력 지표라 모든 프로필에 노출한다
     private func vo2MaxCard(_ v: Vo2MaxTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            dietBadge(label: "심폐 체력", code: "VO2MAX", color: v.tone.color, soft: v.tone.softColor)
+            cardHeader(icon: "lungs.fill", title: "심폐 체력", code: "VO2MAX",
+                       tint: v.tone.color, soft: v.tone.softColor)
 
             Text(vo2MaxHeadline(v))
                 .font(.system(size: 21, weight: .bold))
@@ -273,6 +291,19 @@ struct ReportHomeContent: View {
                 .font(.system(size: 13))
                 .foregroundStyle(RR.text2)
                 .padding(.top, 7)
+
+            // 심박 회복(HRR) 보조 라인 — 러닝 직후 1분 심박 하락 폭, 클수록 회복이 빠르다 (제안 문서 B1)
+            if let hrr {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.clockwise.heart")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(hrr.tone.color)
+                    Text(hrrLine(hrr))
+                        .font(.system(size: 12))
+                        .foregroundStyle(RR.text2)
+                }
+                .padding(.top, 6)
+            }
 
             TrendLineChart(points: v.points,
                            tint: v.tone.color,
@@ -306,41 +337,95 @@ struct ReportHomeContent: View {
         }
     }
 
-    /// 카드 종류 배지 (다이어트·심폐 체력 카드 공용) — 판정 톤이 아니라 카드 종류 표시라 ToneBadge를 쓰지 않는다
-    private func dietBadge(label: String, code: String, color: Color, soft: Color) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(label)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(color)
-            Text(code)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .kerning(1)
-                .foregroundStyle(color.opacity(0.65))
+    /// 심박 회복 한 줄 — 사실(수치) 먼저, 위트는 뒤 (제안 문서 B1)
+    private func hrrLine(_ hrr: HrrTrend) -> String {
+        let base = "심박 회복 \(Int(hrr.current.rounded())) bpm"
+        guard let delta = hrr.delta, hrr.spanWeeks > 0 else {
+            return base + " — 러닝 직후 1분에 이만큼 내려와요"
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(soft, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        return switch hrr.tone {
+        case .improving:
+            base + String(format: " · %d주 전보다 +%.0f — 회복 엔진도 좋아지는 중", hrr.spanWeeks, abs(delta))
+        case .caution:
+            base + String(format: " · %d주 전보다 −%.0f — 회복 쪽도 챙겨 주세요", hrr.spanWeeks, abs(delta))
+        default:
+            base + " · \(hrr.spanWeeks)주 전과 비슷하게 유지 중"
+        }
+    }
+
+    // MARK: 크로스 트레이닝 카드 — 비러닝 운동 보조 정보 (제안 문서 A3)
+
+    /// 보조 카드 — 시간·세션 수만 보여준다. 거리 부하(ACWR)·주간 거리 집계에는 절대 섞지 않는다
+    private func crossTrainingCard(_ cross: CrossTrainingEngine.Summary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardHeader(icon: "figure.cross.training", title: "크로스 트레이닝", code: "CROSS",
+                       tint: RR.brand, soft: RR.brandSoft)
+
+            Text(cross.headline)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(RR.text)
+                .lineSpacing(4)
+                .padding(.top, 13)
+
+            HStack(spacing: 8) {
+                metric(label: "이번 주", value: "\(cross.sessionCount)", unit: "회", color: RR.text)
+                metric(label: "총 시간", value: crossTimeLabel(cross.totalMinutes), unit: "",
+                       color: RR.text)
+                if let top = cross.breakdown.first {
+                    metric(label: "가장 많이", value: top.label, unit: "", color: RR.text2)
+                }
+            }
+            .padding(.top, 13)
+
+            Text(cross.detail)
+                .font(.system(size: 12))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text3)
+                .padding(.top, 11)
+        }
+        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
+        .rrCard()
+    }
+
+    /// "1시간 30분"·"45분" — metric 셀에 들어가는 총 시간 라벨
+    private func crossTimeLabel(_ minutes: Int) -> String {
+        guard minutes >= 60 else { return "\(minutes)분" }
+        let remainder = minutes % 60
+        return remainder == 0 ? "\(minutes / 60)시간" : "\(minutes / 60)시간 \(remainder)분"
+    }
+
+    /// 카드 공통 헤더 — 아이콘 타일 + 제목 + 영문 코드. 판정 카드는 톤 배지를 오른쪽에 단다.
+    /// 시안의 점 배지를 아이콘 타일로 확장해 카드마다 시각 정체성을 준다 (확장 요구, 2026-08-11)
+    private func cardHeader(icon: String, title: String, code: String,
+                            tint: Color, soft: Color, tone: RRTone? = nil) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(soft, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            VStack(alignment: .leading, spacing: 2.5) {
+                Text(title)
+                    .font(.system(size: 14.5, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Text(code)
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .kerning(1.2)
+                    .foregroundStyle(RR.text3)
+            }
+            Spacer(minLength: 8)
+            if let tone {
+                ToneBadge(tone: tone)
+            }
+        }
     }
 
     // MARK: 체력 배터리 카드
 
     private func batteryCard(_ battery: BatteryReport) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Circle().fill(battery.tone.color).frame(width: 6, height: 6)
-                Text("체력 배터리")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(battery.tone.color)
-                Text(battery.statusLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .kerning(1)
-                    .foregroundStyle(battery.tone.color.opacity(0.65))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(battery.tone.softColor,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            cardHeader(icon: "bolt.heart.fill", title: "체력 배터리", code: battery.statusLabel,
+                       tint: battery.tone.color, soft: battery.tone.softColor)
 
             Text(battery.headline)
                 .font(.system(size: 21, weight: .bold))
@@ -432,7 +517,8 @@ struct ReportHomeContent: View {
 
     private func distanceCard(_ card: WeeklyReport.DistanceCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ToneBadge(tone: card.tone)
+            cardHeader(icon: "figure.run", title: "주간 거리", code: "DISTANCE",
+                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone)
 
             distanceHeadline(card)
                 .font(.system(size: 23, weight: .bold))
@@ -463,18 +549,21 @@ struct ReportHomeContent: View {
         .rrCard()
     }
 
+    /// 판정은 롤링 7일 창(달력 주 아님)이라 "지난주" 표현을 쓰지 않는다 —
+    /// 차트(달력 주)와 기준이 달라 주 초반엔 방향이 반대로 보일 수 있기 때문.
+    /// 하단 지표 라벨("최근 7일"/"이전 7일")과 같은 말로 맞춘다.
     private func distanceHeadline(_ card: WeeklyReport.DistanceCard) -> Text {
         let pct = Text(String(format: "%.0f%%", abs(card.changePct)))
             .foregroundStyle(card.tone.color)
         let base: Text
         if card.changePct >= 0 {
-            base = Text("주간 거리를 지난주보다 ").foregroundStyle(RR.text)
+            base = Text("최근 7일 거리가 그 전 7일보다 ").foregroundStyle(RR.text)
                 + pct
-                + Text(" 늘렸어요").foregroundStyle(RR.text)
+                + Text(" 늘었어요").foregroundStyle(RR.text)
         } else {
-            base = Text("주간 거리를 지난주보다 ").foregroundStyle(RR.text)
+            base = Text("최근 7일 거리가 그 전 7일보다 ").foregroundStyle(RR.text)
                 + pct
-                + Text(" 줄였어요").foregroundStyle(RR.text)
+                + Text(" 줄었어요").foregroundStyle(RR.text)
         }
         return base
     }
@@ -495,7 +584,8 @@ struct ReportHomeContent: View {
 
     private func acwrCard(_ card: WeeklyReport.AcwrCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ToneBadge(tone: card.tone)
+            cardHeader(icon: "speedometer", title: "훈련 부하", code: "ACWR",
+                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone)
 
             Text(acwrHeadline(card))
                 .font(.system(size: 21, weight: .bold))
@@ -528,7 +618,8 @@ struct ReportHomeContent: View {
 
     private func efficiencyCard(_ card: WeeklyReport.EfficiencyCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ToneBadge(tone: card.tone)
+            cardHeader(icon: "heart.fill", title: "심박 효율", code: "EFFICIENCY",
+                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone)
 
             efficiencyHeadline(card)
                 .font(.system(size: 21, weight: .bold))
@@ -572,7 +663,8 @@ struct ReportHomeContent: View {
 
     private func formTrendCard(_ form: FormTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            ToneBadge(tone: form.tone)
+            cardHeader(icon: "shoeprints.fill", title: "주법 리듬", code: "CADENCE",
+                       tint: form.tone.color, soft: form.tone.softColor, tone: form.tone)
 
             Text(formHeadline(form))
                 .font(.system(size: 21, weight: .bold))
@@ -608,9 +700,9 @@ struct ReportHomeContent: View {
 
     private func trainingGuideCard(_ guide: TrainingGuide) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            dietBadge(label: "훈련 가이드", code: "COACH",
-                      color: guide.prediction?.tone.color ?? RR.brand,
-                      soft: guide.prediction?.tone.softColor ?? RR.brandSoft)
+            cardHeader(icon: "target", title: "훈련 가이드", code: "COACH",
+                       tint: guide.prediction?.tone.color ?? RR.brand,
+                       soft: guide.prediction?.tone.softColor ?? RR.brandSoft)
 
             Text(guideHeadline(guide))
                 .font(.system(size: 21, weight: .bold))

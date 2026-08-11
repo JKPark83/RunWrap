@@ -31,6 +31,7 @@ struct TodayScreen: View {
                 default:
                     if let weather {
                         weatherCard(weather)
+                        adviceCard(weather)
                         outfitCard(weather)
                     } else if weatherFailed {
                         noticeCard("날씨를 불러오지 못했어요",
@@ -179,12 +180,97 @@ struct TodayScreen: View {
         .padding(.vertical, 12)
     }
 
+    // MARK: 조언 카드
+
+    private func adviceCard(_ weather: CurrentWeather) -> some View {
+        let name = WeatherAdviceRules.runName(apparentC: weather.apparentC,
+                                              precipitationMm: weather.precipitationMm,
+                                              weatherCode: weather.weatherCode)
+        let items = WeatherAdviceRules.advice(apparentC: weather.apparentC,
+                                              humidityPct: weather.humidityPct,
+                                              windMs: weather.windMs,
+                                              precipitationMm: weather.precipitationMm,
+                                              uvIndex: weather.uvIndex,
+                                              weatherCode: weather.weatherCode)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("오늘의 러닝")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("advice")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+            }
+
+            HStack(spacing: 13) {
+                ZStack {
+                    Circle().fill(name.tone.softColor)
+                    Image(systemName: Self.runSymbol(name.kind))
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(name.tone.color)
+                }
+                .frame(width: 56, height: 56)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(name.title)
+                        .font(.system(size: 25, weight: .heavy))
+                        .foregroundStyle(RR.text)
+                    Text(name.quip)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(RR.text2)
+                }
+            }
+            .padding(.top, 14)
+
+            Divider().overlay(RR.line)
+                .padding(.top, 15)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(items, id: \.text) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(item.tone.color)
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 5)
+                        Text(item.text)
+                            .font(.system(size: 11.5))
+                            .lineSpacing(3)
+                            .foregroundStyle(RR.text3)
+                    }
+                }
+            }
+            .padding(.top, 13)
+        }
+        .padding(18)
+        .rrCard(radius: 22)
+    }
+
+    /// 러닝 이름 → SF 심볼 — 엔진(RunName)은 UI를 모르므로 매핑은 화면 몫
+    private static func runSymbol(_ kind: RunName.Kind) -> String {
+        switch kind {
+        case .treadmill: "house.fill"
+        case .snow: "snowflake"
+        case .rain: "umbrella.fill"
+        case .sauna: "flame.fill"
+        case .dawn: "sunrise.fill"
+        case .shade: "tree.fill"
+        case .fun: "party.popper.fill"
+        case .crisp: "leaf.fill"
+        case .hotpack: "thermometer.snowflake"
+        case .penguin: "snowflake.circle.fill"
+        }
+    }
+
     // MARK: 복장 카드
 
     private func outfitCard(_ weather: CurrentWeather) -> some View {
         let items = OutfitRules.outfit(apparentC: weather.apparentC,
+                                       humidityPct: weather.humidityPct,
+                                       windMs: weather.windMs,
                                        precipitationMm: weather.precipitationMm,
-                                       windMs: weather.windMs)
+                                       uvIndex: weather.uvIndex,
+                                       now: Date())
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("오늘의 러닝 복장")
@@ -196,7 +282,7 @@ struct TodayScreen: View {
                     .foregroundStyle(RR.text3)
             }
 
-            FlowChips(items: items)
+            OutfitGrid(items: items)
                 .padding(.top, 14)
         }
         .padding(18)
@@ -250,35 +336,39 @@ struct TodayScreen: View {
     }
 }
 
-// MARK: - 복장 칩
+// MARK: - 복장 그리드
 
-/// 복장 아이템 칩 나열 — 아이콘·라벨 매핑은 화면 몫 (OutfitRules는 UI를 모른다)
-private struct FlowChips: View {
+/// 복장 아이템 타일 그리드 — 아이콘·라벨 매핑은 화면 몫 (OutfitRules는 UI를 모른다).
+/// 칩 나열 대신 큰 아이콘 타일로 보여준다 (확장 요구, 2026-08-12).
+private struct OutfitGrid: View {
     let items: [OutfitItem]
 
     var body: some View {
-        let columns = [GridItem(.adaptive(minimum: 104), spacing: 8, alignment: .leading)]
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+        let columns = [GridItem(.adaptive(minimum: 68), spacing: 9)]
+        LazyVGrid(columns: columns, spacing: 12) {
             ForEach(items, id: \.self) { item in
                 let meta = Self.meta(item)
-                HStack(spacing: 6) {
-                    Image(systemName: meta.symbol)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(RR.brand)
+                VStack(spacing: 7) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(RR.brandSoft)
+                        Image(systemName: meta.symbol)
+                            .font(.system(size: 27, weight: .medium))
+                            .foregroundStyle(RR.brand)
+                    }
+                    .frame(height: 62)
                     Text(meta.label)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(RR.text)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
-                .padding(.horizontal, 11)
-                .padding(.vertical, 8)
-                .background(RR.surface2,
-                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(RR.line))
             }
         }
     }
 
+    /// 같은 조합에 함께 나오는 아이템끼리는 심볼이 겹치지 않게 배정했다
+    /// (반바지·타이츠처럼 동시에 안 나오는 쌍만 심볼을 공유)
     private static func meta(_ item: OutfitItem) -> (symbol: String, label: String) {
         switch item {
         case .singlet: ("tshirt", "싱글렛")
@@ -286,14 +376,24 @@ private struct FlowChips: View {
         case .longSleeve: ("tshirt.fill", "긴팔 티")
         case .shorts: ("figure.run", "반바지")
         case .tights: ("figure.run", "타이츠")
-        case .jacket: ("jacket", "자켓")
+        case .jacket: (firstAvailable("jacket.fill", "wind"), "자켓")
         case .gloves: ("hand.raised.fill", "장갑")
         case .windbreaker: ("wind", "바람막이")
         case .waterproofCap: ("umbrella", "방수 캡")
         case .waterproofJacket: ("cloud.rain", "방수 자켓")
-        case .thermalTop: ("snowflake", "방한 상의")
-        case .thermalBottom: ("snowflake", "방한 하의")
-        case .beanie: ("snowflake", "방한 모자")
+        case .thermalTop: ("tshirt.fill", "방한 상의")
+        case .thermalBottom: ("figure.run", "방한 하의")
+        case .beanie: (firstAvailable("hat.cap.fill", "snowflake"), "비니")
+        case .neckWarmer: ("thermometer.snowflake", "넥워머")
+        case .sunCap: (firstAvailable("hat.cap.fill", "sun.max.fill"), "러닝 캡")
+        case .sunglasses: ("sunglasses.fill", "선글라스")
+        case .sunscreen: ("drop.fill", "선크림")
         }
+    }
+
+    /// 배포 타깃(iOS 17)보다 늦게 추가된 심볼은 구형 기기에서 빈 칸이 된다 —
+    /// 런타임에 확인해 첫 사용 가능 심볼을 쓴다 (hat.cap.fill·jacket.fill은 iOS 18 추가)
+    private static func firstAvailable(_ names: String...) -> String {
+        names.first { UIImage(systemName: $0) != nil } ?? names[names.count - 1]
     }
 }

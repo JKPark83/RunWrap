@@ -365,6 +365,35 @@ extension ReportEngine {
     }
 }
 
+// MARK: - 심박 회복 (HRR 추이)
+
+/// 심박 회복(HRR) 추이 — 야외 러닝 종료 후 1분간 심박 하락 폭(bpm)의 주 단위 평균.
+/// 심폐 체력 카드의 보조 라인 재료 (제안 문서 B1). 클수록 회복이 빠르다 (Cole 1999).
+/// 차트 없이 한 줄로만 보여줘 points는 두지 않는다.
+struct HrrTrend {
+    let tone: RRTone
+    let current: Double        // 최신 주 평균 bpm
+    let delta: Double?         // spanWeeks주 전 대비 변화량 (비교할 주가 있을 때만)
+    let spanWeeks: Int
+}
+
+extension ReportEngine {
+    /// HRR 표본 → ISO 주 단위 평균 + 4주 전 대비 변화량.
+    /// 미노출 가드(가정): 최근 12주 기록 3회 미만이면 nil — 야외 러닝을 해야만 쌓이는 지표라
+    /// 표본이 적을 때가 많다. 회당 편차가 커 주 평균으로 누르고, ±2 bpm 미만 변화는 유지 판정.
+    static func hrrTrend(samples: [(date: Date, value: Double)], now: Date) -> HrrTrend? {
+        guard let series = weeklyTrendSeries(samples: samples, now: now, windowDays: 84)
+        else { return nil }
+        let tone: RRTone = switch series.delta {
+        case .some(let d) where d >= 2: .improving
+        case .some(let d) where d <= -2: .caution
+        default: .steady
+        }
+        return HrrTrend(tone: tone, current: series.current,
+                        delta: series.delta, spanWeeks: series.spanWeeks)
+    }
+}
+
 // MARK: - 통계 탭 (월간)
 
 /// 통계 화면의 월 단위 집계

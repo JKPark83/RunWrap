@@ -11,11 +11,24 @@ struct VitalsSnapshot: Equatable {
         let baselineDays: Int     // 기준선 계산에 쓰인 날짜 수
     }
 
+    /// 밤별 수면 상세 — 단계(깊은+렘)와 취침 시각 규칙성을 다룰 때만 쓰인다
+    struct SleepNight: Equatable {
+        let date: Date                 // 기상일 자정
+        let asleepHours: Double
+        let deepRemFraction: Double?   // (깊은 수면 + 렘) ÷ 총 수면, 0...1
+        let bedtimeMinutes: Double?    // 취침 시각 — 정오(12:00) 기준 경과 분. 자정 넘김(23시=660, 새벽 1시=780)을 연속값으로 다루기 위한 좌표계
+    }
+
     var hrvMs: Reading? = nil            // 심박 변이도 SDNN (ms) — 높을수록 회복
     var restingHR: Reading? = nil        // 안정 심박 (bpm) — 낮을수록 회복
+    /// 심박 회복(운동 종료 후 1분 하락 폭, bpm). 야외 러닝 후 워치가 자동 기록.
+    /// 주의: HRR은 매일 생기지 않으므로 Reading.baselineDays 자리를 '기저 표본 개수'로 쓴다.
+    var hrr: Reading? = nil
     var respiratoryRate: Reading? = nil  // 수면 중 호흡수 (회/분) — 이탈 시 감점
     var wristTempC: Reading? = nil       // 수면 중 손목 온도 (°C) — 상승 시 감점
     var sleepHours: Double? = nil        // 지난밤 수면 시간
+    /// 최근 밤별 수면 상세 (스토어가 최근 2주치를 넘긴다). 단계 데이터가 없는 밤은 deepRemFraction이 nil.
+    var sleepNights: [SleepNight] = []
 }
 
 /// 체력 배터리 결과 — 남은 체력 추정치(0–100)와 요인별 기여
@@ -39,16 +52,19 @@ struct BatteryReport: Equatable {
 /// 모델: 중립 50에서 시작해 요인별 포인트를 더한다.
 /// - 심박 변이(HRV): 기준선 대비 ±25% 편차가 ±20pt
 /// - 안정 심박: 기준선 대비 ∓10% 편차가 ±15pt (낮을수록 +)
+/// - 심박 회복(HRR): 기준선 대비 ±25% 편차가 ±10pt (높을수록 +, Cole 1999)
 /// - 수면: 7시간 기준, ±2시간이 ±15pt
 /// - 호흡수·손목 온도: 평소 범위를 벗어나면 각각 −6pt (감점 전용)
+/// - 수면 질(깊은+렘 비율 하락)·수면 리듬(취침 시각 표준편차): 이탈 시 각각 −8pt·−6pt (감점 전용)
 /// - 오늘 훈련: 오늘 뛴 거리 km × 2pt 소모 (최대 −25)
 /// - 훈련 부하: ACWR > 1.3이면 초과분만큼 소모 (최대 −15)
 ///
-/// 가드: 핵심 신호(HRV·안정 심박·수면) 중 2개 이상이 있어야 계산한다.
-/// 기준선은 최소 7일 — 부족하면 그 요인은 없는 것으로 친다.
+/// 가드: 핵심 신호(HRV·안정 심박·HRR·수면) 중 2개 이상이 있어야 계산한다.
+/// 기준선은 최소 7일(HRR은 매일 생기지 않아 표본 5개) — 부족하면 그 요인은 없는 것으로 친다.
 /// "틀린 인사이트는 없느니만 못하다."
 enum BatteryEngine {
     static let minBaselineDays = 7   // Apple 활력징후 앱과 같은 최소 기준선
+    static let hrrMinBaselineCount = 5   // HRV·안정 심박과 달리 매일 기록되지 않아 표본 기준을 별도로 둔다
 
     static func compute(vitals: VitalsSnapshot,
                         runs: [RunSummary],
@@ -71,6 +87,15 @@ enum BatteryEngine {
                                  detail: String(format: "%.0f bpm · 평소 %.0f bpm", r.today, r.baseline),
                                  points: pts,
                                  systemImage: "heart.fill"))
+            coreSignals += 1
+        }
+
+        if let r = valid(vitals.hrr, minCount: hrrMinBaselineCount) {
+            let pts = points((r.today / r.baseline - 1) / 0.25, scale: 10)
+            factors.append(.init(name: "심박 회복",
+                                 detail: String(format: "%.0f bpm · 평소 %.0f bpm", r.today, r.baseline),
+                                 points: pts,
+                                 systemImage: "arrow.clockwise.heart"))
             coreSignals += 1
         }
 
@@ -99,6 +124,35 @@ enum BatteryEngine {
                                  systemImage: "thermometer.medium"))
         }
 
+        // 수면 질 — 깊은+렘 비율이 있는 밤이 7개 이상일 때만, 가장 최근 밤 vs 나머지 밤 평균(기저)
+        let qualityNights = vitals.sleepNights.filter { $0.deepRemFraction != nil }.sorted { $0.date < $1.date }
+        if qualityNights.count >= 7,
+           let latest = qualityNights.last, let todayFraction = latest.deepRemFraction {
+            let baselineNights = qualityNights.dropLast()
+            let baselineFraction = baselineNights.compactMap(\.deepRemFraction).reduce(0, +) / Double(baselineNights.count)
+            if baselineFraction > 0, (baselineFraction - todayFraction) / baselineFraction >= 0.20 {
+                factors.append(.init(name: "수면 질",
+                                     detail: String(format: "깊은+렘 %.0f%% · 평소 %.0f%%",
+                                                    todayFraction * 100, baselineFraction * 100),
+                                     points: -8,
+                                     systemImage: "bed.double.fill"))
+            }
+        }
+
+        // 수면 리듬 — 취침 시각이 있는 밤이 7개 이상일 때만, 모집단 표준편차 > 90분이면 감점
+        let bedtimes = vitals.sleepNights.compactMap(\.bedtimeMinutes)
+        if bedtimes.count >= 7 {
+            let mean = bedtimes.reduce(0, +) / Double(bedtimes.count)
+            let variance = bedtimes.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(bedtimes.count)
+            let sd = variance.squareRoot()
+            if sd > 90 {
+                factors.append(.init(name: "수면 리듬",
+                                     detail: "취침 시각 편차 " + bedtimeSDText(sd),
+                                     points: -6,
+                                     systemImage: "clock.arrow.circlepath"))
+            }
+        }
+
         let todayKm = kmToday(runs, now: now)
         if todayKm > 0.1 {
             factors.append(.init(name: "오늘 훈련",
@@ -122,9 +176,10 @@ enum BatteryEngine {
 
     // MARK: - 내부
 
-    /// 기준선이 7일 이상 쌓인 정상 측정값만 통과시킨다
-    private static func valid(_ reading: VitalsSnapshot.Reading?) -> VitalsSnapshot.Reading? {
-        guard let reading, reading.baselineDays >= minBaselineDays, reading.baseline > 0 else {
+    /// 기준선이 최소 표본 이상 쌓인 정상 측정값만 통과시킨다 (기본 7일, HRR은 표본 5개)
+    private static func valid(_ reading: VitalsSnapshot.Reading?,
+                              minCount: Int = minBaselineDays) -> VitalsSnapshot.Reading? {
+        guard let reading, reading.baselineDays >= minCount, reading.baseline > 0 else {
             return nil
         }
         return reading
@@ -146,6 +201,11 @@ enum BatteryEngine {
     private static func sleepText(_ hours: Double) -> String {
         let totalMin = Int((hours * 60).rounded())
         return "\(totalMin / 60)시간 \(totalMin % 60)분"
+    }
+
+    private static func bedtimeSDText(_ minutes: Double) -> String {
+        let totalMin = Int(minutes.rounded())
+        return "±\(totalMin / 60)시간 \(totalMin % 60)분"
     }
 
     /// 오늘 0시 이후 뛴 거리 — 어제까지의 훈련은 밤사이 활력징후에 이미 반영돼 있다

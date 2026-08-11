@@ -14,12 +14,17 @@ struct RunSummary: Identifiable, Equatable {
     /// 평균 케이던스(spm) — 주법 추이(계획서 M4) 재료. 걸음 수 쿼리 비용 때문에
     /// 최근 28일 워크아웃에만 채워진다 (HealthStore가 목록 조회 뒤 백필).
     var cadenceSpm: Double?
+    /// 세션 당시 기온(°C)·습도(%) — 워치가 야외 세션에 자동으로 붙이는 날씨 메타데이터.
+    /// 열 보정 페이스(HeatEngine)의 재료라 추가 쿼리 비용이 없다 (제안 문서 A1). 실내는 nil.
+    var weatherTempC: Double?
+    var weatherHumidityPct: Double?
 
     /// 뒤에 붙은 필드들의 기본값을 위한 명시적 init — 기존 호출부(테스트 포함)를 깨지 않는다
     init(id: UUID, start: Date, durationSec: Double,
          distanceMeters: Double?, avgHeartRate: Double?,
          calories: Double? = nil, isIndoor: Bool = false,
-         cadenceSpm: Double? = nil) {
+         cadenceSpm: Double? = nil,
+         weatherTempC: Double? = nil, weatherHumidityPct: Double? = nil) {
         self.id = id
         self.start = start
         self.durationSec = durationSec
@@ -28,6 +33,8 @@ struct RunSummary: Identifiable, Equatable {
         self.calories = calories
         self.isIndoor = isIndoor
         self.cadenceSpm = cadenceSpm
+        self.weatherTempC = weatherTempC
+        self.weatherHumidityPct = weatherHumidityPct
     }
 
     var distanceKm: Double? { distanceMeters.map { $0 / 1000 } }
