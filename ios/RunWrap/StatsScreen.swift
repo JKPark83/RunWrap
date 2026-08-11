@@ -99,7 +99,12 @@ struct StatsScreen: View {
                 }
                 Spacer()
                 if let delta = stats.deltaPct {
-                    deltaBadge(delta)
+                    VStack(alignment: .trailing, spacing: 5) {
+                        deltaBadge(delta)
+                        Text(stats.deltaCaption)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(RR.text3)
+                    }
                 }
             }
 

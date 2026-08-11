@@ -183,7 +183,9 @@ extension ReportEngine {
 struct MonthlyStats {
     let monthLabel: String            // "2026년 8월"
     let totalKm: Double
-    let deltaPct: Double?             // 전월 대비 누적 거리 증감 (전월 기록 있을 때만)
+    let deltaPct: Double?             // 지난달 같은 구간 대비 누적 거리 증감 (지난달 기록 있을 때만)
+    /// 비교에 쓴 지난달 구간의 일수 — 진행 중인 달일 때만 값이 있다(nil = 지난달 전체)
+    let comparisonDays: Int?
     let weeks: [WeeklyReport.WeekBar] // 월 내 주차 합계 ("1주"…)
     let avgPaceSec: Double?
     let paceDeltaSec: Double?         // 전월 대비 (음수 = 빨라짐)
@@ -195,6 +197,12 @@ struct MonthlyStats {
     let pacePoints: [Double]          // 러닝별 페이스 (오래된 → 최신, 스파크라인)
     let heartRatePoints: [Double]
     let runs: [RunSummary]            // 해당 월, 최신순
+
+    /// 증감 배지 밑에 붙는 비교 기준 — 무엇과 견준 수치인지 밝힌다
+    var deltaCaption: String {
+        guard let comparisonDays else { return "지난달 대비" }
+        return "지난달 1–\(comparisonDays)일 대비"
+    }
 
     /// runs 전체에서 기록이 있는 월 목록 (최신 먼저)
     static func availableMonths(in runs: [RunSummary], now: Date = Date()) -> [Date] {
@@ -212,13 +220,30 @@ struct MonthlyStats {
         return months
     }
 
-    static func compute(runs: [RunSummary], month: Date) -> MonthlyStats {
+    static func compute(runs: [RunSummary], month: Date, now: Date = Date()) -> MonthlyStats {
         let calendar = Calendar.current
         let interval = calendar.dateInterval(of: .month, for: month)!
         let inMonth = runs.filter { interval.contains($0.start) }.sorted { $0.start > $1.start }
-        let previousMonth = calendar.date(byAdding: .month, value: -1, to: month)!
+
+        // 비교 구간 — 진행 중인 달은 지난달의 "오늘과 같은 날짜"까지만 본다.
+        // 지난달 전체와 견주면 월초에는 무조건 크게 줄어든 것처럼 보인다.
+        let previousMonth = calendar.date(byAdding: .month, value: -1, to: interval.start)!
         let previousInterval = calendar.dateInterval(of: .month, for: previousMonth)!
-        let inPrevious = runs.filter { previousInterval.contains($0.start) }
+        let previousEnd: Date
+        let comparisonDays: Int?
+        if interval.contains(now) {
+            let elapsed = (calendar.dateComponents([.day], from: interval.start, to: now).day ?? 0) + 1
+            // 지난달이 더 짧으면(예: 3월 30일 → 2월) 그 달 끝에서 멈춘다
+            previousEnd = min(calendar.date(byAdding: .day, value: elapsed,
+                                            to: previousInterval.start)!,
+                              previousInterval.end)
+            comparisonDays = calendar.dateComponents([.day], from: previousInterval.start,
+                                                     to: previousEnd).day
+        } else {
+            previousEnd = previousInterval.end
+            comparisonDays = nil
+        }
+        let inPrevious = runs.filter { $0.start >= previousInterval.start && $0.start < previousEnd }
 
         func totalKm(_ list: [RunSummary]) -> Double {
             list.compactMap(\.distanceKm).reduce(0, +)
@@ -264,6 +289,7 @@ struct MonthlyStats {
         return MonthlyStats(monthLabel: formatter.string(from: month),
                             totalKm: total,
                             deltaPct: previousTotal >= 3 ? (total - previousTotal) / previousTotal * 100 : nil,
+                            comparisonDays: comparisonDays,
                             weeks: weeks,
                             avgPaceSec: pace,
                             paceDeltaSec: (pace != nil && previousPace != nil) ? pace! - previousPace! : nil,

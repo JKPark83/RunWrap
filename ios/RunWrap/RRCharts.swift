@@ -247,46 +247,96 @@ struct SparkLine: View {
     }
 }
 
-/// 구간별(km) 페이스 막대 — 평균 대비 느린 구간은 경고색
+/// 구간별(km) 페이스 막대 — 평균 대비 느린 구간은 경고색.
+/// 구간이 많아 폭이 모자라면 막대 폭을 유지한 채 가로 스크롤로 넘긴다
+/// (예전에는 폭에 억지로 밀어넣어 롱런 후반 구간이 카드 밖으로 잘렸다).
 struct SplitBarsChart: View {
     let splits: [WorkoutDetail.Split]
     var slowThresholdSec: Double = 8
     var height: CGFloat = 64
+
+    /// 스크롤 모드에서 막대 하나가 차지하는 최소 폭 (막대 + 간격)
+    private let slot: CGFloat = 10
+    private let gap: CGFloat = 3
+    private let axisHeight: CGFloat = 13
 
     private var avgPace: Double {
         splits.map(\.paceSecPerKm).reduce(0, +) / Double(max(splits.count, 1))
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            GeometryReader { geo in
-                let speeds = splits.map { 1 / $0.paceSecPerKm }
-                let maxSpeed = speeds.max() ?? 1
-                let minSpeed = speeds.min() ?? 1
-                let span = max(maxSpeed - minSpeed, 0.0001)
-                let barW = max(3, (geo.size.width - CGFloat(splits.count - 1) * 5) / CGFloat(splits.count))
-                HStack(alignment: .bottom, spacing: 5) {
-                    ForEach(Array(splits.enumerated()), id: \.offset) { _, split in
-                        let t = CGFloat((1 / split.paceSecPerKm - minSpeed) / span)
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(split.paceSecPerKm > avgPace + slowThresholdSec
-                                  ? RR.warn : RR.brand.opacity(0.8))
-                            .frame(width: barW, height: geo.size.height * (0.45 + 0.55 * t))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
-            .frame(height: height)
+        GeometryReader { geo in
+            let needed = CGFloat(splits.count) * slot
+            let width = max(geo.size.width, needed)
+            let scrollable = needed > geo.size.width
 
-            HStack {
-                Text("1")
-                Spacer()
-                if splits.count > 4 { Text("\((splits.count + 1) / 2)"); Spacer() }
-                Text("\(splits.count)")
+            ScrollView(.horizontal) {
+                VStack(spacing: 4) {
+                    bars(width: width)
+                    axis(width: width)
+                }
+                .frame(width: width)
             }
-            .font(.system(size: 9, design: .monospaced))
-            .foregroundStyle(RR.text3)
+            .scrollDisabled(!scrollable)
+            // 잘린 게 아니라 이어진다는 신호 — 스크롤 가능할 때만
+            .overlay(alignment: .trailing) {
+                if scrollable {
+                    LinearGradient(colors: [RR.surface.opacity(0), RR.surface],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 22)
+                        .allowsHitTesting(false)
+                }
+            }
         }
+        .frame(height: height + axisHeight + 4)
+    }
+
+    private func barWidth(in width: CGFloat) -> CGFloat {
+        max(3, (width - CGFloat(splits.count - 1) * gap) / CGFloat(splits.count))
+    }
+
+    private func bars(width: CGFloat) -> some View {
+        let speeds = splits.map { 1 / $0.paceSecPerKm }
+        let minSpeed = speeds.min() ?? 1
+        let span = max((speeds.max() ?? 1) - minSpeed, 0.0001)
+        let barW = barWidth(in: width)
+
+        return HStack(alignment: .bottom, spacing: gap) {
+            ForEach(splits) { split in
+                let t = CGFloat((1 / split.paceSecPerKm - minSpeed) / span)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(split.paceSecPerKm > avgPace + slowThresholdSec
+                          ? RR.warn : RR.brand.opacity(0.8))
+                    .frame(width: barW, height: height * (0.45 + 0.55 * t))
+            }
+        }
+        .frame(height: height, alignment: .bottom)
+    }
+
+    /// km 눈금 — 막대와 같은 슬롯에 얹어 스크롤해도 어긋나지 않는다
+    private func axis(width: CGFloat) -> some View {
+        let barW = barWidth(in: width)
+        let step = labelStep(slotWidth: barW + gap)
+
+        return HStack(spacing: gap) {
+            ForEach(splits) { split in
+                Color.clear
+                    .frame(width: barW, height: axisHeight)
+                    .overlay {
+                        if split.index == 1 || split.index % step == 0 {
+                            Text("\(split.index)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(RR.text3)
+                                .fixedSize()
+                        }
+                    }
+            }
+        }
+    }
+
+    /// 라벨이 서로 붙지 않는 최소 간격 (30pt 확보)
+    private func labelStep(slotWidth: CGFloat) -> Int {
+        [1, 2, 5, 10, 20, 50].first { CGFloat($0) * slotWidth >= 30 } ?? 100
     }
 }
 

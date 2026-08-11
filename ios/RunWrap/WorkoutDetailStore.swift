@@ -109,10 +109,18 @@ final class WorkoutDetailStore: ObservableObject {
         }
     }
 
+    /// 워크아웃에 연결된 샘플만 읽는다. 시간 범위로만 잡으면 같은 구간을 아이폰과 워치가
+    /// 각각 기록했을 때 둘 다 합산돼 거리(=km 스플릿 개수)가 부풀려진다.
     private func fetchQuantitySamples(_ id: HKQuantityTypeIdentifier,
                                       in workout: HKWorkout) async throws -> [HKQuantitySample] {
-        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate,
-                                                    end: workout.endDate, options: [])
+        let linked = try await quantitySamples(id, predicate: .linked(to: workout))
+        if !linked.isEmpty { return linked }
+        // 샘플을 워크아웃에 연결하지 않는 기록도 있다 — 이때는 기록한 기기 하나로만 좁힌다
+        return try await quantitySamples(id, predicate: .sameSourceDuring(workout))
+    }
+
+    private func quantitySamples(_ id: HKQuantityTypeIdentifier,
+                                 predicate: NSPredicate) async throws -> [HKQuantitySample] {
         let byStart = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(sampleType: HKQuantityType(id), predicate: predicate,
@@ -126,9 +134,15 @@ final class WorkoutDetailStore: ObservableObject {
     }
 
     private func fetchStepSum(in workout: HKWorkout) async throws -> Double? {
-        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate,
-                                                    end: workout.endDate, options: [])
-        return try await withCheckedThrowingContinuation { continuation in
+        // 걸음도 같은 이유로 중복 합산될 수 있다 (케이던스가 부풀려짐)
+        if let linked = try await stepSum(predicate: .linked(to: workout)), linked > 0 {
+            return linked
+        }
+        return try await stepSum(predicate: .sameSourceDuring(workout))
+    }
+
+    private func stepSum(predicate: NSPredicate) async throws -> Double? {
+        try await withCheckedThrowingContinuation { continuation in
             let query = HKStatisticsQuery(quantityType: HKQuantityType(.stepCount),
                                           quantitySamplePredicate: predicate,
                                           options: .cumulativeSum) { _, stats, error in
@@ -171,6 +185,7 @@ final class WorkoutDetailStore: ObservableObject {
     }
 
     /// 누적 거리 샘플 → km 스플릿. km 경계는 샘플 사이를 선형 보간한다.
+    /// index는 실제 km 번호 — 데이터 오류로 건너뛴 구간이 있어도 눈금이 밀리지 않는다.
     static func splits(from samples: [HKQuantitySample]) -> [WorkoutDetail.Split] {
         var result: [WorkoutDetail.Split] = []
         var cumulative: Double = 0        // m
@@ -188,7 +203,8 @@ final class WorkoutDetailStore: ObservableObject {
                 if let start = boundaryTime {
                     let sec = crossing.timeIntervalSince(start)
                     if sec > 60 {  // 60초/km 미만은 데이터 오류로 본다
-                        result.append(WorkoutDetail.Split(index: result.count + 1, paceSecPerKm: sec))
+                        result.append(WorkoutDetail.Split(index: Int(nextBoundary / 1000),
+                                                          paceSecPerKm: sec))
                     }
                 }
                 boundaryTime = crossing
@@ -266,3 +282,21 @@ final class WorkoutDetailStore: ObservableObject {
     }
     #endif
 }
+
+#if !targetEnvironment(simulator)
+private extension NSPredicate {
+    /// 이 워크아웃에 연결된 샘플만
+    static func linked(to workout: HKWorkout) -> NSPredicate {
+        HKQuery.predicateForObjects(from: workout)
+    }
+
+    /// 워크아웃 시간대 + 워크아웃을 기록한 기기 하나 (연결 정보가 없을 때의 폴백)
+    static func sameSourceDuring(_ workout: HKWorkout) -> NSPredicate {
+        NSCompoundPredicate(andPredicateWithSubpredicates: [
+            HKQuery.predicateForSamples(withStart: workout.startDate,
+                                        end: workout.endDate, options: []),
+            HKQuery.predicateForObjects(from: workout.sourceRevision.source),
+        ])
+    }
+}
+#endif
