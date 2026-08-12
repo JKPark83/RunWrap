@@ -352,9 +352,16 @@ private struct OutfitGrid: View {
                     ZStack {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(RR.brandSoft)
-                        Image(systemName: meta.symbol)
-                            .font(.system(size: 27, weight: .medium))
-                            .foregroundStyle(RR.brand)
+                        switch meta.icon {
+                        case .symbol(let name):
+                            Image(systemName: name)
+                                .font(.system(size: 27, weight: .medium))
+                                .foregroundStyle(RR.brand)
+                        case .shape(let shape):
+                            shape
+                                .stroke(RR.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                                .frame(width: 30, height: 30)
+                        }
                     }
                     .frame(height: 62)
                     Text(meta.label)
@@ -367,27 +374,33 @@ private struct OutfitGrid: View {
         }
     }
 
+    /// 타일 아이콘 — SF Symbols에 없는 복장(싱글렛·반바지)만 시안 SVG 경로를 옮긴 커스텀 셰이프로 그린다
+    private enum TileIcon {
+        case symbol(String)
+        case shape(GarmentShape)
+    }
+
     /// 같은 조합에 함께 나오는 아이템끼리는 심볼이 겹치지 않게 배정했다
-    /// (반바지·타이츠처럼 동시에 안 나오는 쌍만 심볼을 공유)
-    private static func meta(_ item: OutfitItem) -> (symbol: String, label: String) {
+    /// (타이츠·방한 하의처럼 동시에 안 나오는 쌍만 심볼을 공유)
+    private static func meta(_ item: OutfitItem) -> (icon: TileIcon, label: String) {
         switch item {
-        case .singlet: ("tshirt", "싱글렛")
-        case .shortSleeve: ("tshirt", "반팔 티")
-        case .longSleeve: ("tshirt.fill", "긴팔 티")
-        case .shorts: ("figure.run", "반바지")
-        case .tights: ("figure.run", "타이츠")
-        case .jacket: (firstAvailable("jacket.fill", "wind"), "자켓")
-        case .gloves: ("hand.raised.fill", "장갑")
-        case .windbreaker: ("wind", "바람막이")
-        case .waterproofCap: ("umbrella", "방수 캡")
-        case .waterproofJacket: ("cloud.rain", "방수 자켓")
-        case .thermalTop: ("tshirt.fill", "방한 상의")
-        case .thermalBottom: ("figure.run", "방한 하의")
-        case .beanie: (firstAvailable("hat.cap.fill", "snowflake"), "비니")
-        case .neckWarmer: ("thermometer.snowflake", "넥워머")
-        case .sunCap: (firstAvailable("hat.cap.fill", "sun.max.fill"), "러닝 캡")
-        case .sunglasses: ("sunglasses.fill", "선글라스")
-        case .sunscreen: ("drop.fill", "선크림")
+        case .singlet: (.shape(.singlet), "싱글렛")
+        case .shortSleeve: (.symbol("tshirt"), "반팔 티")
+        case .longSleeve: (.symbol("tshirt.fill"), "긴팔 티")
+        case .shorts: (.shape(.shorts), "반바지")
+        case .tights: (.symbol("figure.run"), "타이츠")
+        case .jacket: (.symbol(firstAvailable("jacket.fill", "wind")), "자켓")
+        case .gloves: (.symbol("hand.raised.fill"), "장갑")
+        case .windbreaker: (.symbol("wind"), "바람막이")
+        case .waterproofCap: (.symbol("umbrella"), "방수 캡")
+        case .waterproofJacket: (.symbol("cloud.rain"), "방수 자켓")
+        case .thermalTop: (.symbol("tshirt.fill"), "방한 상의")
+        case .thermalBottom: (.symbol("figure.run"), "방한 하의")
+        case .beanie: (.symbol(firstAvailable("hat.cap.fill", "snowflake")), "비니")
+        case .neckWarmer: (.symbol("thermometer.snowflake"), "넥워머")
+        case .sunCap: (.symbol(firstAvailable("hat.cap.fill", "sun.max.fill")), "러닝 캡")
+        case .sunglasses: (.symbol("sunglasses.fill"), "선글라스")
+        case .sunscreen: (.symbol("drop.fill"), "선크림")
         }
     }
 
@@ -395,5 +408,40 @@ private struct OutfitGrid: View {
     /// 런타임에 확인해 첫 사용 가능 심볼을 쓴다 (hat.cap.fill·jacket.fill은 iOS 18 추가)
     private static func firstAvailable(_ names: String...) -> String {
         names.first { UIImage(systemName: $0) != nil } ?? names[names.count - 1]
+    }
+}
+
+/// 시안 '오늘' 화면의 복장 아이콘 SVG(26×26 viewBox) 경로를 그대로 옮긴 셰이프 —
+/// SF Symbols에는 민소매·반바지에 해당하는 심볼이 없다 (iOS 18 기준)
+private enum GarmentShape: Shape {
+    case singlet, shorts
+
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width / 26, h = rect.height / 26
+        var p = Path()
+        switch self {
+        case .singlet:
+            // 어깨끈 사이 목선이 파인 민소매 실루엣
+            p.move(to: CGPoint(x: 9 * w, y: 4.5 * h))
+            p.addCurve(to: CGPoint(x: 17 * w, y: 4.5 * h),
+                       control1: CGPoint(x: 10.6 * w, y: 6.7 * h),
+                       control2: CGPoint(x: 15.4 * w, y: 6.7 * h))
+            p.addLine(to: CGPoint(x: 17 * w, y: 21.5 * h))
+            p.addLine(to: CGPoint(x: 9 * w, y: 21.5 * h))
+            p.closeSubpath()
+        case .shorts:
+            // 허리에서 양쪽 밑단으로 벌어지는 반바지 실루엣 + 허리 밴드 선
+            p.move(to: CGPoint(x: 7.5 * w, y: 6.5 * h))
+            p.addLine(to: CGPoint(x: 18.5 * w, y: 6.5 * h))
+            p.addLine(to: CGPoint(x: 20.3 * w, y: 17.5 * h))
+            p.addLine(to: CGPoint(x: 14.7 * w, y: 17.5 * h))
+            p.addLine(to: CGPoint(x: 13 * w, y: 11 * h))
+            p.addLine(to: CGPoint(x: 11.3 * w, y: 17.5 * h))
+            p.addLine(to: CGPoint(x: 5.7 * w, y: 17.5 * h))
+            p.closeSubpath()
+            p.move(to: CGPoint(x: 7.5 * w, y: 9.2 * h))
+            p.addLine(to: CGPoint(x: 18.5 * w, y: 9.2 * h))
+        }
+        return p
     }
 }

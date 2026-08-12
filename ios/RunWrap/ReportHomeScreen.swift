@@ -766,7 +766,7 @@ struct ReportHomeContent: View {
         }
         let time = Format.duration(prediction.predictedSec)
         return level == .beginner
-            ? "지금 흐름이면 \(prediction.race.label)를 \(time)에 들어올 수 있어요"
+            ? "지금 흐름이면 \(prediction.race.label)\(prediction.race.objectParticle) \(time)에 들어올 수 있어요"
             : "\(prediction.race.label) 예상 완주 \(time)"
     }
 

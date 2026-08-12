@@ -57,6 +57,14 @@ enum RaceDistance: String, CaseIterable {
         }
     }
 
+    /// 목적격 조사 — "풀"만 받침이 있어 "을"이 붙는다. 새 종목 추가 시 함께 지정
+    var objectParticle: String {
+        switch self {
+        case .fiveK, .tenK, .half: "를"
+        case .full: "을"
+        }
+    }
+
     /// 공인 거리 (km) — PersonalRecords.targets와 같은 값
     var km: Double {
         switch self {

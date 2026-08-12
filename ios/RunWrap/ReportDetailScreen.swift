@@ -130,7 +130,7 @@ struct ReportDetailScreen: View {
             default: "목표 \(Format.duration(goal))에 근접해 있습니다. 페이스 유지가 관건이에요."
             }
         } else {
-            sentence = "최근 기록으로 보면 \(prediction.race.label)를 \(Format.duration(prediction.predictedSec))에 완주할 수 있습니다."
+            sentence = "최근 기록으로 보면 \(prediction.race.label)\(prediction.race.objectParticle) \(Format.duration(prediction.predictedSec))에 완주할 수 있습니다."
         }
         return section(color: prediction.tone == .steady ? RR.brand : prediction.tone.color,
                        title: "목표 진단 · Riegel 예측",
