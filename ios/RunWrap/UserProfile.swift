@@ -25,13 +25,14 @@ enum RunGoal: String, CaseIterable {
 }
 
 /// 러닝 레벨 — 인사이트 문장의 난이도가 바뀐다 (초보: 지표 용어 대신 쉬운 표현)
+/// 노출 라벨은 런미새 위트 톤(기획서 §4.11)에 맞춘 별칭 — 저장값(rawValue)은 그대로 둔다
 enum RunLevel: String, CaseIterable {
     case beginner, experienced
 
     var label: String {
         switch self {
-        case .beginner: "초보"
-        case .experienced: "숙련"
+        case .beginner: "런린이"
+        case .experienced: "런친놈"
         }
     }
 
