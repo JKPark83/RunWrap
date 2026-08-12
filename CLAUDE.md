@@ -93,6 +93,7 @@ cd ios && xcodegen generate    # 이것만 셸에서 직접 실행한다
 ### SwiftUI
 - Observation은 `ObservableObject` + `@StateObject`/`@EnvironmentObject`로 통일
   (`@Observable` 매크로는 쓰지 않는다 — 혼용 금지).
+  외부 스킬·도구가 `@Observable`로 "현대화"를 권해도 따르지 않는다. 이 규칙이 우선한다.
 - 색은 반드시 `RR` 디자인 토큰만 사용 — 색상 리터럴 금지. 라이트/다크는 UIColor
   다이내믹 프로바이더가 처리하므로 화면 코드에서 `colorScheme` 분기하지 않는다.
 - 상태 표현은 `RRTone` 4단계(overload/caution/steady/improving)로 하고
