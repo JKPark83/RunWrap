@@ -110,10 +110,29 @@ struct CourseScreen: View {
         return dir.appendingPathComponent("LastCourse.gpx")
     }
 
-    private func loadSample() {
-        guard let url = Bundle.main.url(forResource: "SampleCourse", withExtension: "gpx"),
+    // MARK: 내장 추천 코스
+
+    /// 서울 인기 코스 6종 — 제3자 GPX가 아니라 OSM 보행로(ODbL) 기반으로 자체 제작해 번들.
+    /// 거리 라벨은 제작 시점 실측값이라 GPX와 함께 갱신한다
+    private struct BundledCourse {
+        let file: String   // 번들 리소스 이름 (.gpx)
+        let name: String   // 표시 이름 — 지도 라벨에도 쓰인다
+        let km: String     // 메뉴 안내용 거리
+    }
+
+    private static let bundledCourses: [BundledCourse] = [
+        .init(file: "YeouidoLoop", name: "여의도 한 바퀴", km: "9.7"),
+        .init(file: "BanpoJamsu", name: "반포 잠수교 왕복", km: "5.1"),
+        .init(file: "SeokchonLake", name: "석촌호수 한 바퀴", km: "2.6"),
+        .init(file: "OlympicPark", name: "올림픽공원 한 바퀴", km: "4.4"),
+        .init(file: "NamsanNorth", name: "남산 북측순환로 왕복", km: "5.2"),
+        .init(file: "Cheonggyecheon", name: "청계천 종주", km: "5.9"),
+    ]
+
+    private func loadBundled(_ bundled: BundledCourse) {
+        guard let url = Bundle.main.url(forResource: bundled.file, withExtension: "gpx"),
               let data = try? Data(contentsOf: url) else { return }
-        apply(data: data, name: "여의도 한강공원 샘플")
+        apply(data: data, name: bundled.name)
     }
 
     // MARK: 지도
@@ -243,7 +262,7 @@ struct CourseScreen: View {
             Text("아직 받은 코스가 없어요")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(RR.text)
-            Text("달릴 코스를 GPX 파일로 올려 주시면, 몇 km 지점에서 물을 마시고 화장실을 들르고 보급을 살 수 있는지 미리 짚어 드릴게요. 코스 파일은 기기 밖으로 나가지 않아요.")
+            Text("달릴 코스를 GPX 파일로 올려 주시면, 몇 km 지점에서 물을 마시고 화장실을 들르고 보급을 살 수 있는지 미리 짚어 드릴게요. 서울 인기 코스는 아래 '추천 코스'에서 바로 고르셔도 됩니다. 코스 파일은 기기 밖으로 나가지 않아요.")
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(RR.text2)
@@ -278,15 +297,17 @@ struct CourseScreen: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                if !compact {
-                    Button(action: loadSample) {
-                        Text("샘플 코스 구경")
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
+                Menu {
+                    ForEach(Self.bundledCourses, id: \.file) { bundled in
+                        Button("\(bundled.name) · \(bundled.km)km") { loadBundled(bundled) }
                     }
-                    .buttonStyle(.bordered)
+                } label: {
+                    Text("추천 코스")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
                 }
+                .buttonStyle(.bordered)
             }
         }
     }

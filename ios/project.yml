@@ -9,8 +9,19 @@ targets:
     platform: iOS
     sources:
       - RunWrap
-      # xcodegen이 xml류(.gpx)를 리소스에서 빼므로 명시 지정 — 코스 탭 샘플 코스 (계획서 M12-3)
-      - path: RunWrap/SampleCourse.gpx
+      # xcodegen이 xml류(.gpx)를 리소스에서 빼므로 명시 지정 — 코스 탭 내장 추천 코스 6종
+      # (계획서 M12-3. OSM 보행로 기반 자체 제작 — tools 없이 일회성 생성, 출처는 각 파일 주석)
+      - path: RunWrap/YeouidoLoop.gpx
+        buildPhase: resources
+      - path: RunWrap/BanpoJamsu.gpx
+        buildPhase: resources
+      - path: RunWrap/SeokchonLake.gpx
+        buildPhase: resources
+      - path: RunWrap/OlympicPark.gpx
+        buildPhase: resources
+      - path: RunWrap/NamsanNorth.gpx
+        buildPhase: resources
+      - path: RunWrap/Cheonggyecheon.gpx
         buildPhase: resources
     entitlements:
       path: RunWrap/RunWrap.entitlements
