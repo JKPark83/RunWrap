@@ -33,9 +33,16 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: 런미새
+        # 버전은 아래 settings의 MARKETING_VERSION·CURRENT_PROJECT_VERSION에서 주입한다 —
+        # App Store Connect는 같은 빌드 번호를 두 번 받지 않으므로 업로드마다 후자를 올린다
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]   # 아이폰 세로 전용
         ITSAppUsesNonExemptEncryption: false   # HTTPS만 사용 — 수출 규정 면제 (제출 시 질문 생략)
         NSHealthShareUsageDescription: 애플워치로 기록한 러닝(거리·시간·심박)을 읽어 리포트를 만들기 위해 사용합니다. 데이터는 기기 밖으로 나가지 않습니다.
+        # 이 앱은 건강 데이터를 쓰지 않는다(requestAuthorization은 전부 toShare: []).
+        # 그래도 HealthKit 엔타이틀먼트가 있으면 App Store 업로드 검증이 이 키를 요구한다(오류 90683)
+        NSHealthUpdateUsageDescription: 이 앱은 건강 데이터를 읽기만 합니다. 건강 앱에 어떤 데이터도 쓰거나 추가하지 않습니다.
         NSPhotoLibraryAddUsageDescription: 만든 러닝 스토리 카드를 사진 앱에 저장하기 위해 사용합니다.
         NSLocationWhenInUseUsageDescription: 현재 위치의 날씨로 러닝 복장을 추천하기 위해 사용합니다. 위치는 날씨 조회에만 쓰고 저장하지 않습니다.
         UTImportedTypeDeclarations:   # 코스 탭 GPX 업로드 — fileImporter의 UTType(importedAs:)와 짝 (계획서 M12-3)
@@ -46,8 +53,10 @@ targets:
               public.filename-extension: [gpx]
     settings:
       base:
-        DEVELOPMENT_TEAM: WDNVP9B8A9        # 무료 팀 (7일 서명)
+        DEVELOPMENT_TEAM: WDNVP9B8A9        # Apple Developer Program 유료 팀 (JinKon Park)
         PRODUCT_BUNDLE_IDENTIFIER: com.jkpark.runwrap
+        MARKETING_VERSION: "1.0"            # 사용자에게 보이는 버전
+        CURRENT_PROJECT_VERSION: "1"        # 빌드 번호 — TestFlight 업로드마다 +1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"   # 아이폰 전용 (아이패드 방향 요건 회피)
     scheme:

@@ -33,6 +33,17 @@ enum ReportCache {
         guard let url = fileURL(in: directory),
               let data = try? JSONEncoder().encode(snapshot) else { return }
         try? data.write(to: url, options: .atomic)
+        excludeFromBackup(url)
+    }
+
+    /// iCloud·아이튠즈 백업에서 제외 — 심사 지침 5.1.3(ii)는 건강 정보를 iCloud에
+    /// 두는 것을 금지한다. 스냅샷은 리포트에서 언제든 다시 만들 수 있으니 백업할 이유도 없다.
+    /// 원자적 쓰기는 파일을 새로 만들어 대체하므로 저장할 때마다 다시 지정해야 한다.
+    private static func excludeFromBackup(_ url: URL) {
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var url = url
+        try? url.setResourceValues(values)
     }
 
     static func load(from directory: URL? = nil) -> ReportSnapshot? {

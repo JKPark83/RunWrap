@@ -56,7 +56,7 @@ struct OnboardingScreen: View {
                     .background(RR.brand, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
 
-            Text("읽기 전용 권한만 요청하며, 언제든 건강 앱에서 해제할 수 있습니다.")
+            Text("애플 건강 앱의 러닝 기록을 읽어옵니다. 읽기 전용 권한만 요청하며, 언제든 건강 앱에서 해제할 수 있습니다. 읽은 데이터는 기기 안에서만 처리하고 외부로 보내지 않습니다.")
                 .font(.system(size: 12))
                 .foregroundStyle(RR.text3)
                 .frame(maxWidth: .infinity)

@@ -15,15 +15,6 @@ final class HealthStore: ObservableObject {
         case failed(String)
     }
 
-    #if targetEnvironment(simulator)
-    // 시뮬레이터에는 워치 기록이 없다 — 권한 단계 없이 바로 합성 데이터를 보여준다
-    @Published private(set) var state: State = .loaded(DemoData.runs)
-    @Published private(set) var vitals: VitalsSnapshot? = DemoData.vitals
-    @Published private(set) var bodyMass: [(date: Date, kg: Double)] = DemoData.bodyMass
-    @Published private(set) var vo2Max: [(date: Date, value: Double)] = DemoData.vo2Max
-    @Published private(set) var crossTrainings: [CrossTraining] = DemoData.crossTrainings
-    @Published private(set) var hrrTrend: [(date: Date, value: Double)] = DemoData.hrrTrend
-    #else
     @Published private(set) var state: State = .idle
     /// 체력 배터리용 활력징후 — 러닝 목록과 별개로 실패해도 리포트는 뜬다
     @Published private(set) var vitals: VitalsSnapshot?
@@ -35,15 +26,30 @@ final class HealthStore: ObservableObject {
     @Published private(set) var crossTrainings: [CrossTraining] = []
     /// 심폐 체력 카드 보조 지표용 최근 12주 심박 회복(HRR) 표본 (bpm)
     @Published private(set) var hrrTrend: [(date: Date, value: Double)] = []
-    #endif
 
     private let store = HKHealthStore()
 
+    /// 데모 모드면 합성 데이터를 그대로 물려 HealthKit을 아예 건드리지 않는다.
+    /// 시뮬레이터에서는 항상 이 경로다 (DemoMode.isActive).
+    init() {
+        if DemoMode.isActive { fillWithDemoData() }
+    }
+
+    private func fillWithDemoData() {
+        state = .loaded(DemoData.runs)
+        vitals = DemoData.vitals
+        bodyMass = DemoData.bodyMass
+        vo2Max = DemoData.vo2Max
+        crossTrainings = DemoData.crossTrainings
+        hrrTrend = DemoData.hrrTrend
+    }
+
     /// 최초 연결: 권한 요청 → 바로 조회
     func connect() async {
-        #if targetEnvironment(simulator)
-        state = .loaded(DemoData.runs)  // 시뮬레이터에는 워치 기록이 없어 합성 데이터로 대체
-        #else
+        if DemoMode.isActive {
+            fillWithDemoData()
+            return
+        }
         guard HKHealthStore.isHealthDataAvailable() else {
             state = .unavailable
             return
@@ -55,28 +61,21 @@ final class HealthStore: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
         }
-        #endif
     }
 
     /// 다이어트 목표를 고른 사용자에게만 몸무게 읽기를 요청 — 기능별 권한 분리
     /// (HealthPermissions.diet). 목표 선택 직후(온보딩·설정)에서 부른다.
     func requestDietAccess() async {
-        #if !targetEnvironment(simulator)
-        guard HKHealthStore.isHealthDataAvailable() else { return }
+        guard !DemoMode.isActive, HKHealthStore.isHealthDataAvailable() else { return }
         try? await store.requestAuthorization(toShare: [], read: HealthPermissions.diet)
         bodyMass = await fetchBodyMass()
-        #endif
     }
 
     func load() async {
-        #if targetEnvironment(simulator)
-        state = .loaded(DemoData.runs)
-        vitals = DemoData.vitals
-        bodyMass = DemoData.bodyMass
-        vo2Max = DemoData.vo2Max
-        crossTrainings = DemoData.crossTrainings
-        hrrTrend = DemoData.hrrTrend
-        #else
+        if DemoMode.isActive {
+            fillWithDemoData()
+            return
+        }
         guard HKHealthStore.isHealthDataAvailable() else {
             state = .unavailable
             return
@@ -103,7 +102,6 @@ final class HealthStore: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
         }
-        #endif
     }
 
     // MARK: - 백그라운드 워크아웃 감지 (계획서 M8)
@@ -113,10 +111,10 @@ final class HealthStore: ObservableObject {
     private var workoutObserver: HKObserverQuery?
 
     /// 옵저버 등록 + 백그라운드 딜리버리 켜기 — 앱 기동마다 호출해도 안전 (재등록 가드).
-    /// 시뮬레이터는 백그라운드 딜리버리를 지원하지 않아 no-op.
+    /// 데모 모드·시뮬레이터에서는 no-op (시뮬레이터는 백그라운드 딜리버리 자체를 지원하지 않는다).
     func startObservingWorkouts(onUpdate: @escaping @Sendable () async -> Void) {
-        #if !targetEnvironment(simulator)
-        guard HKHealthStore.isHealthDataAvailable(), workoutObserver == nil else { return }
+        guard !DemoMode.isActive,
+              HKHealthStore.isHealthDataAvailable(), workoutObserver == nil else { return }
         let query = HKObserverQuery(sampleType: .workoutType(),
                                     predicate: HKQuery.predicateForWorkouts(with: .running)) { _, done, error in
             // 계약: 성패와 무관하게 completionHandler를 반드시 부른다 —
@@ -130,7 +128,6 @@ final class HealthStore: ObservableObject {
         workoutObserver = query
         // 실패해도 조용히 넘어간다 — 포그라운드 재계산이 1차 경로, 옵저버는 보조
         store.enableBackgroundDelivery(for: .workoutType(), frequency: .immediate) { _, _ in }
-        #endif
     }
 
     private func fetchRunningWorkouts(limit: Int) async throws -> [HKWorkout] {

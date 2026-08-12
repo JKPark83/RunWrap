@@ -44,18 +44,18 @@ final class WorkoutDetailStore: ObservableObject {
         guard detail == nil, !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
-        #if targetEnvironment(simulator)
-        detail = Self.synthetic(for: run)
-        formSnapshots = Self.syntheticSnapshots(others: others, excluding: run.id)
-        #else
-        detail = await fetch(run: run)
-        formSnapshots = await fetchFormSnapshots(others: others, excluding: run.id)
-        #endif
+        // 데모 모드에서는 HealthKit을 건드리지 않고 합성 상세를 만든다 (DemoMode)
+        if DemoMode.isActive {
+            detail = Self.synthetic(for: run)
+            formSnapshots = Self.syntheticSnapshots(others: others, excluding: run.id)
+        } else {
+            detail = await fetch(run: run)
+            formSnapshots = await fetchFormSnapshots(others: others, excluding: run.id)
+        }
     }
 
     // MARK: - 실기기: HealthKit 조회
 
-    #if !targetEnvironment(simulator)
     private func fetch(run: RunSummary) async -> WorkoutDetail {
         var detail = WorkoutDetail()
         guard HKHealthStore.isHealthDataAvailable(),
@@ -296,11 +296,9 @@ final class WorkoutDetailStore: ObservableObject {
         }
         return result
     }
-    #endif
 
-    // MARK: - 시뮬레이터: 합성 데이터 (run.id 시드 — 같은 세션은 항상 같은 모양)
+    // MARK: - 데모 모드: 합성 데이터 (run.id 시드 — 같은 세션은 항상 같은 모양)
 
-    #if targetEnvironment(simulator)
     static func synthetic(for run: RunSummary) -> WorkoutDetail {
         var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)))
         var detail = WorkoutDetail()
@@ -419,10 +417,8 @@ final class WorkoutDetailStore: ObservableObject {
         /// 0..<1
         mutating func unit() -> Double { Double(next() >> 11) / Double(1 << 53) }
     }
-    #endif
 }
 
-#if !targetEnvironment(simulator)
 private extension NSPredicate {
     /// 이 워크아웃에 연결된 샘플만
     static func linked(to workout: HKWorkout) -> NSPredicate {
@@ -438,4 +434,3 @@ private extension NSPredicate {
         ])
     }
 }
-#endif

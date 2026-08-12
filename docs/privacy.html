@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>런미새 개인정보 처리방침</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --surface: #f6f7f9;
+    --text: #16181d;
+    --text2: #4a5058;
+    --text3: #7b828c;
+    --line: #e3e6ea;
+    --brand: #e2542c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101215;
+      --surface: #191c21;
+      --text: #f2f4f7;
+      --text2: #b6bcc4;
+      --text3: #868d97;
+      --line: #2a2e35;
+      --brand: #ff6a3d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 20px 80px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+                 "Pretendard", "Malgun Gothic", sans-serif;
+    line-height: 1.75;
+    word-break: keep-all;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.75rem; line-height: 1.35; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .updated { color: var(--text3); font-size: 0.875rem; margin: 0 0 32px; }
+  h2 {
+    font-size: 1.125rem; margin: 40px 0 12px; padding-top: 20px;
+    border-top: 1px solid var(--line); letter-spacing: -0.01em;
+  }
+  h3 { font-size: 0.975rem; margin: 24px 0 8px; color: var(--text); }
+  p, li { color: var(--text2); font-size: 0.9375rem; }
+  ul { padding-left: 1.25em; }
+  li { margin: 6px 0; }
+  strong { color: var(--text); font-weight: 600; }
+  .lede {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 20px; margin: 0 0 8px;
+  }
+  .lede p { margin: 0; }
+  .lede p + p { margin-top: 10px; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 480px; font-size: 0.875rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--text); font-weight: 600; white-space: nowrap; }
+  td { color: var(--text2); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em; background: var(--surface); padding: 1px 5px; border-radius: 5px;
+  }
+  a { color: var(--brand); }
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
+    color: var(--text3); font-size: 0.8125rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>런미새 개인정보 처리방침</h1>
+<p class="updated">최종 수정일: 2026년 8월 12일 · 적용 버전: 1.0</p>
+
+<div class="lede">
+  <p><strong>런미새는 사용자의 건강 데이터를 수집하지 않습니다.</strong> 애플 건강(Health) 앱에서 읽은
+  러닝·활력징후 데이터는 아이폰 안에서만 계산에 쓰이며, 어떤 서버로도 전송되지 않습니다.</p>
+  <p>계정도 없고, 로그인도 없고, 광고나 분석 SDK도 없습니다. 개발자는 사용자가 어떤 기록을
+  가지고 있는지 알 방법이 없습니다.</p>
+</div>
+
+<h2>1. 앱이 읽는 데이터</h2>
+
+<p>런미새는 애플 HealthKit에 <strong>읽기 전용</strong> 권한만 요청합니다. 건강 데이터에 쓰거나
+지우지 않습니다. 읽는 항목은 아래가 전부이며, 기능별로 나누어 필요한 시점에만 요청합니다.</p>
+
+<h3>기본 — 러닝 기록 해석에 쓰는 항목</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>항목</th><th>쓰는 곳</th></tr></thead>
+  <tbody>
+    <tr><td>운동(러닝) 기록</td><td>주간 거리·횟수, 부하 지표(ACWR), 세션별 상세</td></tr>
+    <tr><td>운동 경로(GPS)</td><td>세션 상세의 코스 지도와 고도</td></tr>
+    <tr><td>걷기·달리기 거리</td><td>거리 보정</td></tr>
+    <tr><td>심박수</td><td>심박 효율, 심박 존 분포, 페이스 드리프트</td></tr>
+    <tr><td>걸음 수</td><td>케이던스(분당 걸음) 추이</td></tr>
+    <tr><td>활동 에너지</td><td>소모 칼로리 요약</td></tr>
+    <tr><td>최대 산소 섭취량(VO₂max)</td><td>심폐 체력 추이</td></tr>
+    <tr><td>러닝 파워·보폭·상하 진동·접지 시간</td><td>주법(러닝 폼) 분석</td></tr>
+    <tr><td>생년월일</td><td>연령 기반 최대 심박 추정(Tanaka 공식)에만 사용</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>회복 — 체력 배터리 계산에 쓰는 항목</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>항목</th><th>쓰는 곳</th></tr></thead>
+  <tbody>
+    <tr><td>심박 변이(HRV SDNN)</td><td>회복 상태 추정</td></tr>
+    <tr><td>안정 시 심박수</td><td>회복 상태 추정</td></tr>
+    <tr><td>호흡수</td><td>회복 상태 추정</td></tr>
+    <tr><td>수면 중 손목 온도</td><td>회복 상태 추정</td></tr>
+    <tr><td>1분 심박 회복</td><td>심폐 체력 보조 지표</td></tr>
+    <tr><td>수면 분석</td><td>수면 시간·질(깊은잠·렘 비율)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>선택 — 다이어트 목적을 고른 경우에만</h3>
+<div class="scroll">
+<table>
+  <thead><tr><th>항목</th><th>쓰는 곳</th></tr></thead>
+  <tbody>
+    <tr><td>체중</td><td>몸무게 추이 카드</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>설정에서 러닝 목적을 <strong>다이어트</strong>로 고르지 않으면 체중 읽기 권한은 아예 요청하지
+않습니다. 애플 정책상 앱은 읽기 권한의 허용 여부를 확인할 수 없으므로, 거부한 항목은
+해당 지표를 그냥 표시하지 않습니다.</p>
+
+<h2>2. 데이터를 어디서 처리하나</h2>
+
+<p>모든 계산은 <strong>아이폰 기기 안에서</strong> 이루어집니다. 서버가 없고, 사용자 계정이 없으며,
+건강 데이터를 담은 어떤 요청도 외부로 나가지 않습니다.</p>
+
+<p>앱이 만드는 결과물(주간 리포트, 체력 배터리, 훈련 처방 등)도 기기에만 남습니다.
+알림 본문에 쓸 최소한의 요약(문장 한 줄, 주간 거리, 러닝 횟수)을 앱 내부 저장 공간에
+파일로 두는데, 이 파일은 <strong>iCloud·아이튠즈 백업에서 제외</strong>되도록 표시합니다.</p>
+
+<h2>3. 외부와 통신하는 경우</h2>
+
+<p>런미새가 인터넷에 접속하는 경우는 아래 두 가지뿐이며, <strong>둘 다 건강 데이터를 싣지
+않습니다.</strong></p>
+
+<h3>(1) 날씨 조회</h3>
+<ul>
+  <li>대상: <a href="https://open-meteo.com" rel="nofollow noopener">Open-Meteo</a> 공개 날씨 API</li>
+  <li>보내는 값: <strong>좌표(위도·경도)뿐</strong>입니다. 좌표는 소수점 둘째 자리로 뭉개서
+      보냅니다(약 1km 단위) — 정확한 위치가 아니라 "이 동네" 수준입니다.</li>
+  <li>보내지 않는 값: 기기 식별자, 사용자 식별자, 건강 데이터, 러닝 기록.</li>
+  <li>쓰는 곳: 지금 날씨와 오늘 최고기온을 받아 복장·수분 섭취를 안내합니다. 위치 권한은
+      "앱 사용 중"만 요청하며, 거부하면 날씨 관련 카드만 표시되지 않습니다.</li>
+  <li>참고: 지나간 러닝에 붙는 기온·습도는 네트워크로 받아오는 값이 아니라, 애플워치가
+      운동 기록에 함께 저장해 둔 값을 읽은 것입니다.</li>
+</ul>
+
+<h3>(2) 대회 일정 조회</h3>
+<ul>
+  <li>대상: 이 앱 저장소의 정적 파일(GitHub에 올려둔 대회 일정 JSON)</li>
+  <li>보내는 값: <strong>없습니다.</strong> 파일 하나를 내려받는 단순 조회입니다.</li>
+  <li>쓰는 곳: 국내 마라톤 대회 목록 표시.</li>
+</ul>
+
+<h2>4. 제3자 제공·판매·광고</h2>
+<ul>
+  <li>건강 데이터를 <strong>누구에게도 제공하거나 판매하지 않습니다.</strong></li>
+  <li>광고, 마케팅, 데이터 마이닝, 사용자 프로파일링에 쓰지 않습니다.</li>
+  <li>광고 식별자를 쓰지 않고, 사용자 추적을 하지 않습니다.</li>
+  <li>분석·크래시 리포팅을 포함한 <strong>제3자 SDK를 하나도 사용하지 않습니다.</strong>
+      이 앱은 애플이 제공하는 프레임워크만으로 만들어졌습니다.</li>
+  <li>법령에 따른 요구가 있어도 개발자가 넘길 수 있는 건강 데이터가 애초에 없습니다.</li>
+</ul>
+
+<h2>5. 보관 기간과 삭제</h2>
+<ul>
+  <li>건강 데이터의 원본은 애플 건강 앱이 보관하며, 런미새는 이를 계산할 때 읽기만 합니다.</li>
+  <li>앱이 기기에 남기는 것은 설정값(러닝 목적·레벨·알림 시각 등)과 알림용 요약 파일뿐입니다.</li>
+  <li><strong>앱을 삭제하면</strong> 이 설정값과 요약 파일도 함께 사라집니다.</li>
+  <li>읽기 권한은 언제든 되돌릴 수 있습니다: <code>설정 앱 → 개인정보 보호 및 보안 → 건강 → 런미새</code>
+      또는 <code>건강 앱 → 프로필 → 앱 및 서비스 → 런미새</code>.</li>
+</ul>
+
+<h2>6. 아동의 개인정보</h2>
+<p>런미새는 아동을 대상으로 하지 않으며, 나이를 포함한 어떤 개인정보도 서버에 수집하지
+않습니다. 생년월일은 최대 심박 추정에만 쓰이고 기기를 벗어나지 않습니다.</p>
+
+<h2>7. 의학적 조언이 아닙니다</h2>
+<p>런미새가 보여주는 해석·지표·훈련 처방은 러닝 기록을 바탕으로 한 <strong>참고 정보</strong>이며,
+질병을 진단·치료·예방하기 위한 의료기기나 의학적 조언이 아닙니다. 통증이나 이상이
+있다면 반드시 전문가와 상담하세요.</p>
+
+<h2>8. 방침 변경</h2>
+<p>이 방침이 바뀌면 이 페이지의 내용과 상단의 최종 수정일을 갱신합니다. 데이터를 다루는
+방식이 실질적으로 바뀌는 경우에는 앱 업데이트 안내에도 함께 적습니다.</p>
+
+<h2>9. 문의</h2>
+<p>개인정보 처리에 관한 문의는 <a href="mailto:sanaigon@gmail.com">sanaigon@gmail.com</a>으로
+보내주세요.</p>
+
+<footer>
+  런미새 (RunWrap) · 개발자 박진곤 · 대한민국
+</footer>
+
+</main>
+</body>
+</html>

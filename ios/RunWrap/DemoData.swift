@@ -1,5 +1,32 @@
 import Foundation
 
+/// 데모 모드 게이트 — 합성 데이터(DemoData)를 실기기에서도 켤 수 있게 하는 스위치
+///
+/// 왜 필요한가: 심사자 아이폰에는 애플워치 러닝 기록이 없다. 표본이 없으면 이 앱은
+/// 설계상 지표를 아예 내지 않으므로(미노출 가드) 화면이 텅 비고, App Store 심사
+/// 지침 2.1(App Completeness)에 걸린다. 애플은 이런 경우 앱에 내장된 데모 모드를
+/// 허용하되 심사 노트에 켜는 방법을 밝히라고 요구한다 — 숨긴 기능이 아니어야
+/// 지침 2.3.1에도 걸리지 않으므로 설정 화면에 그대로 노출한다.
+///
+/// 시뮬레이터는 워치 기록이 있을 수 없어 토글과 무관하게 항상 켜진 것으로 다룬다.
+enum DemoMode {
+    static let key = "demoModeEnabled"
+
+    /// 설정 화면 토글의 저장값 — 시뮬레이터에서는 의미가 없다(항상 활성)
+    static var isEnabled: Bool {
+        UserDefaults.standard.bool(forKey: key)
+    }
+
+    /// 합성 데이터를 쓸지 여부. HealthKit 조회 경로를 타기 전에 이것부터 확인한다.
+    static var isActive: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        isEnabled
+        #endif
+    }
+}
+
 /// 합성 러닝 약 6개월 — 시뮬레이터 기본 데이터이자 실기기 "샘플 리포트 둘러보기"의 재료
 ///
 /// 최근 4주는 주간 리포트 3개 지표가 서로 다른 톤으로 모두 계산되도록 고정 배열로 유지:

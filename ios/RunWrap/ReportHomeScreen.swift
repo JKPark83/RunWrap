@@ -140,6 +140,7 @@ struct ReportHomeContent: View {
             .padding(.top, 8)
             .padding(.bottom, 26)
         }
+        .defaultScrollAnchor(.bottom)
         .background(RR.bg.ignoresSafeArea())
     }
 
@@ -472,6 +473,8 @@ struct ReportHomeContent: View {
                 .lineSpacing(3)
                 .foregroundStyle(RR.text3)
                 .padding(.top, 13)
+
+            disclaimer("건강 상태를 진단하거나 의학적 조언을 하지 않습니다. 통증이나 이상이 있다면 전문가와 상담하세요.")
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
         .rrCard()
@@ -754,6 +757,8 @@ struct ReportHomeContent: View {
                     .foregroundStyle(RR.text3)
                     .padding(.top, 10)
             }
+
+            disclaimer("훈련 처방은 기록을 바탕으로 한 참고 정보이며 의학적 조언이 아닙니다.")
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
         .rrCard()
@@ -782,6 +787,16 @@ struct ReportHomeContent: View {
     private func kmRange(_ low: Double, _ high: Double) -> String {
         high - low < 0.05 ? String(format: "%.1f", low)
                           : String(format: "%.1f~%.1f", low, high)
+    }
+
+    /// 카드 하단 면책 문구 — 심사 지침 1.4.1은 건강 관련 해석에 의학적 조언이 아님을
+    /// 밝히라고 요구한다. 훈련 처방·체력 배터리처럼 행동을 유도하는 카드에 붙인다.
+    private func disclaimer(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .lineSpacing(3)
+            .foregroundStyle(RR.text3)
+            .padding(.top, 12)
     }
 
     // MARK: 표본 부족 안내
@@ -889,6 +904,14 @@ struct EmptyReportScreen: View {
                         .foregroundStyle(RR.text2)
                         .multilineTextAlignment(.center)
                         .padding(.top, 8)
+                    // 읽기 권한의 허용 여부는 앱이 조회할 수 없다(애플 정책) —
+                    // 기록이 있는데도 비어 있는 경우를 대비해 확인 경로를 함께 알려준다
+                    Text("러닝 기록은 애플 건강 앱에서 읽어옵니다. 기록이 있는데도 비어 있다면 설정 앱 → 개인정보 보호 및 보안 → 건강 → 런미새에서 읽기 권한을 확인해 주세요.")
+                        .font(.system(size: 12.5))
+                        .lineSpacing(4)
+                        .foregroundStyle(RR.text3)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 10)
                     Button {
                         showSample = true
                     } label: {

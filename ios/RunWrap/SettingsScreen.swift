@@ -15,6 +15,14 @@ struct SettingsScreen: View {
     @AppStorage(NotifyKey.weeklyHour) private var weeklyHour = 18
     @AppStorage(NotifyKey.hydrationEnabled) private var hydrationNotify = false
     @AppStorage(NotifyKey.runHour) private var runHour = 19
+    // 데모 모드 — 워치 기록이 없는 기기(심사자 포함)에서 합성 데이터로 화면을 보여준다 (DemoMode)
+    @AppStorage(DemoMode.key) private var demoMode = false
+
+    /// 앱 내 개인정보 처리방침 — 심사 지침 5.1.1(i)이 요구하는 앱 내 접근 경로.
+    /// 원본은 저장소의 docs/privacy.html이고, 같은 내용을 Vercel 정적 배포로 서비스한다
+    /// (프로젝트 runmisae-privacy). 방침을 고치면 원본과 배포본을 함께 갱신한다.
+    /// App Store Connect의 개인정보 처리방침 URL에도 같은 주소를 넣는다.
+    private static let privacyPolicyURL = URL(string: "https://runmisae-privacy.vercel.app/privacy.html")!
 
     var body: some View {
         ScrollView {
@@ -70,6 +78,20 @@ struct SettingsScreen: View {
                     if hydrationNotify { runHourRow }
                 }
 
+                // 데모 모드 (DemoMode) — 워치 기록이 없어도 화면을 둘러볼 수 있게 하는 경로.
+                // 심사자용이자 신규 사용자용이며, 심사 노트에 켜는 방법을 그대로 밝힌다.
+                section(title: "데모 모드") {
+                    toggleRow(label: "샘플 데이터로 둘러보기",
+                              caption: "워치 기록 없이도 모든 카드를 미리 볼 수 있어요. 건강 데이터는 읽지 않습니다",
+                              isOn: $demoMode)
+                }
+
+                section(title: "개인정보") {
+                    linkRow(label: "개인정보 처리방침",
+                            caption: "건강 데이터는 기기 안에서만 처리합니다",
+                            url: Self.privacyPolicyURL)
+                }
+
                 Text("리포트 카드의 구성과 문장 톤이 프로필에 맞춰 바뀝니다. 러닝 기록 자체는 그대로예요.")
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
@@ -83,6 +105,10 @@ struct SettingsScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .navigationTitle("설정")
         .navigationBarTitleDisplayMode(.inline)
+        // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다
+        .onChange(of: demoMode) { _, _ in
+            Task { await health.load() }
+        }
         .onChange(of: workoutNotify) { _, isOn in
             if isOn { Task { _ = await NotificationScheduler.requestAuthorization() } }
         }
@@ -106,6 +132,30 @@ struct SettingsScreen: View {
                 Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
             }
         }
+    }
+
+    /// 외부 링크 행 — optionRow와 같은 레이아웃, 우측만 링크 표시
+    private func linkRow(label: String, caption: String, url: URL) -> some View {
+        Link(destination: url) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(label)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                    Text(caption)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// 알림 토글 행 — optionRow와 같은 레이아웃, 우측만 스위치
