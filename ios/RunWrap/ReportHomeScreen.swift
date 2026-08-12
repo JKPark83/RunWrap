@@ -182,7 +182,7 @@ struct ReportHomeContent: View {
     private func dietCaloriesCard(_ card: WeeklyReport.DietCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "flame.fill", title: "칼로리", code: "BURNING",
-                       tint: RR.brand, soft: RR.brandSoft)
+                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.calories)
 
             Text("이번 주 \(Format.kcal(card.weekKcal)) kcal를 태웠어요")
                 .font(.system(size: 21, weight: .bold))
@@ -213,7 +213,7 @@ struct ReportHomeContent: View {
     private func weightCard(_ w: WeightTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "scalemass.fill", title: "몸무게", code: "WEIGHT",
-                       tint: w.tone.color, soft: w.tone.softColor)
+                       tint: w.tone.color, soft: w.tone.softColor, info: CardInfoText.weight)
 
             Text(weightHeadline(w))
                 .font(.system(size: 21, weight: .bold))
@@ -255,7 +255,7 @@ struct ReportHomeContent: View {
     private var streakCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "medal.fill", title: "연속 기록", code: "STREAK",
-                       tint: RR.brand, soft: RR.brandSoft)
+                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.streak)
 
             Text("\(report.streakWeeks)주 연속 달리고 있어요")
                 .font(.system(size: 21, weight: .bold))
@@ -278,7 +278,7 @@ struct ReportHomeContent: View {
     private func vo2MaxCard(_ v: Vo2MaxTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "lungs.fill", title: "심폐 체력", code: "VO2MAX",
-                       tint: v.tone.color, soft: v.tone.softColor)
+                       tint: v.tone.color, soft: v.tone.softColor, info: CardInfoText.vo2Max)
 
             Text(vo2MaxHeadline(v))
                 .font(.system(size: 21, weight: .bold))
@@ -359,7 +359,7 @@ struct ReportHomeContent: View {
     private func crossTrainingCard(_ cross: CrossTrainingEngine.Summary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "figure.cross.training", title: "크로스 트레이닝", code: "CROSS",
-                       tint: RR.brand, soft: RR.brandSoft)
+                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.cross)
 
             Text(cross.headline)
                 .font(.system(size: 21, weight: .bold))
@@ -396,8 +396,10 @@ struct ReportHomeContent: View {
 
     /// 카드 공통 헤더 — 아이콘 타일 + 제목 + 영문 코드. 판정 카드는 톤 배지를 오른쪽에 단다.
     /// 시안의 점 배지를 아이콘 타일로 확장해 카드마다 시각 정체성을 준다 (확장 요구, 2026-08-11)
+    /// info를 주면 제목 옆에 작은 ⓘ가 붙는다 — 누르면 지표 설명 팝오버 (확장 요구, 2026-08-12)
     private func cardHeader(icon: String, title: String, code: String,
-                            tint: Color, soft: Color, tone: RRTone? = nil) -> some View {
+                            tint: Color, soft: Color, tone: RRTone? = nil,
+                            info: String? = nil) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .semibold))
@@ -405,9 +407,14 @@ struct ReportHomeContent: View {
                 .frame(width: 34, height: 34)
                 .background(soft, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             VStack(alignment: .leading, spacing: 2.5) {
-                Text(title)
-                    .font(.system(size: 14.5, weight: .bold))
-                    .foregroundStyle(RR.text)
+                HStack(spacing: 5) {
+                    Text(title)
+                        .font(.system(size: 14.5, weight: .bold))
+                        .foregroundStyle(RR.text)
+                    if let info {
+                        CardInfoButton(title: title, text: info)
+                    }
+                }
                 Text(code)
                     .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                     .kerning(1.2)
@@ -425,7 +432,8 @@ struct ReportHomeContent: View {
     private func batteryCard(_ battery: BatteryReport) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "bolt.heart.fill", title: "체력 배터리", code: battery.statusLabel,
-                       tint: battery.tone.color, soft: battery.tone.softColor)
+                       tint: battery.tone.color, soft: battery.tone.softColor,
+                       info: CardInfoText.battery)
 
             Text(battery.headline)
                 .font(.system(size: 21, weight: .bold))
@@ -518,7 +526,8 @@ struct ReportHomeContent: View {
     private func distanceCard(_ card: WeeklyReport.DistanceCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "figure.run", title: "주간 거리", code: "DISTANCE",
-                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone)
+                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone,
+                       info: CardInfoText.distance)
 
             distanceHeadline(card)
                 .font(.system(size: 23, weight: .bold))
@@ -585,7 +594,8 @@ struct ReportHomeContent: View {
     private func acwrCard(_ card: WeeklyReport.AcwrCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "speedometer", title: "훈련 부하", code: "ACWR",
-                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone)
+                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone,
+                       info: CardInfoText.acwr)
 
             Text(acwrHeadline(card))
                 .font(.system(size: 21, weight: .bold))
@@ -619,7 +629,8 @@ struct ReportHomeContent: View {
     private func efficiencyCard(_ card: WeeklyReport.EfficiencyCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "heart.fill", title: "심박 효율", code: "EFFICIENCY",
-                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone)
+                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone,
+                       info: CardInfoText.efficiency)
 
             efficiencyHeadline(card)
                 .font(.system(size: 21, weight: .bold))
@@ -664,7 +675,8 @@ struct ReportHomeContent: View {
     private func formTrendCard(_ form: FormTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "shoeprints.fill", title: "주법 리듬", code: "CADENCE",
-                       tint: form.tone.color, soft: form.tone.softColor, tone: form.tone)
+                       tint: form.tone.color, soft: form.tone.softColor, tone: form.tone,
+                       info: CardInfoText.cadence)
 
             Text(formHeadline(form))
                 .font(.system(size: 21, weight: .bold))
@@ -702,7 +714,8 @@ struct ReportHomeContent: View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "target", title: "훈련 가이드", code: "COACH",
                        tint: guide.prediction?.tone.color ?? RR.brand,
-                       soft: guide.prediction?.tone.softColor ?? RR.brandSoft)
+                       soft: guide.prediction?.tone.softColor ?? RR.brandSoft,
+                       info: CardInfoText.guide)
 
             Text(guideHeadline(guide))
                 .font(.system(size: 21, weight: .bold))
@@ -787,6 +800,55 @@ struct ReportHomeContent: View {
         .padding(18)
         .rrCard()
     }
+}
+
+// MARK: - 지표 설명 팝오버
+
+/// 카드 제목 옆 ⓘ 버튼 — 이 지표가 무엇이고 어떤 값이 좋은지 짧게 설명한다.
+/// 자세한 산식은 주간 요약 상세(ReportDetailScreen)에 있으니 여기서는 두세 문장으로 끝낸다.
+private struct CardInfoButton: View {
+    let title: String
+    let text: String
+    @State private var isPresented = false
+
+    var body: some View {
+        Button { isPresented = true } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 12.5))
+                .foregroundStyle(RR.text3)
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(title)
+                    .font(.system(size: 14.5, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Text(text)
+                    .font(.system(size: 13))
+                    .lineSpacing(4)
+                    .foregroundStyle(RR.text2)
+            }
+            .padding(16)
+            .frame(width: 292, alignment: .leading)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+}
+
+/// 카드별 설명 문구 — "무엇을 재는지 → 어떤 값이 좋은지" 순서, 두세 문장 (기획서 §4.11 톤).
+/// 산식 기준: 10% 룰·ACWR(Gabbett 2016)·EF·Riegel은 각 엔진 주석과 같은 출처를 따른다.
+private enum CardInfoText {
+    static let battery = "밤사이 활력징후(심박 변이·안정 심박·심박 회복·수면)와 훈련 부하를 합쳐 오늘 쓸 수 있는 체력을 0~100으로 추정해요. 75 이상 충전 충분, 50~74 양호, 25~49 주의, 그 밑은 방전 임박 — 낮은 날은 훈련보다 충전이 먼저예요."
+    static let distance = "최근 7일 거리를 그 전 7일과 비교해요. 한 주 증가 폭은 10% 이내가 안전하다는 경험칙(10% 룰)이 기준 — 그보다 빠르게 늘리면 몸이 적응할 시간이 부족해 부상 위험이 커져요."
+    static let acwr = "최근 7일 부하 ÷ 최근 4주 주평균이에요. 지금 훈련량이 몸에 익숙한 양의 몇 배인지 보는 지표로, 0.8~1.3이 적정 구간이에요. 1.3을 넘으면 몸보다 훈련이 앞선 상태, 1.5 초과는 부상 위험 구간이에요."
+    static let efficiency = "같은 심박으로 얼마나 빨리 달리는지 — 속도를 심박으로 나눈 값이에요. 최근 2주를 그 전 2주와 비교해요. 절대값보다 방향이 중요해서, 오르고 있으면 같은 힘으로 더 멀리 가는 몸이 되고 있다는 뜻이에요."
+    static let vo2Max = "운동 중 몸이 쓸 수 있는 산소의 최대치(mL/kg·분)로, 워치가 야외 러닝에서 추정해요. 지구력의 대표 지표라 높을수록 좋지만 나이·성별에 따라 기준이 달라서, 절대값보다 추세가 오르는지를 봐요. 함께 나오는 심박 회복은 러닝 직후 1분간 심박이 내려간 폭 — 클수록 회복 엔진이 좋은 거예요."
+    static let cross = "최근 7일의 러닝 외 운동(자전거·근력 등)을 모아 보여드려요. 러닝 거리 부하(ACWR)에는 넣지 않는 보조 정보지만, 몸의 피로는 같이 쌓이니 회복을 챙길 때는 함께 계산해 주세요."
+    static let cadence = "1분에 발이 땅에 닿는 횟수(spm)예요. 최근 2주를 그 전 2주와 비교해요. 보통 170~180 언저리가 접지 충격이 적고 효율적이라고 알려져 있지만 키·보폭에 따라 달라서, 조금씩 오르는 추세면 충분해요."
+    static let calories = "이번 주 러닝으로 태운 활동 칼로리의 합계예요. 지난주와 비교해 리듬이 유지되는지 봐요 — 한 번에 몰아서 태우는 것보다 매주 비슷하게 태우는 쪽이 오래갑니다."
+    static let weight = "건강 앱의 몸무게 기록을 주 평균으로 묶어 4주 전과 비교해요. 하루 단위 출렁임은 대부분 수분이라 주 평균으로 봐야 진짜 방향이 보여요. 주 0.5kg 안팎의 완만한 감량이 오래가는 페이스예요."
+    static let streak = "주 1회 이상 달린 주가 몇 주째 이어지는지 세요. 거리보다 리듬의 지표라, 많이 달리는 것보다 끊기지 않는 게 먼저예요."
+    static let guide = "최근 기록으로 목표 레이스 기록을 예측(Riegel 공식)하고 이번 주 훈련 구성을 제안해요. 예측이 목표보다 빠르면 순항 중이고, 느리면 주간 거리부터 차근히 올리면 돼요."
 }
 
 // MARK: - 빈 상태

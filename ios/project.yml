@@ -7,7 +7,11 @@ targets:
   RunWrap:
     type: application
     platform: iOS
-    sources: [RunWrap]
+    sources:
+      - RunWrap
+      # xcodegen이 xml류(.gpx)를 리소스에서 빼므로 명시 지정 — 코스 탭 샘플 코스 (계획서 M12-3)
+      - path: RunWrap/SampleCourse.gpx
+        buildPhase: resources
     entitlements:
       path: RunWrap/RunWrap.entitlements
       properties:
@@ -23,6 +27,12 @@ targets:
         NSHealthShareUsageDescription: 애플워치로 기록한 러닝(거리·시간·심박)을 읽어 리포트를 만들기 위해 사용합니다. 데이터는 기기 밖으로 나가지 않습니다.
         NSPhotoLibraryAddUsageDescription: 만든 러닝 스토리 카드를 사진 앱에 저장하기 위해 사용합니다.
         NSLocationWhenInUseUsageDescription: 현재 위치의 날씨로 러닝 복장을 추천하기 위해 사용합니다. 위치는 날씨 조회에만 쓰고 저장하지 않습니다.
+        UTImportedTypeDeclarations:   # 코스 탭 GPX 업로드 — fileImporter의 UTType(importedAs:)와 짝 (계획서 M12-3)
+          - UTTypeIdentifier: com.topografix.gpx
+            UTTypeDescription: GPX 경로 파일
+            UTTypeConformsTo: [public.xml]
+            UTTypeTagSpecification:
+              public.filename-extension: [gpx]
     settings:
       base:
         DEVELOPMENT_TEAM: WDNVP9B8A9        # 무료 팀 (7일 서명)

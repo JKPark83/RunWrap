@@ -1,0 +1,44 @@
+# 대회정보 일일 갱신 배치 (계획서 M13-4)
+#
+# 매일 새벽 로드런을 크롤해 ios/RunWrap/Races.json을 갱신한다.
+# 앱은 이 파일의 raw URL을 받아 본다 (RaceStore) — 번들 사본은 앱 빌드 때 함께 실린다.
+# generatedAt은 매번 바뀌므로 races 내용이 같으면 커밋하지 않는다 (커밋 소음 방지).
+# 크롤 실패(파싱 성공률 80% 미만 포함)면 잡이 실패로 떠서 사이트 개편을 알아챌 수 있다.
+name: race-info
+
+on:
+  schedule:
+    - cron: "0 20 * * *"   # 매일 05:00 KST (UTC 20:00)
+  workflow_dispatch: {}     # 수동 실행용
+
+permissions:
+  contents: write
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 로드런 크롤 → Races.json
+        run: python3 tools/race-info/crawl.py -o ios/RunWrap/Races.json
+
+      - name: 대회 내용이 바뀌었을 때만 커밋
+        run: |
+          if python3 - <<'EOF'
+          import json, subprocess, sys
+          shown = subprocess.run(["git", "show", "HEAD:ios/RunWrap/Races.json"],
+                                 capture_output=True, text=True).stdout
+          old = json.loads(shown) if shown else {"races": []}
+          new = json.load(open("ios/RunWrap/Races.json"))
+          sys.exit(0 if old.get("races") == new["races"] else 1)
+          EOF
+          then
+            echo "대회 데이터 변경 없음 — 커밋 생략"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add ios/RunWrap/Races.json
+            git commit -m "chore: 대회정보 자동 갱신 ($(TZ=Asia/Seoul date +%Y-%m-%d))"
+            git push
+          fi

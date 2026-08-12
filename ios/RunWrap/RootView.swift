@@ -53,7 +53,7 @@ struct RootView: View {
     }
 }
 
-/// 3탭 구조 — 리포트 / 통계 / 오늘 (계획서 M6에서 '오늘' 추가)
+/// 5탭 구조 — 리포트 / 통계 / 오늘 / 코스 / 대회 (계획서 M6 '오늘', M12 '코스', M13 '대회' 추가)
 private struct MainTabs: View {
     var body: some View {
         TabView {
@@ -63,6 +63,10 @@ private struct MainTabs: View {
                 .tabItem { Label("통계", systemImage: "chart.bar.xaxis") }
             NavigationStack { TodayScreen() }
                 .tabItem { Label("오늘", systemImage: "sun.max") }
+            NavigationStack { CourseScreen() }
+                .tabItem { Label("코스", systemImage: "map") }
+            NavigationStack { RaceListScreen() }
+                .tabItem { Label("대회", systemImage: "flag.checkered") }
         }
     }
 }
