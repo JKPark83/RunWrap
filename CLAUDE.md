@@ -23,7 +23,7 @@
   타깃 멤버십이 어긋나면 `ios/project.yml`을 고쳐 xcodegen을 다시 돌린다.
   같은 이유로 `ios/RunWrap/Info.plist`와 `ios/RunWrap/RunWrap.entitlements`도 직접 편집 금지 —
   둘 다 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
-- 날것의 `xcodebuild`를 쓰지 않는다. 아래 MCP 도구를 쓴다.
+- `xcodebuild`를 직접 쓰지 않는다. 아래 MCP 도구를 쓴다.
 - `ios/RunWrap/Races.json`을 손으로 고치지 않는다 — `.github/workflows/race-info.yml`이
   매일 05:00 KST에 크롤 결과로 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
 - 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo)와
@@ -57,7 +57,8 @@ cd ios && xcodegen generate    # 이것만 셸에서 직접 실행한다
 - 새 파일에 대한 SourceKit(IDE) 진단은 가짜 오류를 낸다 — 판정은 빌드로만.
 - 시뮬레이터에는 워치 기록이 없어 DemoData 합성 데이터가 자동 표시된다.
   HealthKit 실데이터 검증은 실기기에서만 가능하다.
-- 서명은 무료 팀(`WDNVP9B8A9`)이라 실기기 설치본은 7일 뒤 만료된다. 시뮬레이터는 무관.
+- 서명은 유료 Apple Developer Program 팀(`WDNVP9B8A9`) — TestFlight·앱스토어 업로드 가능.
+  App Store Connect에 업로드할 때마다 `project.yml`의 `CURRENT_PROJECT_VERSION`(빌드 번호)을 +1 한다.
 
 ## 완료 기준
 

@@ -13,6 +13,8 @@
   ([M0~M9](docs/plan/runwrap-plan-v0.1.md) · [M12 코스 보급 가이드](docs/plan/코스-보급-가이드-plan-v0.1.md) ·
   [M13 대회 캘린더](docs/plan/대회-캘린더-plan-v0.1.md))
 - `docs/기능-산식-정리.html` — 화면별 기능과 지표 산식 정리
+- `docs/appstore/` — 앱스토어 제출 자료: 스토어 문안·심사 노트·TestFlight 테스트 정보·6.9인치 스크린샷 6장
+- `docs/privacy.html` — 개인정보 처리방침 (https://runmisae-privacy.vercel.app/privacy.html 로 호스팅)
 - `ios/` — SwiftUI 앱 (xcodegen 프로젝트, 외부 의존성 없음)
 - `tools/` — 데이터 파이프라인: `race-info`(대회 크롤러) · `course-poi`(급수·화장실·편의점 POI 빌드)
 - `.github/workflows/race-info.yml` — 매일 05:00 KST 대회 정보 크롤 → `ios/RunWrap/Races.json` 갱신
@@ -56,3 +58,12 @@ open RunWrap.xcodeproj
 크로스 트레이닝 요약(`CrossTrainingEngine`)·날씨 조언(`WeatherAdviceRules`).
 
 전체적으로 **실기기 자가 검증(유용성·카드 퀄리티 판단)이 남은 관문**이다.
+
+## 앱스토어 제출 (진행 중)
+
+- [x] 제출 요건 — 프라이버시 매니페스트 · 수출 규정(`ITSAppUsesNonExemptEncryption`) · 데모 모드 게이트 · 개인정보 처리방침 호스팅
+- [x] 제출 자료 — 스토어 문안 · 심사 노트 · TestFlight 테스트 정보 · 스크린샷 6장 (`docs/appstore/`)
+- [x] 빌드 업로드 — 1.0 (3) App Store Connect 업로드 완료
+- [ ] TestFlight — 빌드 처리 확인 → 테스트 정보 입력 → 내부 테스터 배포
+- [ ] 실기기 자가 검증 — TestFlight 설치본으로 유용성·카드 퀄리티 판단
+- [ ] App Store 심사 제출
