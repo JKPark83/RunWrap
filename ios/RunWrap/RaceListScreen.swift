@@ -7,6 +7,8 @@ struct RaceListScreen: View {
     @StateObject private var store = RaceStore()
     /// 접수중 대회만 보기 — 세션 한정 필터 (기획서 §4.14)
     @State private var showOpenOnly = false
+    /// 키워드 검색 — 대회명·지역·장소·종목을 대상으로 하고 접수중 필터와 AND로 겹친다
+    @State private var query = ""
 
     var body: some View {
         Group {
@@ -30,7 +32,10 @@ struct RaceListScreen: View {
     private func raceList(_ file: RaceFile) -> some View {
         let entries = RaceEngine.entries(from: file.races, now: Date())
         let openCount = entries.filter(\.isOpen).count
-        let visible = showOpenOnly ? entries.filter(\.isOpen) : entries
+        let keyword = query.trimmingCharacters(in: .whitespaces)
+        let visible = entries
+            .filter { !showOpenOnly || $0.isOpen }
+            .filter { keyword.isEmpty || $0.matches(keyword) }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
@@ -45,11 +50,12 @@ struct RaceListScreen: View {
                 .padding(.bottom, 2)
 
                 if !entries.isEmpty {
+                    searchField
                     filterChips
                 }
 
                 if visible.isEmpty {
-                    emptyCard(filtered: showOpenOnly)
+                    emptyCard(searching: !keyword.isEmpty, filtered: showOpenOnly)
                 } else {
                     ForEach(visible) { entry in
                         NavigationLink { RaceDetailScreen(entry: entry) } label: {
@@ -64,6 +70,34 @@ struct RaceListScreen: View {
             .padding(.bottom, 26)
         }
         .refreshable { await store.refresh() }
+        .scrollDismissesKeyboard(.immediately)
+    }
+
+    /// 키워드 검색 필드 — 내비게이션 바를 숨긴 화면이라 .searchable 대신 직접 그린다
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14))
+                .foregroundStyle(RR.text3)
+            TextField("대회명·지역·종목 검색", text: $query)
+                .font(.system(size: 14))
+                .foregroundStyle(RR.text)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(RR.text3)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RR.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     /// 전체/접수중 필터 칩 — StatsScreen 지표 전환 칩과 같은 스타일
@@ -153,15 +187,22 @@ struct RaceListScreen: View {
 
     // MARK: 빈 목록·실패
 
-    private func emptyCard(filtered: Bool) -> some View {
-        VStack(spacing: 8) {
-            Image(systemName: "flag.slash")
+    private func emptyCard(searching: Bool, filtered: Bool) -> some View {
+        let (title, subtitle): (String, String) = if searching {
+            ("맞는 대회를 못 찾았어요", "다른 키워드로 다시 찾아보시겠어요?")
+        } else if filtered {
+            ("지금 접수받는 대회가 없어요", "접수가 열리면 접수중 배지로 알려드릴게요.")
+        } else {
+            ("지금 보여드릴 대회가 없어요", "자료가 갱신되면 다시 찾아뵐게요.")
+        }
+        return VStack(spacing: 8) {
+            Image(systemName: searching ? "magnifyingglass" : "flag.slash")
                 .font(.system(size: 22))
                 .foregroundStyle(RR.text3)
-            Text(filtered ? "지금 접수받는 대회가 없어요" : "지금 보여드릴 대회가 없어요")
+            Text(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(RR.text)
-            Text(filtered ? "접수가 열리면 접수중 배지로 알려드릴게요." : "자료가 갱신되면 다시 찾아뵐게요.")
+            Text(subtitle)
                 .font(.system(size: 12))
                 .foregroundStyle(RR.text3)
         }
@@ -284,5 +325,12 @@ enum RaceFormat {
 private extension RaceEngine.Entry {
     var isOpen: Bool {
         if case .open = status { true } else { false }
+    }
+
+    /// 키워드가 대회명·지역·장소·종목 중 하나에라도 들어 있으면 매칭 (한글 친화 비교)
+    func matches(_ keyword: String) -> Bool {
+        var fields = [race.name, race.region, race.place].compactMap(\.self)
+        fields.append(contentsOf: race.categories ?? [])
+        return fields.contains { $0.localizedStandardContains(keyword) }
     }
 }
