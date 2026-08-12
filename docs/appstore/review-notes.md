@@ -136,4 +136,4 @@ real reports.
 - [ ] 심사 정보의 **로그인 필요 없음** 체크
 - [ ] 개인정보 처리방침 URL을 App Store Connect 앱 정보에 입력 (위와 동일 주소)
 - [ ] 연락처 이름·이메일·전화번호 입력
-- [ ] 스크린샷 5장 업로드 (`docs/appstore/screenshots-6.9/`)
+- [ ] 스크린샷 6장 업로드 (`docs/appstore/screenshots-6.9/`)
