@@ -3,21 +3,71 @@
 애플워치 러닝 데이터를 해석해 주는 아이폰 전용 SwiftUI 앱 (iOS 17+, 온디바이스 전용).
 개요·로드맵은 [README](README.md), 제품 결정은 [기획서](docs/plan/기획서-v0.1.md) 참조.
 
+## 프로젝트·스택
+
+| 항목 | 값 |
+|---|---|
+| 스킴 / 프로젝트 | `RunWrap` / `ios/RunWrap.xcodeproj` (워크스페이스 없음) |
+| 타깃 | `RunWrap`(앱), `RunWrapTests`(유닛 테스트) |
+| 배포 타깃 | iOS 17.0 · 아이폰 세로 전용(`TARGETED_DEVICE_FAMILY = 1`) |
+| 기본 시뮬레이터 | iPhone 17 Pro |
+| 의존성 | **없음** — SPM·CocoaPods·Carthage 모두 미사용. 애플 프레임워크만 쓴다 |
+| UI | 전부 SwiftUI. UIKit은 `Theme.swift` 한 곳뿐(다이내믹 컬러 프로바이더용) |
+| 영속화 | `ReportCache`가 Application Support에 `Codable`+JSON으로 저장, 그 외는 `@AppStorage`. SwiftData·Core Data 미사용 |
+| 테스트 | Swift Testing 139개 / 16스위트 (`ios/RunWrapTests`) |
+| 포매터·린터 | 없음 (SwiftFormat·SwiftLint 미설치). 주변 코드 스타일을 눈으로 맞춘다 |
+
+## 절대 하지 말 것
+
+- `*.xcodeproj/` 내부, 특히 `project.pbxproj`를 편집하지 않는다. **생성물이고 gitignore 대상**이다.
+  타깃 멤버십이 어긋나면 `ios/project.yml`을 고쳐 xcodegen을 다시 돌린다.
+  같은 이유로 `ios/RunWrap/Info.plist`와 `ios/RunWrap/RunWrap.entitlements`도 직접 편집 금지 —
+  둘 다 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
+- 날것의 `xcodebuild`를 쓰지 않는다. 아래 MCP 도구를 쓴다.
+- `ios/RunWrap/Races.json`을 손으로 고치지 않는다 — `.github/workflows/race-info.yml`이
+  매일 05:00 KST에 크롤 결과로 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
+- 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo)와
+  대회정보(`RaceStore` → GitHub raw) 둘뿐이고, 둘 다 개인 데이터를 싣지 않는다.
+- 비밀값을 커밋하지 않는다. 이 앱은 API 키가 필요한 서비스를 쓰지 않는다 —
+  키가 필요해지는 설계라면 먼저 물어본다. (`DEVELOPMENT_TEAM`은 비밀이 아닌 팀 ID다.)
+- `.gpx` 같은 xml 계열 리소스는 xcodegen이 자동으로 빼므로, 추가할 때 `project.yml`에
+  `buildPhase: resources`로 명시해야 한다.
+
 ## 빌드·검증
 
 `*.xcodeproj`, `Info.plist`, `RunWrap.entitlements`는 전부 생성물이다 —
 **`ios/project.yml`만 수정**하고 xcodegen으로 재생성한다.
 
 ```bash
-cd ios && xcodegen generate
-xcodebuild -project RunWrap.xcodeproj -scheme RunWrap \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+cd ios && xcodegen generate    # 이것만 셸에서 직접 실행한다
 ```
+
+이후 빌드·테스트·실행은 XcodeBuildMCP 도구로 한다 (`projectPath: ios/RunWrap.xcodeproj`,
+`scheme: RunWrap`, `simulatorName: iPhone 17 Pro`):
+
+| 용도 | 도구 |
+|---|---|
+| 빌드 | `mcp__XcodeBuildMCP__build_sim` |
+| 테스트 | `mcp__XcodeBuildMCP__test_sim` |
+| 빌드+설치+실행 | `mcp__XcodeBuildMCP__build_run_sim` |
+| 스크린샷 | `mcp__XcodeBuildMCP__screenshot` |
+| 시뮬레이터 목록 | `mcp__XcodeBuildMCP__list_sims` |
 
 - sources가 폴더 단위라 새 Swift 파일은 xcodegen만 다시 돌리면 포함된다.
 - 새 파일에 대한 SourceKit(IDE) 진단은 가짜 오류를 낸다 — 판정은 빌드로만.
 - 시뮬레이터에는 워치 기록이 없어 DemoData 합성 데이터가 자동 표시된다.
   HealthKit 실데이터 검증은 실기기에서만 가능하다.
+- 서명은 무료 팀(`WDNVP9B8A9`)이라 실기기 설치본은 7일 뒤 만료된다. 시뮬레이터는 무관.
+
+## 완료 기준
+
+1. 빌드가 깨끗하다. 새 경고가 생기면 무시하지 말고 보고한다.
+   (기준선: `Metadata extraction skipped. No AppIntents.framework dependency found.` 1건만 정상)
+2. UI를 바꿨으면 `build_run_sim`으로 시뮬레이터에 띄우고 `screenshot`으로 의도와 대조한다.
+   2~5회 고쳐도 어긋나면 무엇이 다른지 설명하고 멈춘다.
+   (이 코드베이스에는 `#Preview`가 하나도 없다 — 굳이 새로 만들지 말고 시뮬레이터로 확인한다.)
+3. 관련 테스트를 돌려 통과시킨다. 실패하는 테스트를 지우거나 비활성화하지 않는다.
+4. 검증한 것만 보고한다. 돌려보지 않은 코드를 동작한다고 말하지 않는다.
 
 ## 아키텍처 — 3계층
 
@@ -71,3 +121,17 @@ xcodebuild -project RunWrap.xcodeproj -scheme RunWrap \
 - 고정 시각(ISO8601로 만든 `now`)을 주입해 결정론적으로 만든다.
   기대값이 어떻게 산출되는지 주석으로 남긴다 (예: `// HRV +20% → +16, …`).
 - 엔진(순수 로직)은 반드시 테스트한다. 스토어·뷰는 HealthKit 의존이라 테스트하지 않는다.
+
+## 커밋
+
+- `feat:` / `fix:` / `docs:` / `chore:` 접두사 + 한국어 요약 한 줄.
+  범위가 넓으면 `feat: 세션 분석 엔진 4종 + HealthKit 권한 기능별 분리`처럼 `+`로 잇는다.
+- **시키기 전에는 커밋·푸시하지 않는다.**
+
+## 확실하지 않을 때
+
+- 모르는 API는 추측하지 말고 확인한다. 최근 iOS 버전에서 바뀐 API를 특히 조심한다
+  (이 프로젝트는 iOS 17 배포 타깃을 Xcode 26 / Swift 6.3으로 빌드한다 —
+  최신 SDK에서 컴파일된다고 iOS 17에서 도는 것은 아니다. 가용성 확인 필수).
+- 기존에 있는 것부터 찾는다: 포맷은 `Format.*`, 색·톤은 `Theme.swift`, 차트는 `RRCharts`.
+  같은 일을 하는 헬퍼를 새로 만들기 전에 한 번 검색한다.

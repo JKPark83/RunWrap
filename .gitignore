@@ -4,3 +4,7 @@ build/
 # xcodegen이 project.yml의 info/entitlements 섹션에서 생성
 ios/RunWrap/Info.plist
 ios/RunWrap/RunWrap.entitlements
+
+# .claude/settings.json·hooks는 공유하고, 개인 설정과 워크트리는 제외한다
+.claude/settings.local.json
+.claude/worktrees/
