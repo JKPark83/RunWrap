@@ -16,6 +16,12 @@ struct HomeScreen: View {
     @AppStorage(ProfileKey.promotionDeclinedAt) private var promotionDeclinedAtRaw = 0.0
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(GrowthKey.maxStage) private var maxStage = GrowthStage.egg.rawValue
+    /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 정해진 값을 그대로 쓴다
+    @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
+    @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+
+    @EnvironmentObject private var collection: CollectionStore
+    @State private var showsCeremony = false
 
     var body: some View {
         Group {
@@ -51,7 +57,30 @@ struct HomeScreen: View {
                             promotion: promotion, now: now)
             }
         }
-        .onAppear { syncMaxStage(growth.stage) }
+        .onAppear {
+            syncMaxStage(growth.stage)
+            // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
+            // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다
+            if CollectionEngine.hasReachedAdult(stage: growth.stage) { showsCeremony = true }
+        }
+        .fullScreenCover(isPresented: $showsCeremony) {
+            CeremonyScreen(species: pendingSpecies,
+                            goalLabel: pendingGoalLabel,
+                            cycleStartedAt: cycleStartedAt) { newGoal, newSeconds in
+                startNewCycle(goal: newGoal, goalSeconds: newSeconds, now: Date())
+            }
+        }
+    }
+
+    /// 지금 수집될 새 종 — 세러모니 표시와 실제 수집이 같은 값을 쓰도록 한 곳에서 낸다
+    private var pendingSpecies: BirdSpecies {
+        CollectionEngine.species(for: RaceDistance(rawValue: raceGoalRaw),
+                                  goalSeconds: raceGoalSec)
+    }
+
+    private var pendingGoalLabel: String {
+        CollectionEngine.goalLabel(for: RaceDistance(rawValue: raceGoalRaw),
+                                    goalSeconds: raceGoalSec)
     }
 
     // MARK: - 헤더
@@ -63,10 +92,9 @@ struct HomeScreen: View {
                 .foregroundStyle(RR.text)
             Spacer()
             if showsCollection {
-                // 도감(CollectionScreen)은 v0.7 §5 범위이나 이 작업(G3) 밖이다.
-                // 자리와 시각적 무게를 시안대로 잡아 두고 동작만 비활성으로 남긴다 —
-                // 도감 화면이 들어오면 이 버튼을 NavigationLink로 바꾸면 된다.
-                Button {} label: {
+                NavigationLink {
+                    CollectionScreen()
+                } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "book.closed")
                             .font(.system(size: 11, weight: .semibold))
@@ -80,7 +108,6 @@ struct HomeScreen: View {
                     .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .strokeBorder(RR.line))
                 }
-                .disabled(true)
             }
         }
         .padding(.horizontal, 20)
@@ -330,6 +357,23 @@ struct HomeScreen: View {
     /// 이번 사이클 최고 단계를 올려 둔다 — 다음 실행에서 표시 단계가 내려가지 않게 하는 하한.
     private func syncMaxStage(_ stage: GrowthStage) {
         if stage.rawValue > maxStage { maxStage = stage.rawValue }
+    }
+
+    /// 수집 확정 — 도감에 넣고 새 사이클을 시작한다 (기획서 §5).
+    ///
+    /// 사이클 전환의 **유일한 지점**이다. 순서가 중요하다: 도감에 먼저 넣고
+    /// 사이클을 초기화한다 — 반대로 하면 저장에 실패했을 때 새를 잃는다.
+    /// `cycleStartedAt`을 지금으로 옮기면 XP는 자동으로 0부터 다시 쌓인다
+    /// (XP 원장을 저장하지 않는 설계라 리셋할 값이 따로 없다).
+    private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) {
+        collection.add(CollectionEngine.collect(distance: RaceDistance(rawValue: raceGoalRaw),
+                                                 goalSeconds: raceGoalSec,
+                                                 cycleStartedAt: cycleStartedAt,
+                                                 now: now))
+        raceGoalRaw = goal?.rawValue ?? ""
+        raceGoalSec = goalSeconds
+        cycleStartedAtRaw = now.timeIntervalSince1970
+        maxStage = GrowthStage.egg.rawValue
     }
 }
 
