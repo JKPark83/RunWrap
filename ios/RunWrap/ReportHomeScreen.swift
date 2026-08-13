@@ -1,12 +1,28 @@
 import SwiftUI
 
-/// 홈 — 주간 리포트 (시안 "홈 · 주간 리포트" / "빈 상태 · 기록 없음")
+/// 리포트 탭 — 상단 세그먼트로 [이번 주 | 발전상]을 가른다 (기획서 v0.7 §6).
+///
+/// v0.7에서 통계 탭이 사라지고 이 화면의 "발전상" 세그먼트로 흡수됐다.
+/// 다이어트/훈련 목적별 배치 분기도 제거됐다 — 목적은 문장의 강조점만 바꾸고,
+/// 어떤 카드를 보여줄지는 레벨 게이트(`ReportGate`, §4)가 정한다.
 struct ReportHomeScreen: View {
     @EnvironmentObject private var health: HealthStore
-    @AppStorage(ProfileKey.goal) private var goalRaw = RunGoal.training.rawValue
-    @AppStorage(ProfileKey.level) private var levelRaw = RunLevel.experienced.rawValue
+    @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    @State private var tab: ReportTab = .thisWeek
+
+    /// 리포트 탭 세그먼트 — 통계 탭을 흡수한 자리 (§6)
+    enum ReportTab: String, CaseIterable {
+        case thisWeek, progress
+
+        var label: String {
+            switch self {
+            case .thisWeek: "이번 주"
+            case .progress: "발전상"
+            }
+        }
+    }
 
     var body: some View {
         Group {
@@ -14,27 +30,30 @@ struct ReportHomeScreen: View {
                 if runs.isEmpty {
                     EmptyReportScreen()
                 } else {
-                    let level = RunLevel(rawValue: levelRaw) ?? .experienced
-                    let goal = RunGoal(rawValue: goalRaw) ?? .training
+                    let level = RunnerLevel(rawValue: levelRaw) ?? .beginner
                     let battery = health.vitals.flatMap {
                         BatteryEngine.compute(vitals: $0, runs: runs)
                     }
-                    ReportHomeContent(report: ReportEngine(level: level).weeklyReport(from: runs),
-                                      battery: battery,
-                                      goal: goal,
-                                      level: level,
-                                      weight: ReportEngine.weightTrend(samples: health.bodyMass,
-                                                                       now: Date()),
-                                      vo2Max: ReportEngine.vo2MaxTrend(samples: health.vo2Max,
-                                                                       now: Date()),
-                                      hrr: ReportEngine.hrrTrend(samples: health.hrrTrend,
-                                                                 now: Date()),
-                                      cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
-                                                                        runs: runs, now: Date()),
-                                      form: FormTrend.compute(runs: runs, now: Date()),
-                                      guide: trainingGuide(runs: runs, goal: goal, level: level,
-                                                           batteryTone: battery?.tone))
-                        .refreshable { await health.load() }
+                    switch tab {
+                    case .thisWeek:
+                        ReportHomeContent(report: ReportEngine(level: level).weeklyReport(from: runs),
+                                          battery: battery,
+                                          level: level,
+                                          vo2Max: ReportEngine.vo2MaxTrend(samples: health.vo2Max,
+                                                                           now: Date()),
+                                          hrr: ReportEngine.hrrTrend(samples: health.hrrTrend,
+                                                                     now: Date()),
+                                          cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
+                                                                            runs: runs, now: Date()),
+                                          form: FormTrend.compute(runs: runs, now: Date()),
+                                          guide: trainingGuide(runs: runs, level: level,
+                                                               batteryTone: battery?.tone),
+                                          segment: segment)
+                            .refreshable { await health.load() }
+                    case .progress:
+                        // 발전상 — 옛 통계 탭 본문을 그대로 쓴다 (§6 "리포트 탭 상단 세그먼트로 흡수")
+                        StatsScreen(segment: AnyView(segment))
+                    }
                 }
             }
         }
@@ -42,10 +61,19 @@ struct ReportHomeScreen: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    /// 훈련 가이드 — 훈련 모드에서 목표 레이스를 설정했을 때만 계산한다 (계획서 M7)
-    private func trainingGuide(runs: [RunSummary], goal: RunGoal, level: RunLevel,
+    /// [이번 주 | 발전상] 세그먼트 — 두 세그먼트가 같은 컨트롤을 공유한다
+    private var segment: some View {
+        Picker("", selection: $tab) {
+            ForEach(ReportTab.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+    }
+
+    /// 훈련 가이드 — 목표 레이스를 설정했을 때만 계산한다 (계획서 M7).
+    /// v0.7에서 "훈련 모드" 조건이 사라졌다 — 목적과 무관하게 목표가 있으면 가이드를 낸다
+    private func trainingGuide(runs: [RunSummary], level: RunnerLevel,
                                batteryTone: RRTone?) -> TrainingGuide? {
-        guard goal == .training, let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
+        guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
         return TrainingGuideEngine(now: Date(), level: level)
             .guide(runs: runs, records: PersonalRecords.compute(runs: runs), race: race,
                    goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil,
@@ -59,11 +87,8 @@ struct ReportHomeContent: View {
     let report: WeeklyReport
     /// 체력 배터리 — 활력징후 기준선이 부족하면 nil (안내 카드로 대체)
     var battery: BatteryReport? = nil
-    /// 프로필 — 카드 포함 여부·순서와 문장 난이도만 바꾼다 (집계는 동일, 계획서 M2)
-    var goal: RunGoal = .training
-    var level: RunLevel = .experienced
-    /// 몸무게 추이 — 다이어트 모드에서만 노출 (표본 부족이면 엔진이 nil을 준다)
-    var weight: WeightTrend? = nil
+    /// 레벨 — 카드 포함 여부(ReportGate)와 문장 난이도를 정한다. 집계는 레벨과 무관하게 동일
+    var level: RunnerLevel = .beginner
     /// 심폐 체력(VO₂max) 추이 — 목적 무관 노출 (표본 부족이면 엔진이 nil을 준다)
     var vo2Max: Vo2MaxTrend? = nil
     /// 심박 회복(HRR) 추이 — 심폐 체력 카드의 보조 라인 (제안 문서 B1, 표본 부족이면 nil)
@@ -76,41 +101,47 @@ struct ReportHomeContent: View {
     var guide: TrainingGuide? = nil
     /// 샘플 리포트 시트에서는 상세 이동 대신 배너를 단다
     var isSample = false
+    /// [이번 주 | 발전상] 세그먼트 — 샘플 시트에서는 넘기지 않아 nil이다
+    var segment: (any View)? = nil
 
+    /// 카드 노출 = 미노출 가드(엔진 nil) AND 레벨 게이트.
+    /// 순서가 중요하다 — `if let`으로 표본을 먼저 확인하고 게이트를 뒤에 건다 (ReportGate 주석)
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
 
-                // 다이어트 모드: 칼로리·몸무게·streak을 앞세우고 ACWR은 맨 뒤로 (계획서 M2)
-                if goal == .diet {
-                    if let diet = report.diet { dietCaloriesCard(diet) }
-                    if let weight { weightCard(weight) }
-                    if report.streakWeeks >= 1 { streakCard }
+                if let segment {
+                    AnyView(segment).padding(.bottom, 2)
                 }
 
-                if let battery {
+                if let battery, ReportGate.shows(.battery, level: level) {
                     batteryCard(battery)
                 } else if !isSample {
                     batteryHintCard
                 }
 
-                if let distance = report.distance { distanceCard(distance) }
-                if goal == .diet {
-                    if let efficiency = report.efficiency { efficiencyCard(efficiency) }
-                    if let acwr = report.acwr { acwrCard(acwr) }
-                } else {
-                    if let acwr = report.acwr { acwrCard(acwr) }
-                    if let efficiency = report.efficiency { efficiencyCard(efficiency) }
+                if let distance = report.distance, ReportGate.shows(.distance, level: level) {
+                    distanceCard(distance)
+                }
+                if let acwr = report.acwr, ReportGate.shows(.acwr, level: level) {
+                    acwrCard(acwr)
+                }
+                if let efficiency = report.efficiency, ReportGate.shows(.efficiency, level: level) {
+                    efficiencyCard(efficiency)
                 }
 
-                if let cross { crossTrainingCard(cross) }
+                if let cross, ReportGate.shows(.crossTraining, level: level) {
+                    crossTrainingCard(cross)
+                }
 
-                if let vo2Max { vo2MaxCard(vo2Max) }
+                if let vo2Max, ReportGate.shows(.vo2Max, level: level) { vo2MaxCard(vo2Max) }
 
-                if let form { formTrendCard(form) }
+                if let form, ReportGate.shows(.form, level: level) { formTrendCard(form) }
 
-                if let guide { trainingGuideCard(guide) }
+                if let guide, ReportGate.shows(.trainingGuide, level: level) {
+                    trainingGuideCard(guide)
+                }
 
                 if report.isEmpty { insufficientCard }
 
@@ -176,101 +207,6 @@ struct ReportHomeContent: View {
             }
         }
         .padding(.bottom, 6)
-    }
-
-    // MARK: 다이어트 모드 카드 (칼로리 · 몸무게 · streak) — 기획서 §4.5, 계획서 M2
-
-    private func dietCaloriesCard(_ card: WeeklyReport.DietCard) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "flame.fill", title: "칼로리", code: "BURNING",
-                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.calories)
-
-            Text("이번 주 \(Format.kcal(card.weekKcal)) kcal를 태웠어요")
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(RR.text)
-                .lineSpacing(4)
-                .padding(.top, 13)
-
-            if let change = card.changePct {
-                Text(level == .beginner
-                     ? String(format: "지난주보다 %.0f%% %@ 태웠어요",
-                              abs(change), change >= 0 ? "더" : "덜")
-                     : String(format: "지난주 대비 %+.0f%% · 러닝 세션 소모 기준", change))
-                    .font(.system(size: 13))
-                    .foregroundStyle(RR.text2)
-                    .padding(.top, 7)
-            }
-
-            // WeekBar.km 필드에 kcal를 담았다 — 차트는 단위를 모른다 (계획서 M2)
-            WeeklyBarsChart(weeks: card.weeks, currentColor: RR.brand,
-                            valueText: { Format.kcal($0) + " kcal" },
-                            barValueText: { Format.kcal($0) })
-                .padding(.top, 16)
-        }
-        .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
-        .rrCard()
-    }
-
-    private func weightCard(_ w: WeightTrend) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "scalemass.fill", title: "몸무게", code: "WEIGHT",
-                       tint: w.tone.color, soft: w.tone.softColor, info: CardInfoText.weight)
-
-            Text(weightHeadline(w))
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(RR.text)
-                .lineSpacing(4)
-                .padding(.top, 13)
-
-            Text(String(format: "이번 주 평균 %.1f kg · 최근 8주 추이 · 건강 앱 기록 기준", w.currentKg))
-                .font(.system(size: 13))
-                .foregroundStyle(RR.text2)
-                .padding(.top, 7)
-
-            TrendLineChart(points: w.points,
-                           tint: w.tone.color,
-                           endLabels: w.pointLabels.count >= 2
-                               ? (w.pointLabels.first!, w.pointLabels.last!) : nil,
-                           pointLabels: w.pointLabels,
-                           valueText: { String(format: "%.1f kg", $0) })
-                .padding(.top, 12)
-        }
-        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
-        .rrCard()
-    }
-
-    private func weightHeadline(_ w: WeightTrend) -> String {
-        guard let delta = w.deltaKg else {
-            return level == .beginner ? "몸무게 기록이 쌓이는 중이에요"
-                                      : String(format: "이번 주 평균 %.1f kg", w.currentKg)
-        }
-        if level == .beginner {
-            return delta <= -0.2 ? "몸무게가 천천히 내려가고 있어요"
-                 : delta >= 0.2 ? "몸무게가 조금 올라왔어요"
-                                : "몸무게가 그대로 유지되고 있어요"
-        }
-        return String(format: "%d주 전보다 %.1f kg %@",
-                      w.spanWeeks, abs(delta), delta <= 0 ? "가벼워졌어요" : "무거워졌어요")
-    }
-
-    private var streakCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "medal.fill", title: "연속 기록", code: "STREAK",
-                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.streak)
-
-            Text("\(report.streakWeeks)주 연속 달리고 있어요")
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(RR.text)
-                .lineSpacing(4)
-                .padding(.top, 13)
-
-            Text("주 1회 기준 · 이번 주 \(report.weekRunCount)회 완료")
-                .font(.system(size: 13))
-                .foregroundStyle(RR.text2)
-                .padding(.top, 7)
-        }
-        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
-        .rrCard()
     }
 
     // MARK: 심폐 체력 카드 (VO₂max)

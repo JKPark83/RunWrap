@@ -45,7 +45,7 @@ struct NotificationContentTests {
     @Test("스냅샷 생성 — 최근 7일 거리 합과 주간 횟수를 담는다")
     func snapshotMake() {
         let report = WeeklyReport(weekLabel: "2026년 8월 2째주", dateRange: "8.3 – 8.9",
-                                  distance: nil, acwr: nil, efficiency: nil, diet: nil,
+                                  distance: nil, acwr: nil, efficiency: nil,
                                   streakWeeks: 2, weekRunCount: 3)
         // 2일 전 10km는 7일 창 안, 9일 전 10km는 창 밖 → weekKm 10
         let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),

@@ -95,19 +95,6 @@ enum DemoData {
                    weatherHumidityPct: humidityPct)
     }
 
-    /// 합성 몸무게 — 8주에 걸친 완만한 감량(약 −1.3kg), 주 2~3회 측정 (계획서 M2)
-    static var bodyMass: [(date: Date, kg: Double)] {
-        var rng = SplitMix64(seed: 0xD1E7)
-        return (0..<8).flatMap { week -> [(date: Date, kg: Double)] in
-            let count = 2 + Int(rng.next() % 2)
-            return (0..<count).map { slot in
-                let daysAgo = Double(week) * 7 + Double(slot) * 2 + rng.unit()
-                let kg = 70.4 + Double(week) * 0.18 + (rng.unit() - 0.5) * 0.4  // 과거일수록 무겁다
-                return (date: Date().addingTimeInterval(-daysAgo * 86_400), kg: kg)
-            }
-        }
-    }
-
     /// 합성 VO₂max — 12주에 걸친 완만한 상승(주 +0.3), 주 1~2회 추정 기록.
     /// 4주 전 대비 +1.2 언저리가 되도록 기울여 심폐 체력 카드가 개선 톤으로 계산되게 한다.
     static var vo2Max: [(date: Date, value: Double)] {

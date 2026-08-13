@@ -54,8 +54,9 @@ struct TrainingGuide: Equatable {
 
 struct TrainingGuideEngine {
     var now = Date()
-    /// 스피드 세션 상한만 바꾼다 — 문장 난이도는 화면 몫
-    var level: RunLevel = .experienced
+    /// 스피드 세션 상한만 바꾼다 — 문장 난이도는 화면 몫.
+    /// 기본값을 런잘알(intermediate)로 두는 이유는 ReportEngine.level과 같다 (§4 표준 톤).
+    var level: RunnerLevel = .intermediate
 
     // MARK: - 진단 (Riegel)
 

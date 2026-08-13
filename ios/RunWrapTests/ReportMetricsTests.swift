@@ -8,14 +8,12 @@ struct ReportMetricsTests {
     var engine: ReportEngine { ReportEngine(now: now) }
 
     private func run(daysAgo: Double, km: Double,
-                     minPerKm: Double = 6, hr: Double? = 150,
-                     kcal: Double? = nil) -> RunSummary {
+                     minPerKm: Double = 6, hr: Double? = 150) -> RunSummary {
         RunSummary(id: UUID(),
                    start: now.addingTimeInterval(-daysAgo * 86_400),
                    durationSec: km * minPerKm * 60,
                    distanceMeters: km * 1000,
-                   avgHeartRate: hr,
-                   calories: kcal)
+                   avgHeartRate: hr)
     }
 
     @Test("거리 카드 — 수치와 과부하 톤 (+23%, 상한 22km)")
@@ -144,7 +142,7 @@ struct ReportMetricsTests {
         #expect(stats.deltaPct != nil && abs(stats.deltaPct! - 25) < 0.01)  // 16→20km
     }
 
-    // MARK: - M2: streak · 칼로리 · 몸무게
+    // MARK: - streak · 추이 지표
     // now = 8.10(월) 18:00 KST — 이번 ISO 주는 [8.10, 8.17).
     // daysAgo 0.1~0.3 = 이번 주, 1~6 = 지난주(8.3–8.9), 9 = 2주 전(8.1), 25 = 4주 전 주(7.16).
 
@@ -174,60 +172,6 @@ struct ReportMetricsTests {
     @Test("streak — 기록이 없으면 0")
     func streakEmpty() {
         #expect(ReportEngine.streakWeeks(runs: [], now: now) == 0)
-    }
-
-    @Test("칼로리 카드 — 주간 합계 1100, 지난주 800 대비 +37.5%")
-    func dietCardWeeklyKcal() throws {
-        let runs = [run(daysAgo: 0.1, km: 6, kcal: 600),  // 이번 주
-                    run(daysAgo: 0.3, km: 5, kcal: 500),  // 이번 주 → 합계 1100
-                    run(daysAgo: 3, km: 4, kcal: 400),    // 지난주
-                    run(daysAgo: 5, km: 4, kcal: 400)]    // 지난주 → 합계 800
-        let card = try #require(engine.weeklyReport(from: runs).diet)
-        #expect(abs(card.weekKcal - 1100) < 0.01)
-        // (1100 − 800) / 800 × 100 = 37.5
-        #expect(card.changePct != nil && abs(card.changePct! - 37.5) < 0.01)
-        #expect(card.weeks.count == 6)
-        #expect(card.weeks.last?.isCurrent == true)
-        #expect(abs((card.weeks.last?.km ?? 0) - 1100) < 0.01)  // km 필드에 kcal
-    }
-
-    @Test("칼로리 카드 — 이번 주 칼로리 표본이 없으면 카드가 없다")
-    func dietCardNilWithoutCalories() {
-        let report = engine.weeklyReport(from: [run(daysAgo: 0.2, km: 5)])  // kcal nil
-        #expect(report.diet == nil)
-    }
-
-    @Test("몸무게 추이 — 주 평균 70.6, 4주 전 71.8 대비 −1.2kg 개선 톤")
-    func weightTrendWeeklyAverage() throws {
-        // 이번 주 (70.5 + 70.7) / 2 = 70.6, 4주 전 주(7.16) 71.8 → 델타 −1.2
-        let samples: [(date: Date, kg: Double)] = [
-            (now.addingTimeInterval(-0.1 * 86_400), 70.5),
-            (now.addingTimeInterval(-0.3 * 86_400), 70.7),
-            (now.addingTimeInterval(-25 * 86_400), 71.8),
-        ]
-        let trend = try #require(ReportEngine.weightTrend(samples: samples, now: now))
-        #expect(abs(trend.currentKg - 70.6) < 0.01)
-        #expect(trend.deltaKg != nil && abs(trend.deltaKg! + 1.2) < 0.01)
-        #expect(trend.spanWeeks == 4)
-        #expect(trend.tone == .improving)
-        #expect(trend.points.count == 2)
-        #expect(abs(trend.points[0] - 71.8) < 0.01)  // 오래된 → 최신 순서
-        // 7.16(목) 표본의 주 = 7.13 시작 → 목요일 7.16 → 7월 3째주
-        #expect(trend.pointLabels == ["7월 3째주", "8월 2째주"])
-    }
-
-    @Test("몸무게 가드 — 최근 8주 측정 3회 미만이면 nil")
-    func weightTrendGuard() {
-        // 표본 2개 → 미노출 (오픈 이슈 #9 가드)
-        let two: [(date: Date, kg: Double)] = [
-            (now.addingTimeInterval(-0.1 * 86_400), 70.5),
-            (now.addingTimeInterval(-25 * 86_400), 71.8),
-        ]
-        #expect(ReportEngine.weightTrend(samples: two, now: now) == nil)
-
-        // 3개째가 8주(56일) 밖이면 표본 수에 들지 않는다 → 여전히 nil
-        let outOfWindow = two + [(now.addingTimeInterval(-60 * 86_400), 73.0)]
-        #expect(ReportEngine.weightTrend(samples: outOfWindow, now: now) == nil)
     }
 
     @Test("VO₂max 추이 — 주 평균 45.2, 4주 전 44.0 대비 +1.2 개선 톤")

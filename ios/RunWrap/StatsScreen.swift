@@ -1,7 +1,13 @@
 import SwiftUI
 
-/// 통계 — 월간 집계 + 러닝 기록 목록 (시안 "통계 · 월간/기록")
+/// 발전상 — 월간 집계 + 러닝 기록 목록 (시안 "통계 · 월간/기록").
+///
+/// v0.7에서 독립 탭이 사라지고 리포트 탭의 "발전상" 세그먼트가 됐다 (기획서 §6).
+/// 화면 본문은 그대로 두고, 헤더 아래에 호출자가 넘긴 세그먼트 컨트롤만 얹는다.
 struct StatsScreen: View {
+    /// [이번 주 | 발전상] 세그먼트 — 리포트 탭이 넘긴다
+    var segment: AnyView? = nil
+
     @EnvironmentObject private var health: HealthStore
     @State private var monthIndex = 0   // availableMonths 기준 (0 = 이번 달)
     @State private var progressMetric: ProgressMetric = .pace
@@ -19,11 +25,13 @@ struct StatsScreen: View {
                     VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 7) {
                             Eyebrow(text: "Monthly & history")
-                            Text("통계")
+                            Text("발전상")
                                 .font(RR.display(33))
                                 .foregroundStyle(RR.text)
                         }
                         .padding(.bottom, 6)
+
+                        if let segment { segment.padding(.bottom, 2) }
 
                         monthSelector(months: months, index: index)
                         distanceCard(stats)
