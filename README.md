@@ -19,7 +19,7 @@
 - `tools/` — 데이터 파이프라인: `race-info`(대회 크롤러) · `course-poi`(급수·화장실·편의점 POI 빌드)
 - `.github/workflows/race-info.yml` — 매일 05:00 KST 대회 정보 크롤 → `ios/RunWrap/Races.json` 갱신
 
-앱은 5개 탭 — **리포트 · 통계 · 오늘 · 코스 · 대회**.
+앱은 4개 탭 — **홈 · 리포트 · 코스 · 대회**. (리포트 탭 안에 `이번 주 / 발전상` 세그먼트)
 
 ## 빌드
 

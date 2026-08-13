@@ -25,7 +25,8 @@ To turn it on:
   1. Launch the app and complete the two onboarding steps
      ("건강 데이터 연결" -> allow or deny the Health prompt, then choose a
      goal/level and tap "시작하기").
-  2. On the first tab ("리포트"), tap the gear icon at the top right.
+  2. Open the "리포트" tab (2nd of the 4 tabs at the bottom: 홈 / 리포트 /
+     코스 / 대회) and tap the gear icon at the top right.
   3. In Settings, scroll to the "데모 모드" (Demo mode) section and turn on
      "샘플 데이터로 둘러보기" (Browse with sample data).
   4. Go back. Every tab is now populated with ~6 months of synthetic running
@@ -76,8 +77,10 @@ Also reachable inside the app: 리포트 tab -> gear icon -> "개인정보" sect
 
 OTHER PERMISSIONS
 
-- Location (when in use): only to fetch weather for the outfit suggestion on
-  the "오늘" tab. Declining it simply hides the weather card.
+- Location (when in use): to fetch weather for the outfit suggestion on the
+  "홈" tab, and to list nearby water fountains / restrooms / convenience
+  stores on the "코스" tab. Declining it hides those cards; nothing else
+  breaks.
 - Photo library (add only): to save a generated running story card. Optional.
 - Notifications: optional reminders (hydration on hot days, weekly report).
 
