@@ -58,7 +58,10 @@ cd ios && xcodegen generate    # 이것만 셸에서 직접 실행한다
 - 시뮬레이터에는 워치 기록이 없어 DemoData 합성 데이터가 자동 표시된다.
   HealthKit 실데이터 검증은 실기기에서만 가능하다.
 - 서명은 유료 Apple Developer Program 팀(`WDNVP9B8A9`) — TestFlight·앱스토어 업로드 가능.
-  App Store Connect에 업로드할 때마다 `project.yml`의 `CURRENT_PROJECT_VERSION`(빌드 번호)을 +1 한다.
+- TestFlight 업로드는 `main` 머지 시 `.github/workflows/testflight.yml`이 자동으로 한다.
+  빌드 번호는 App Store Connect의 최신 빌드 +1로 CI가 정해 주입하므로
+  `project.yml`의 `CURRENT_PROJECT_VERSION`은 로컬 빌드용 기본값일 뿐 손대지 않아도 된다.
+  (로컬에서 수동 업로드할 때만 직접 +1 한다.)
 
 ## 완료 기준
 
