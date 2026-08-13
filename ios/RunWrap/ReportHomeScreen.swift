@@ -149,7 +149,7 @@ struct ReportHomeContent: View {
             VStack(alignment: .leading, spacing: 7) {
                 Eyebrow(text: report.weekLabel)
                 Text("주간 리포트")
-                    .font(.system(size: 31, weight: .bold))
+                    .font(RR.display(33))
                     .foregroundStyle(RR.text)
             }
             Spacer()
@@ -456,7 +456,7 @@ struct ReportHomeContent: View {
             }
             .padding(.top, 8)
 
-            BatteryGauge(level: battery.level, tint: battery.tone.color)
+            BatteryGauge(level: battery.level)
                 .padding(.top, 6)
 
             Divider().overlay(RR.line).padding(.top, 14)
@@ -878,7 +878,7 @@ struct EmptyReportScreen: View {
                 VStack(alignment: .leading, spacing: 7) {
                     Eyebrow(text: "This week")
                     Text("주간 리포트")
-                        .font(.system(size: 30, weight: .bold))
+                        .font(RR.display(33))
                         .foregroundStyle(RR.text)
                 }
                 .padding(.bottom, 6)
@@ -958,11 +958,11 @@ struct EmptyReportScreen: View {
                 .padding(.top, 16)
             }
             .padding(18)
-            .rrCard(radius: 22)
+            .rrCard()
 
             Color.clear
                 .frame(height: 96)
-                .rrCard(radius: 22)
+                .rrCard()
         }
         .opacity(0.5)
     }

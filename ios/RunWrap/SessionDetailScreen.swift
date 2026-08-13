@@ -24,7 +24,7 @@ struct SessionDetailScreen: View {
                         Eyebrow(text: dateLine)
                         HStack(spacing: 8) {
                             Text(run.displayTitle)
-                                .font(.system(size: 26, weight: .bold))
+                                .font(RR.display(27))
                                 .foregroundStyle(RR.text)
                             if run.isIndoor { IndoorBadge() }
                         }
@@ -207,7 +207,7 @@ struct SessionDetailScreen: View {
             }
         }
         .padding(.horizontal, 18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     // MARK: 열 보정 페이스 (제안 문서 A1)
@@ -256,7 +256,7 @@ struct SessionDetailScreen: View {
                 .padding(.top, 10)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     private func heatSentence(_ heat: HeatEngine.Adjustment) -> Text {
@@ -297,7 +297,7 @@ struct SessionDetailScreen: View {
                 .padding(.top, 10)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     /// 사실 먼저, 위트는 뒤 — 톤별 문장은 Friel 5% 기준을 그대로 옮긴다
@@ -341,7 +341,7 @@ struct SessionDetailScreen: View {
                 .padding(.top, 14)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     private func splitsSentence(drift: Int, count: Int) -> Text {
@@ -383,7 +383,7 @@ struct SessionDetailScreen: View {
             .padding(.top, 12)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     // MARK: 주법 (러닝 다이내믹스) — 기획서 §4.8, 계획서 M4
@@ -439,7 +439,7 @@ struct SessionDetailScreen: View {
             .padding(.top, 13)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     private func dynamicsGrid(_ detail: WorkoutDetail) -> some View {
@@ -522,7 +522,7 @@ struct SessionDetailScreen: View {
                     .foregroundStyle(RR.text3)
             }
             .padding(16)
-            .rrCard(radius: 22)
+            .rrCard()
         }
         .buttonStyle(.plain)
     }

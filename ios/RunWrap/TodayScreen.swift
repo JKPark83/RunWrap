@@ -14,7 +14,7 @@ struct TodayScreen: View {
                 VStack(alignment: .leading, spacing: 7) {
                     Eyebrow(text: todayEyebrow)
                     Text("오늘, 달리기 좋을까")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(RR.display(33))
                         .foregroundStyle(RR.text)
                 }
                 .padding(.top, 18)
@@ -89,11 +89,11 @@ struct TodayScreen: View {
 
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(String(format: "%.0f", weather.apparentC))
-                            .font(.system(size: 52, weight: .heavy, design: .monospaced))
+                            .font(RR.numeral(56))
                             .foregroundStyle(RR.text)
                         Text("°C")
-                            .font(.system(size: 20, weight: .bold, design: .monospaced))
-                            .foregroundStyle(RR.text3)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(RR.text2)
                     }
                     .padding(.top, 4)
                 }
@@ -129,7 +129,7 @@ struct TodayScreen: View {
             .padding(.top, 2)
         }
         .padding(EdgeInsets(top: 18, leading: 18, bottom: 6, trailing: 18))
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     /// WMO 날씨 코드 → SF 심볼·한국어 상태 (Open-Meteo weather_code, WMO 4677 기준)
@@ -243,7 +243,7 @@ struct TodayScreen: View {
             .padding(.top, 13)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     /// 러닝 이름 → SF 심볼 — 엔진(RunName)은 UI를 모르므로 매핑은 화면 몫
@@ -286,7 +286,7 @@ struct TodayScreen: View {
                 .padding(.top, 14)
         }
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     // MARK: 안내·로딩
@@ -308,7 +308,7 @@ struct TodayScreen: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     private var loadingCard: some View {
@@ -320,7 +320,7 @@ struct TodayScreen: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
-        .rrCard(radius: 22)
+        .rrCard()
     }
 
     /// Open-Meteo 출처 표기 — CC BY 4.0 조건 (계획서 M6)

@@ -19,8 +19,8 @@ struct OnboardingScreen: View {
                 .shadow(color: RR.brand.opacity(0.28), radius: 12, y: 10)
 
             Text("손목에 쌓인 기록을,\n해석해 드립니다")
-                .font(.system(size: 30, weight: .bold))
-                .lineSpacing(4)
+                .font(RR.display(30))
+                .lineSpacing(6)
                 .foregroundStyle(RR.text)
                 .padding(.top, 26)
 
@@ -104,11 +104,11 @@ struct ProfileSetupScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer(minLength: 30)
 
-            Eyebrow(text: "Profile")
-            Text("어떤 러닝을 하시나요?")
-                .font(.system(size: 28, weight: .bold))
+            Eyebrow(text: "Step 2 of 2")
+            Text("어떤 러너이신가요?")
+                .font(RR.display(30))
                 .foregroundStyle(RR.text)
-                .padding(.top, 8)
+                .padding(.top, 10)
             Text("리포트 카드의 구성과 문장 톤을 여기에 맞춰 드려요. 설정에서 언제든 바꿀 수 있습니다.")
                 .font(.system(size: 14))
                 .lineSpacing(4)

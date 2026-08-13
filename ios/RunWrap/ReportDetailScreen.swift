@@ -225,6 +225,6 @@ struct ReportDetailScreen: View {
             .padding(.top, 14)
         }
         .padding(18)
-        .rrCard(radius: 20)
+        .rrCard()
     }
 }

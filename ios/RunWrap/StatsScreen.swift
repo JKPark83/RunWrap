@@ -20,7 +20,7 @@ struct StatsScreen: View {
                         VStack(alignment: .leading, spacing: 7) {
                             Eyebrow(text: "Monthly & history")
                             Text("통계")
-                                .font(.system(size: 31, weight: .bold))
+                                .font(RR.display(33))
                                 .foregroundStyle(RR.text)
                         }
                         .padding(.bottom, 6)
@@ -97,7 +97,7 @@ struct StatsScreen: View {
                         .font(.system(size: 12))
                         .foregroundStyle(RR.text3)
                     (Text(Format.km(stats.totalKm))
-                        .font(.system(size: 40, weight: .bold, design: .monospaced))
+                        .font(RR.numeral(48))
                         .foregroundStyle(RR.text)
                         + Text(" km")
                         .font(.system(size: 15))
@@ -205,7 +205,7 @@ struct StatsScreen: View {
         }
         .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
         .padding(15)
-        .rrCard(radius: 20)
+        .rrCard()
     }
 
     // MARK: 발전상 — 월별 추이 + 최고 기록 (기획서 §4.7, 계획서 M3)
@@ -335,7 +335,7 @@ struct StatsScreen: View {
                 }
             }
         }
-        .rrCard(radius: 20)
+        .rrCard()
     }
 
     private func recordDate(_ date: Date) -> String {
@@ -367,7 +367,7 @@ struct StatsScreen: View {
                     .foregroundStyle(RR.text3)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 28)
-                    .rrCard(radius: 20)
+                    .rrCard()
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(stats.runs.enumerated()), id: \.element.id) { index, run in
@@ -382,7 +382,7 @@ struct StatsScreen: View {
                         }
                     }
                 }
-                .rrCard(radius: 20)
+                .rrCard()
             }
         }
     }

@@ -41,7 +41,7 @@ struct RaceListScreen: View {
                 VStack(alignment: .leading, spacing: 7) {
                     Eyebrow(text: "Race calendar")
                     Text("대회")
-                        .font(.system(size: 31, weight: .bold))
+                        .font(RR.display(33))
                         .foregroundStyle(RR.text)
                     Text(caption(openCount: openCount, updatedAt: file.generatedAt))
                         .font(.system(size: 12))
@@ -182,7 +182,7 @@ struct RaceListScreen: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rrCard(radius: 18)
+        .rrCard()
     }
 
     // MARK: 빈 목록·실패
@@ -208,7 +208,7 @@ struct RaceListScreen: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 36)
-        .rrCard(radius: 18)
+        .rrCard()
     }
 
     private var failedNotice: some View {

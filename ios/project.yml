@@ -23,6 +23,16 @@ targets:
         buildPhase: resources
       - path: RunWrap/Cheonggyecheon.gpx
         buildPhase: resources
+      # 디스플레이 서체 2종 — 시안 v0.4. 둘 다 SIL OFL 1.1이라 라이선스 전문을 동봉한다.
+      # Black Han Sans: 화면 대제목(한글), Anton: 큰 숫자(거리·체감온도 등 라틴 숫자 전용)
+      - path: RunWrap/BlackHanSans-Regular.ttf
+        buildPhase: resources
+      - path: RunWrap/BlackHanSans-OFL.txt
+        buildPhase: resources
+      - path: RunWrap/Anton-Regular.ttf
+        buildPhase: resources
+      - path: RunWrap/Anton-OFL.txt
+        buildPhase: resources
     entitlements:
       path: RunWrap/RunWrap.entitlements
       properties:
@@ -33,6 +43,7 @@ targets:
       properties:
         UILaunchScreen: {}
         CFBundleDisplayName: 런미새
+        UIAppFonts: [BlackHanSans-Regular.ttf, Anton-Regular.ttf]   # 시안 v0.4 디스플레이 서체 (RR.display / RR.numeral)
         # 버전은 아래 settings의 MARKETING_VERSION·CURRENT_PROJECT_VERSION에서 주입한다 —
         # App Store Connect는 같은 빌드 번호를 두 번 받지 않으므로 업로드마다 후자를 올린다
         CFBundleShortVersionString: $(MARKETING_VERSION)

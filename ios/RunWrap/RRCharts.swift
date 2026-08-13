@@ -533,36 +533,65 @@ struct ZoneBarView: View {
 
 // MARK: - 체력 배터리 게이지
 
-/// 가로 배터리 모양 잔량 게이지 — 몸통(잔량 채움) + 오른쪽 단자 + 25/50/75 눈금
+/// 가로 배터리 모양 잔량 게이지 — 몸통을 10칸으로 나눠 잔량만큼 칸을 채우고
+/// 오른쪽에 단자를 붙인다. 실제 배터리 인디케이터의 관습을 그대로 따르는 표현이라
+/// 숫자를 읽지 않아도 "몇 칸 남았는지"로 잔량이 먼저 보인다.
+///
+/// 색은 톤(tint)을 그대로 쓰지 않고 잔량 구간으로 정한다 — 배터리 관습상
+/// 넉넉하면 초록, 부족하면 노랑·빨강이라 톤 색(brand 등)을 쓰면 오히려 헷갈린다.
 struct BatteryGauge: View {
     let level: Int          // 0–100
-    let tint: Color
+
+    /// 칸 개수 — 10칸이면 한 칸이 10%라 눈으로 세기 쉽다
+    private let cellCount = 10
+
+    /// 잔량 구간별 색: 50% 이상 초록 / 20% 이상 노랑 / 그 아래 빨강.
+    /// 배터리 인디케이터 관습(20% 이하가 경고)에 맞춘 경계라 BatteryEngine의
+    /// 톤 경계와는 일부러 다르다 — 여기서 말하는 건 "충전 상태"지 훈련 판정이 아니다.
+    private var fillColor: Color {
+        switch level {
+        case 50...: RR.pos
+        case 20..<50: RR.warn
+        default: RR.dang
+        }
+    }
+
+    /// 채워진 칸 수 — 0%가 아니면 최소 1칸은 남겨 "완전 방전"과 구분한다
+    private var filledCells: Int {
+        guard level > 0 else { return 0 }
+        return max(1, min(cellCount, Int((Double(level) / 100 * Double(cellCount)).rounded())))
+    }
 
     var body: some View {
         HStack(spacing: 3) {
             GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(RR.barFill.opacity(0.55))
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(tint)
-                        .frame(width: max(10, (geo.size.width - 8) * CGFloat(level) / 100))
-                        .padding(4)
-                    ForEach([0.25, 0.5, 0.75], id: \.self) { tick in
-                        Rectangle()
-                            .fill(RR.bg.opacity(0.5))
-                            .frame(width: 1.5)
-                            .padding(.vertical, 4)
-                            .offset(x: geo.size.width * tick)
+                let inset: CGFloat = 3
+                let gap: CGFloat = 2.5
+                let inner = geo.size.width - inset * 2
+                let cellW = (inner - gap * CGFloat(cellCount - 1)) / CGFloat(cellCount)
+
+                HStack(spacing: gap) {
+                    ForEach(0..<cellCount, id: \.self) { index in
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                            .fill(index < filledCells ? fillColor : RR.barFill.opacity(0.45))
+                            .frame(width: max(2, cellW))
                     }
                 }
-                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(RR.line))
+                .padding(inset)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(RR.surface2.opacity(0.5)))
+                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(RR.line, lineWidth: 1.2))
             }
-            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+            // 배터리 단자
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                 .fill(RR.line)
-                .frame(width: 5, height: 18)
+                .frame(width: 3.5, height: 10)
         }
-        .frame(height: 44)
+        .frame(height: 26)
+        .accessibilityElement()
+        .accessibilityLabel("남은 체력")
+        .accessibilityValue("\(level) 퍼센트")
     }
 }

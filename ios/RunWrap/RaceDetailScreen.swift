@@ -51,7 +51,7 @@ struct RaceDetailScreen: View {
                 RegisterBadge(status: entry.status)
             }
             Text(race.name)
-                .font(.system(size: 26, weight: .bold))
+                .font(RR.display(27))
                 .lineSpacing(5)
                 .foregroundStyle(RR.text)
         }
@@ -93,7 +93,7 @@ struct RaceDetailScreen: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .rrCard(radius: 20)
+        .rrCard()
     }
 
     private var dateLine: String {

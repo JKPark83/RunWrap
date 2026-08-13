@@ -254,7 +254,7 @@ struct SettingsScreen: View {
                 .foregroundStyle(RR.text2)
                 .padding(.horizontal, 4)
             VStack(spacing: 0) { rows() }
-                .rrCard(radius: 20)
+                .rrCard()
         }
     }
 

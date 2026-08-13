@@ -23,7 +23,7 @@ struct CourseScreen: View {
                 VStack(alignment: .leading, spacing: 7) {
                     Eyebrow(text: "보급 가이드")
                     Text("코스, 미리 짚어 드려요")
-                        .font(.system(size: 26, weight: .bold))
+                        .font(RR.display(27))
                         .foregroundStyle(RR.text)
                 }
                 .padding(.top, 18)
