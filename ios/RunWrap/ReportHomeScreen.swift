@@ -197,7 +197,6 @@ struct ReportHomeContent: View {
             .padding(.top, 8)
             .padding(.bottom, 26)
         }
-        .defaultScrollAnchor(.bottom)
         .background(RR.bg.ignoresSafeArea())
     }
 
