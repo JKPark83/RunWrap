@@ -44,20 +44,11 @@ struct WeeklyReport {
         var paceDeltaSec: Double { previousPaceSec - recentPaceSec }  // 양수면 빨라짐
     }
 
-    /// 다이어트 모드 칼로리 카드 (기획서 §4.5) — 이번 주 합계 + 6주 차트.
-    /// 판정 지표가 아니라 집계라 톤이 없다. 칼로리 표본이 전혀 없으면 nil.
-    struct DietCard {
-        let weekKcal: Double       // 이번 달력 주 소모 합계
-        let changePct: Double?     // 지난주 대비 (지난주 표본 있을 때만)
-        let weeks: [WeekBar]       // 기록 전체 달력 주, 최소 6주 (km 필드에 kcal을 담는다)
-    }
-
     let weekLabel: String          // "2026년 8월 2째주" — 그 주 목요일 기준 (Format.weekLabel)
     let dateRange: String          // "8.3 – 8.9"
     let distance: DistanceCard?
     let acwr: AcwrCard?
     let efficiency: EfficiencyCard?
-    let diet: DietCard?            // 노출 여부는 화면이 goal로 분기한다 (엔진은 프로필을 모른다)
     let streakWeeks: Int           // 주 1회 이상 달린 ISO 주 연속 개수
     let weekRunCount: Int          // 이번 달력 주 러닝 횟수 (streak 카드 캡션용)
 
@@ -99,7 +90,6 @@ extension ReportEngine {
                             distance: distanceCard(runs, calendar: calendar, currentWeek: week),
                             acwr: acwrCard(runs),
                             efficiency: efficiencyCard(runs),
-                            diet: dietCard(runs, calendar: calendar, currentWeek: week),
                             streakWeeks: Self.streakWeeks(runs: runs, now: now),
                             weekRunCount: runs.filter { week.contains($0.start) }.count)
     }
@@ -182,30 +172,6 @@ extension ReportEngine {
                                            changePct: change, referenceHR: referenceHR)
     }
 
-    private func dietCard(_ runs: [RunSummary], calendar: Calendar,
-                          currentWeek: DateInterval) -> WeeklyReport.DietCard? {
-        func weekKcal(back: Int) -> Double {
-            let start = calendar.date(byAdding: .weekOfYear, value: -back, to: currentWeek.start)!
-            let end = calendar.date(byAdding: .weekOfYear, value: 1, to: start)!
-            return runs.filter { $0.start >= start && $0.start < end }
-                .compactMap(\.calories).reduce(0, +)
-        }
-        let current = weekKcal(back: 0)
-        guard current > 0 else { return nil }  // 이번 주 칼로리 표본이 없으면 미노출
-        let previous = weekKcal(back: 1)
-
-        let span = Self.chartWeekSpan(runs, calendar: calendar, currentWeek: currentWeek)
-        let weeks: [WeeklyReport.WeekBar] = (0..<span).reversed().enumerated().map { index, back in
-            let start = calendar.date(byAdding: .weekOfYear, value: -back, to: currentWeek.start)!
-            return WeeklyReport.WeekBar(label: Format.weekLabel(weekStart: start),
-                                        km: weekKcal(back: back), isCurrent: back == 0, index: index)
-        }
-        return WeeklyReport.DietCard(weekKcal: current,
-                                     changePct: previous > 0
-                                         ? (current - previous) / previous * 100 : nil,
-                                     weeks: weeks)
-    }
-
     // MARK: - 헬퍼 (ReportEngine의 private 헬퍼와 동일 정의)
 
     /// 막대 차트에 그릴 달력 주 수 — 가장 오래된 기록의 주부터 이번 주까지, 최소 6주
@@ -235,18 +201,7 @@ extension ReportEngine {
     }
 }
 
-// MARK: - 다이어트 모드: streak · 몸무게 추이 (기획서 §4.5, 계획서 M2)
-
-/// 몸무게 추이 카드 — 주 단위 평균 시리즈와 변화량. 다이어트 모드 전용이라
-/// 감량이면 improving, 증량이면 caution으로 톤을 매긴다 (색·라벨은 Theme이 결정).
-struct WeightTrend {
-    let tone: RRTone
-    let points: [Double]       // 주 평균 kg (오래된 → 최신, 표본 있는 주만)
-    let pointLabels: [String]  // points와 병행 — "8월 2째주" (탭 콜아웃·축 라벨용)
-    let currentKg: Double      // 최신 주 평균
-    let deltaKg: Double?       // spanWeeks주 전 대비 변화량 (비교할 주가 있을 때만)
-    let spanWeeks: Int         // 비교 구간 주 수 — "N주 전보다 …" 문장용
-}
+// MARK: - streak · 주간 추이 골격
 
 extension ReportEngine {
     /// 주 1회 이상 달린 ISO 주가 이어지는 개수 — now가 속한 주부터 거꾸로 센다.
@@ -270,26 +225,7 @@ extension ReportEngine {
         return count
     }
 
-    /// 몸무게 샘플 → ISO 주 단위 평균 + 4주 전 대비 변화량.
-    /// 미노출 가드(가정): 최근 8주 측정 3회 미만이면 nil — 오픈 이슈 #9.
-    /// 4주 전 주에 측정이 없으면 그보다 오래된 가장 가까운 주와 비교한다(체중계는 매주 안 올라간다).
-    static func weightTrend(samples: [(date: Date, kg: Double)], now: Date) -> WeightTrend? {
-        guard let series = weeklyTrendSeries(
-            samples: samples.map { (date: $0.date, value: $0.kg) },
-            now: now, windowDays: 56) else { return nil }
-        // ±0.2kg 이내는 일상 변동으로 보고 유지 판정 (가정)
-        let tone: RRTone = switch series.delta {
-        case .some(let d) where d <= -0.2: .improving
-        case .some(let d) where d >= 0.2: .caution
-        default: .steady
-        }
-        return WeightTrend(tone: tone, points: series.points,
-                           pointLabels: series.weekStarts.map { Format.weekLabel(weekStart: $0) },
-                           currentKg: series.current, deltaKg: series.delta,
-                           spanWeeks: series.spanWeeks)
-    }
-
-    /// 몸무게·VO₂max 추이가 공유하는 골격 — ISO 주 평균 시리즈 + 4주 전 대비 변화량
+    /// VO₂max·HRR 추이가 공유하는 골격 — ISO 주 평균 시리즈 + 4주 전 대비 변화량
     private struct WeeklyTrendSeries {
         let points: [Double]       // 주 평균 (오래된 → 최신, 표본 있는 주만)
         let weekStarts: [Date]     // points와 병행하는 주 시작일
@@ -299,7 +235,7 @@ extension ReportEngine {
     }
 
     /// 창 안 표본 3개 미만이면 nil. 4주 전 주에 표본이 없으면 그보다 오래된
-    /// 가장 가까운 주와 비교한다 (체중계도, VO₂max 추정도 매주 기록되지 않는다).
+    /// 가장 가까운 주와 비교한다 (VO₂max 추정도, HRR도 매주 기록되지 않는다).
     private static func weeklyTrendSeries(samples: [(date: Date, value: Double)],
                                           now: Date, windowDays: Double) -> WeeklyTrendSeries? {
         var calendar = Calendar(identifier: .iso8601)

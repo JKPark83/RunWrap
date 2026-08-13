@@ -18,8 +18,6 @@ final class HealthStore: ObservableObject {
     @Published private(set) var state: State = .idle
     /// 체력 배터리용 활력징후 — 러닝 목록과 별개로 실패해도 리포트는 뜬다
     @Published private(set) var vitals: VitalsSnapshot?
-    /// 몸무게 추이(다이어트 카드)용 최근 8주 표본 — 주 단위 평균은 엔진이 계산한다
-    @Published private(set) var bodyMass: [(date: Date, kg: Double)] = []
     /// 심폐 체력 카드용 최근 12주 VO₂max 표본 (ml/kg/min) — 주 단위 평균은 엔진이 계산한다
     @Published private(set) var vo2Max: [(date: Date, value: Double)] = []
     /// 최근 2주 비러닝 운동 — 주간 리포트 보조 문장 재료. ACWR에는 절대 섞지 않는다 (제안 문서 A3)
@@ -38,7 +36,6 @@ final class HealthStore: ObservableObject {
     private func fillWithDemoData() {
         state = .loaded(DemoData.runs)
         vitals = DemoData.vitals
-        bodyMass = DemoData.bodyMass
         vo2Max = DemoData.vo2Max
         crossTrainings = DemoData.crossTrainings
         hrrTrend = DemoData.hrrTrend
@@ -61,14 +58,6 @@ final class HealthStore: ObservableObject {
         } catch {
             state = .failed(error.localizedDescription)
         }
-    }
-
-    /// 다이어트 목표를 고른 사용자에게만 몸무게 읽기를 요청 — 기능별 권한 분리
-    /// (HealthPermissions.diet). 목표 선택 직후(온보딩·설정)에서 부른다.
-    func requestDietAccess() async {
-        guard !DemoMode.isActive, HKHealthStore.isHealthDataAvailable() else { return }
-        try? await store.requestAuthorization(toShare: [], read: HealthPermissions.diet)
-        bodyMass = await fetchBodyMass()
     }
 
     func load() async {
@@ -95,7 +84,6 @@ final class HealthStore: ObservableObject {
             }
             state = .loaded(summaries)
             vitals = await fetchVitals()
-            bodyMass = await fetchBodyMass()
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
             hrrTrend = await fetchHrrTrend()
@@ -336,15 +324,6 @@ final class HealthStore: ObservableObject {
         let total = merged.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) }
         guard total >= 3_600 else { return nil }  // 1시간 미만이면 수면 기록으로 보지 않는다
         return total / 3_600
-    }
-
-    /// 최근 8주 몸무게 표본 — 다이어트 카드의 재료 (계획서 M2)
-    private func fetchBodyMass(now: Date = .now) async -> [(date: Date, kg: Double)] {
-        let samples = (try? await quantitySamples(HKQuantityType(.bodyMass),
-                                                  from: now.addingTimeInterval(-56 * 86_400),
-                                                  to: now)) ?? []
-        return samples.map { (date: $0.startDate,
-                              kg: $0.quantity.doubleValue(for: .gramUnit(with: .kilo))) }
     }
 
     /// 최근 12주 심박 회복(HRR) 표본 — 심폐 체력 카드의 보조 지표 재료 (제안 문서 B1).

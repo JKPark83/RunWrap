@@ -4,10 +4,13 @@ import SwiftUI
 /// 이후 마일스톤의 알림 토글·목표 입력도 이 화면에 추가된다.
 struct SettingsScreen: View {
     @EnvironmentObject private var health: HealthStore
-    @AppStorage(ProfileKey.goal) private var goalRaw = RunGoal.training.rawValue
-    @AppStorage(ProfileKey.level) private var levelRaw = RunLevel.experienced.rawValue
+    @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
+    @AppStorage(ProfileKey.purposes) private var purposesRaw = ""
+    @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    /// 다시 진단받기 — 온보딩 설문을 시트로 다시 띄운다 (기획서 §7)
+    @State private var isRediagnosing = false
     // 알림 (계획서 M8) — 기본값은 NotificationScheduler.rescheduleWeekly의 폴백과 같아야 한다
     @AppStorage(NotifyKey.workoutEnabled) private var workoutNotify = false
     @AppStorage(NotifyKey.weeklyEnabled) private var weeklyNotify = false
@@ -27,23 +30,24 @@ struct SettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                // 레벨은 설문 결과라 여기서 직접 고르지 않는다 — 다시 진단받아야 바뀐다.
+                // 손으로 올릴 수 있게 하면 게이트가 의미를 잃고, 감당 못 할 지표를 보게 된다 (기획서 §7)
+                section(title: "내 레벨") {
+                    currentLevelRow
+                }
                 section(title: "러닝 목적") {
-                    ForEach(RunGoal.allCases, id: \.self) { goal in
-                        optionRow(label: goal.label, caption: goal.caption,
-                                  isSelected: goalRaw == goal.rawValue) {
-                            goalRaw = goal.rawValue
-                            // 몸무게 읽기는 다이어트 목적 전용 — 이때만 추가 권한 요청
-                            if goal == .diet { Task { await health.requestDietAccess() } }
+                    ForEach(RunPurpose.allCases, id: \.self) { purpose in
+                        let selected = RunPurpose.decode(purposesRaw)
+                        optionRow(label: purpose.label,
+                                  caption: selected.contains(purpose) ? "선택됨" : " ",
+                                  isSelected: selected.contains(purpose)) {
+                            togglePurpose(purpose)
                         }
                     }
                 }
-                section(title: "러닝 레벨") {
-                    ForEach(RunLevel.allCases, id: \.self) { level in
-                        optionRow(label: level.label, caption: level.caption,
-                                  isSelected: levelRaw == level.rawValue) {
-                            levelRaw = level.rawValue
-                        }
-                    }
+                // 주간 목표 — 성장 XP의 주간 보너스 분모이자 홈 목표 칩의 기준 (기획서 §5)
+                section(title: "주간 러닝 목표") {
+                    weeklyGoalRow
                 }
                 // 목표 레이스 — 훈련 가이드(계획서 M7)의 진단 대상. 없음이면 카드 자체가 꺼진다
                 section(title: "목표 레이스") {
@@ -105,6 +109,13 @@ struct SettingsScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .navigationTitle("설정")
         .navigationBarTitleDisplayMode(.inline)
+        // 다시 진단받기 — 설문을 처음부터 다시 받는다.
+        // 이전 답을 프리필하지 않는 건 의도다: 원답은 저장하지 않고 판정 결과만 남기며,
+        // 다시 진단하는 이유는 그때와 지금이 달라졌기 때문이다 (기획서 §7)
+        .sheet(isPresented: $isRediagnosing) {
+            OnboardingFlowScreen(onFinish: { isRediagnosing = false })
+                .environmentObject(health)
+        }
         // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다
         .onChange(of: demoMode) { _, _ in
             Task { await health.load() }
@@ -132,6 +143,57 @@ struct SettingsScreen: View {
                 Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
             }
         }
+    }
+
+    /// 현재 레벨 + 다시 진단받기 — 레벨 변경의 유일한 경로 (기획서 §7)
+    private var currentLevelRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(RunnerLevel(rawValue: levelRaw)?.label ?? RunnerLevel.beginner.label)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text("설문 결과로 정해져요. 실력이 늘면 앱이 먼저 승급을 제안합니다")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Button("다시 진단") { isRediagnosing = true }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(RR.brand)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    /// 주간 목표 횟수 — 1~7회. 성장 보너스와 홈 목표 칩이 이 값을 분모로 쓴다
+    private var weeklyGoalRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("주 \(weeklyGoal)회")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text("채우면 새가 자라는 보너스를 받아요")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Stepper("", value: $weeklyGoal, in: 1...7)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    /// 목적 복수 선택 토글 — 최소 1개는 남긴다 (전부 끄면 문장 강조점을 정할 수 없다)
+    private func togglePurpose(_ purpose: RunPurpose) {
+        var selected = RunPurpose.decode(purposesRaw)
+        if let index = selected.firstIndex(of: purpose) {
+            guard selected.count > 1 else { return }
+            selected.remove(at: index)
+        } else {
+            selected.append(purpose)
+        }
+        purposesRaw = RunPurpose.encode(selected)
     }
 
     /// 외부 링크 행 — optionRow와 같은 레이아웃, 우측만 링크 표시
