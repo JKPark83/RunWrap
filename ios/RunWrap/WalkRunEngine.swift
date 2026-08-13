@@ -22,14 +22,9 @@ enum WalkRunEngine {
         let weeklyGoal: Int
 
         /// "걷기 2분 · 뛰기 3분 × 5세트".
-        /// 사다리에 0.5분 단위가 있어 정수는 "2분", 반 분은 "3.5분"으로 나눠 찍는다
-        private func minutes(_ value: Double) -> String {
-            value == value.rounded() ? String(format: "%.0f", value)
-                                     : String(format: "%.1f", value)
-        }
-
+        /// 분 표기(정수/반 분)는 카드의 metric과 같아야 해서 `Format.walkRunMinutes`를 공유한다
         var headline: String {
-            "걷기 \(minutes(walkMinutes))분 · 뛰기 \(minutes(runMinutes))분 × \(sets)세트"
+            "걷기 \(Format.walkRunMinutes(walkMinutes))분 · 뛰기 \(Format.walkRunMinutes(runMinutes))분 × \(sets)세트"
         }
 
         /// "걷뛰 3주차"

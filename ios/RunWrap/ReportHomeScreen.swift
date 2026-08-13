@@ -10,6 +10,9 @@ struct ReportHomeScreen: View {
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
+    @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
+    @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @State private var tab: ReportTab = .thisWeek
 
     /// 리포트 탭 세그먼트 — 통계 탭을 흡수한 자리 (§6)
@@ -48,6 +51,10 @@ struct ReportHomeScreen: View {
                                           form: FormTrend.compute(runs: runs, now: Date()),
                                           guide: trainingGuide(runs: runs, level: level,
                                                                batteryTone: battery?.tone),
+                                          walkRun: WalkRunEngine.plan(
+                                              cycleStartedAt: cycleStartedAt,
+                                              weeklyGoal: weeklyGoal,
+                                              runs: runs, now: Date()),
                                           segment: segment)
                             .refreshable { await health.load() }
                     case .progress:
@@ -67,6 +74,17 @@ struct ReportHomeScreen: View {
             ForEach(ReportTab.allCases, id: \.self) { Text($0.label).tag($0) }
         }
         .pickerStyle(.segmented)
+    }
+
+    /// 걷뛰 사이클 시작 시각 — 없으면 nil을 줘서 카드를 아예 내지 않는다.
+    /// 홈(성장)은 같은 상황에서 `.distantPast`로 떨어뜨리지만 여기서는 그러면 안 된다 —
+    /// 성장은 "기록 전체를 세는" 쪽이 유리한 반면, 걷뛰는 경과 주차가 곧 처방 강도라
+    /// 먼 과거를 넣으면 8주차(뛰기 5분)가 나와 입문자에게 과한 처방이 된다.
+    /// 표본이 아니라 기준점이 없는 경우지만, 판단 근거가 없으면 내지 않는 원칙은 같다
+    private var cycleStartedAt: Date? {
+        if cycleStartedAtRaw > 0 { return Date(timeIntervalSince1970: cycleStartedAtRaw) }
+        if onboardedAtRaw > 0 { return Date(timeIntervalSince1970: onboardedAtRaw) }
+        return nil
     }
 
     /// 훈련 가이드 — 목표 레이스를 설정했을 때만 계산한다 (계획서 M7).
@@ -99,6 +117,8 @@ struct ReportHomeContent: View {
     var form: FormTrend? = nil
     /// 훈련 가이드 — 훈련 모드 + 목표 레이스 설정 시에만 값이 온다 (계획서 M7)
     var guide: TrainingGuide? = nil
+    /// 걷뛰 처방 — 런린이 전용 (§4). 사이클 시작 시각이 없으면 엔진이 nil을 준다
+    var walkRun: WalkRunEngine.Plan? = nil
     /// 샘플 리포트 시트에서는 상세 이동 대신 배너를 단다
     var isSample = false
     /// [이번 주 | 발전상] 세그먼트 — 샘플 시트에서는 넘기지 않아 nil이다
@@ -119,6 +139,12 @@ struct ReportHomeContent: View {
                     batteryCard(battery)
                 } else if !isSample {
                     batteryHintCard
+                }
+
+                // 걷뛰는 런린이에게서 걷어낸 지표들(ACWR·EF·VO₂max·주법)의 자리를 대신 채운다.
+                // 그래서 위쪽 — 배터리 바로 다음 — 에 둔다 (§4 "더하는 차별화")
+                if let walkRun, ReportGate.shows(.walkRun, level: level) {
+                    walkRunCard(walkRun)
                 }
 
                 if let distance = report.distance, ReportGate.shows(.distance, level: level) {
@@ -649,6 +675,69 @@ struct ReportHomeContent: View {
 
     // MARK: 훈련 가이드 카드 (Riegel 진단 + 주간 처방) — 기획서 §4.9, 계획서 M7
 
+    /// 걷뛰 카드 — 런린이가 오늘 그대로 따라 할 수 있는 한 세션 처방 (§4).
+    /// 수치를 감춘 다른 런린이 카드와 달리 여기서는 분·세트를 그대로 보여준다 —
+    /// 해석해야 하는 지표가 아니라 실행하는 지시라서 숫자가 곧 내용이다.
+    private func walkRunCard(_ plan: WalkRunEngine.Plan) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardHeader(icon: "figure.walk", title: "걷뛰 프로그램", code: "START",
+                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.walkRun)
+
+            Text(plan.headline)
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(RR.text)
+                .lineSpacing(4)
+                .padding(.top, 13)
+
+            Text("\(plan.weekBadge) · 한 번에 \(Int(plan.totalMinutes))분")
+                .font(.system(size: 13))
+                .foregroundStyle(RR.text2)
+                .padding(.top, 7)
+
+            Divider().overlay(RR.line).padding(.top, 14)
+
+            // 걷기·뛰기 비율 막대 — 주차가 오를수록 뛰기(브랜드색)가 걷기를 밀어낸다.
+            // 8주차는 걷기가 0이라 막대가 통째로 뛰기가 된다
+            walkRunRatioBar(plan).padding(.top, 14)
+
+            HStack(spacing: 8) {
+                metric(label: "걷기", value: Format.walkRunMinutes(plan.walkMinutes),
+                       unit: "분", color: RR.text2)
+                metric(label: "뛰기", value: Format.walkRunMinutes(plan.runMinutes),
+                       unit: "분", color: RR.brand)
+                metric(label: "세트", value: "\(plan.sets)", unit: "회", color: RR.text)
+            }
+            .padding(.top, 13)
+
+            Text(plan.progressLine)
+                .font(.system(size: 12.5))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
+        }
+        .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
+        .rrCard()
+    }
+
+    /// 한 세트 안의 걷기:뛰기 시간 비율 막대
+    private func walkRunRatioBar(_ plan: WalkRunEngine.Plan) -> some View {
+        let total = plan.walkMinutes + plan.runMinutes
+        return GeometryReader { geo in
+            HStack(spacing: 3) {
+                // 걷기가 0인 8주차에는 막대를 그리지 않는다 (폭 0짜리 조각을 남기지 않으려고)
+                if plan.walkMinutes > 0 {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(RR.brandSoft)
+                        .frame(width: max(0, (geo.size.width - 3) * (plan.walkMinutes / total)))
+                }
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(RR.brand)
+            }
+        }
+        .frame(height: 10)
+        .accessibilityElement()
+        .accessibilityLabel("걷기 \(Format.walkRunMinutes(plan.walkMinutes))분, 뛰기 \(Format.walkRunMinutes(plan.runMinutes))분 비율")
+    }
+
     private func trainingGuideCard(_ guide: TrainingGuide) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "target", title: "훈련 가이드", code: "COACH",
@@ -800,6 +889,7 @@ private enum CardInfoText {
     static let weight = "건강 앱의 몸무게 기록을 주 평균으로 묶어 4주 전과 비교해요. 하루 단위 출렁임은 대부분 수분이라 주 평균으로 봐야 진짜 방향이 보여요. 주 0.5kg 안팎의 완만한 감량이 오래가는 페이스예요."
     static let streak = "주 1회 이상 달린 주가 몇 주째 이어지는지 세요. 거리보다 리듬의 지표라, 많이 달리는 것보다 끊기지 않는 게 먼저예요."
     static let guide = "최근 기록으로 목표 레이스 기록을 예측(Riegel 공식)하고 이번 주 훈련 구성을 제안해요. 예측이 목표보다 빠르면 순항 중이고, 느리면 주간 거리부터 차근히 올리면 돼요."
+    static let walkRun = "걷기와 뛰기를 번갈아 하며 8주에 걸쳐 뛰는 시간을 늘려가는 입문 프로그램이에요. 총 25분은 그대로 두고 걷는 시간을 뛰는 시간으로 바꿔가요. 이번 주에 몇 번 뛰었는지가 아니라 시작한 지 몇 주가 지났는지로 정해지니, 한 주 쉬어도 처방이 뒤로 밀리지 않아요."
 }
 
 // MARK: - 빈 상태
