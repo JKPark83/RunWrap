@@ -195,6 +195,13 @@ enum Format {
 
     static func km(_ value: Double) -> String { String(format: "%.1f", value) }
 
+    /// 걷뛰 분 — 정수는 "2", 반 분은 "3.5". 사다리에 0.5분 단위가 있어 나눠 찍는다.
+    /// 엔진의 `headline`과 카드의 metric이 같은 표기를 쓰도록 여기 둔다 (WalkRunEngine)
+    static func walkRunMinutes(_ value: Double) -> String {
+        value == value.rounded() ? String(format: "%.0f", value)
+                                 : String(format: "%.1f", value)
+    }
+
     /// "4,120" — 천 단위 구분 정수 (칼로리 카드)
     static func kcal(_ value: Double) -> String {
         let formatter = NumberFormatter()

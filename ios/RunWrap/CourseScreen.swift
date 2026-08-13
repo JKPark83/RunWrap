@@ -1,55 +1,64 @@
+import CoreLocation
 import MapKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// '코스' 탭 — GPX 코스를 올리면 급수·화장실·편의점을 "몇 km 지점"으로 짚어 준다
-/// (기획서 §4.13, 계획서 M12-3). 코스 파일은 기기 밖으로 나가지 않는다 —
-/// 번들 POI 데이터와 온디바이스 매칭만 한다.
+/// '코스' 탭 — 급수·화장실·편의점을 짚어 준다 (기획서 §4.13, 계획서 M12-3).
+/// 위치도 코스 파일도 기기 밖으로 나가지 않는다 — 번들 POI와 온디바이스 매칭만 한다.
+///
+/// **두 가지 모드.** 들어오면 먼저 **현재 위치** 기준으로 주변 보급을 보여주고,
+/// GPX를 올리면 **코스** 기준("몇 km 지점")으로 바뀐다. 둘을 한 화면에 둔 이유는
+/// 묻는 게 결국 같아서다 — "물 어디서 마시지". 다만 답의 단위가 달라
+/// (직선 몇 m / 코스 몇 km) 엔진과 행 표기를 나눠 둔다.
 struct CourseScreen: View {
+    /// 모드는 상태가 아니라 결과에서 파생된다 — 코스 결과가 있으면 코스, 없으면 주변
+    private enum Mode { case nearby, course }
+
     @StateObject private var store = CoursePOIStore()
+    /// 보급 지점은 100m 단위가 의미를 가져 날씨(km)보다 정밀한 위치를 요청한다
+    @StateObject private var location = LocationProvider(accuracy: kCLLocationAccuracyNearestTenMeters)
     @State private var course: [GeoPoint] = []
     @State private var courseName = ""
     @State private var result: CourseSupplyEngine.Result?
+    @State private var nearby: NearbySupplyEngine.Result?
     @State private var notice: String?
     @State private var showImporter = false
-    @State private var showGPXGuide = false
     /// 보급 종류 필터 — 켜진 종류만 지도·리스트에 남긴다.
     /// 기본값은 셋 다 켬(= 전체 표시)이라 필터를 모르는 사용자도 종전과 같은 화면을 본다.
     /// 마지막 하나는 끌 수 없다 — 전부 끄면 빈 화면이 되고, "전체 보기"는 셋 다 켠 상태다
     @State private var kindFilter: Set<CoursePOI.Kind> = [.water, .toilet, .convenience]
     /// 마지막 코스 파일명 — 파일 자체는 Application Support에 캐시해 재진입 시 유지
     @AppStorage("lastCourseName") private var lastCourseName = ""
-    @Environment(\.openURL) private var openURL
+
+    /// 주변 검색 반경 — 뛰어서 몇 분 거리. 1km면 왕복 10분 남짓이라 "들를 만한" 상한이다
+    private static let nearbyRadius: Double = 1_000
+
+    private var mode: Mode { result == nil ? .nearby : .course }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 7) {
-                    Eyebrow(text: "보급 가이드")
-                    Text("코스, 미리 짚어 드려요")
-                        .font(RR.display(27))
-                        .foregroundStyle(RR.text)
-                }
-                .padding(.top, 18)
+                header
 
                 if case .failed = store.state {
                     noticeCard("보급 데이터를 불러오지 못했어요",
                                message: "앱을 껐다 다시 열어 주세요. 계속 그러면 재설치가 필요할 수 있어요.",
                                symbol: "exclamationmark.triangle")
                 } else if let result {
-                    mapCard(result)
-                    supplyListCard(result)
+                    courseMapCard(result)
+                    courseListCard(result)
                     if !result.matches.contains(where: { $0.poi.kind == .water }) {
                         waterGapNote
                     }
                     uploadButtons(compact: true)
                     attribution
-                } else if let notice {
-                    noticeCard("코스를 읽지 못했어요", message: notice, symbol: "map")
-                    uploadButtons(compact: false)
                 } else {
-                    introCard
+                    if let notice {
+                        noticeCard("코스를 읽지 못했어요", message: notice, symbol: "map")
+                    }
+                    nearbySection
                     uploadButtons(compact: false)
+                    attribution
                 }
             }
             .padding(.horizontal, 18)
@@ -68,12 +77,150 @@ struct CourseScreen: View {
             }
             apply(data: data, name: url.deletingPathExtension().lastPathComponent)
         }
-        .sheet(isPresented: $showGPXGuide) { gpxGuideSheet }
         .task {
             await store.load()
             restoreLastCourse()
             analyze()
+            // 코스가 복원됐다면 주변 검색은 건너뛴다 — 화면에 안 쓸 위치를 굳이 받지 않는다
+            if result == nil {
+                location.request()
+                // 위치를 이미 갖고 들어온 경우(탭 재진입) onChange가 안 울려서 여기서 한 번 돌린다
+                searchNearby()
+            }
         }
+        .onChange(of: location.state) { _, _ in searchNearby() }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Eyebrow(text: "보급 가이드")
+            Text(mode == .course ? "코스, 미리 짚어 드려요" : "지금 근처, 짚어 드려요")
+                .font(RR.display(27))
+                .foregroundStyle(RR.text)
+        }
+        .padding(.top, 18)
+    }
+
+    // MARK: 현재 위치 모드
+
+    @ViewBuilder
+    private var nearbySection: some View {
+        switch location.state {
+        case .idle, .loading:
+            locatingCard
+        case .denied:
+            noticeCard("위치를 쓸 수 없어요",
+                       message: "설정 앱 → 개인정보 보호 및 보안 → 위치 서비스에서 런미새를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
+                       symbol: "location.slash")
+        case .failed:
+            noticeCard("위치를 못 받았어요",
+                       message: "실내나 지하에서는 위치를 잡기 어려울 수 있어요. 잠시 뒤 다시 들어와 주세요.",
+                       symbol: "location.slash")
+        case .located:
+            if let nearby {
+                nearbyMapCard(nearby)
+                nearbyListCard(nearby)
+                if !nearby.matches.contains(where: { $0.poi.kind == .water }) {
+                    waterGapNote
+                }
+            } else {
+                // 위치는 받았는데 POI가 아직 안 올라온 찰나 — 로딩과 같은 카드로 덮는다
+                locatingCard
+            }
+        }
+    }
+
+    private var locatingCard: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+            Text("지금 계신 곳을 찾고 있어요")
+                .font(.system(size: 13.5))
+                .foregroundStyle(RR.text2)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
+    }
+
+    private func nearbyMapCard(_ nearby: NearbySupplyEngine.Result) -> some View {
+        let center = CLLocationCoordinate2D(latitude: nearby.center.lat,
+                                            longitude: nearby.center.lon)
+        return ZStack(alignment: .bottomLeading) {
+            // 반경 1km가 화면에 다 들어오도록 지름(2km)보다 조금 넉넉하게 잡는다
+            Map(initialPosition: .region(MKCoordinateRegion(
+                    center: center,
+                    latitudinalMeters: nearby.radiusMeters * 2.4,
+                    longitudinalMeters: nearby.radiusMeters * 2.4)),
+                interactionModes: [.pan, .zoom]) {
+                UserAnnotation()
+                ForEach(Array(visibleNearby(nearby).enumerated()), id: \.offset) { _, match in
+                    Annotation("", coordinate: CLLocationCoordinate2D(latitude: match.poi.lat,
+                                                                     longitude: match.poi.lon)) {
+                        poiPin(match.poi.kind)
+                    }
+                }
+            }
+            .frame(height: 300)
+            // 위치가 바뀌면 카메라를 다시 맞춘다 (코스 지도의 .id와 같은 이유)
+            .id("\(nearby.center.lat),\(nearby.center.lon)")
+
+            // 정수 km로 찍는다 — 아래 리스트 문구("반경 1km 안에서는…")와 표기를 맞춘다
+            mapBadge("현재 위치 · 반경 \(Int(nearby.radiusMeters / 1_000))km")
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(RR.line))
+    }
+
+    private func nearbyListCard(_ nearby: NearbySupplyEngine.Result) -> some View {
+        let visible = visibleNearby(nearby)
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("지금 근처 보급 지점")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(RR.text)
+
+            kindFilterBar { kind in nearby.matches.filter { $0.poi.kind == kind }.count }
+
+            if nearby.matches.isEmpty {
+                Text("반경 1km 안에서는 보급 지점을 못 찾았어요. 물통을 챙기시는 편이 마음 편하겠어요.")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text2)
+            } else if visible.isEmpty {
+                // 근처엔 보급이 있는데 지금 켠 종류만 없는 경우 — 위 문장과 원인이 다르다
+                Text("고르신 종류는 이 근처에 없어요. 위 버튼으로 다른 종류를 켜 보세요.")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text2)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(visible.enumerated()), id: \.offset) { index, match in
+                        if index > 0 { Divider().overlay(RR.line) }
+                        supplyRow(lead: "\(Int(match.meters.rounded()))m",
+                                  poi: match.poi,
+                                  detail: "\(match.poi.kind.label) · 직선거리")
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
+    }
+
+    private func visibleNearby(_ nearby: NearbySupplyEngine.Result) -> [NearbySupplyEngine.Match] {
+        nearby.matches.filter { kindFilter.contains($0.poi.kind) }
+    }
+
+    /// 위치와 POI가 **둘 다** 준비된 순간에만 검색한다.
+    /// POI는 `.task`에서 await한 뒤라 이미 있고, 늦게 오는 쪽은 위치다 —
+    /// 그래서 호출 지점이 둘(로드 직후 1회 + 위치 onChange)이고 가드는 한 벌이다
+    private func searchNearby() {
+        guard case .located(let coordinate) = location.state,
+              case .loaded(let file) = store.state else { return }
+        nearby = NearbySupplyEngine.search(
+            center: GeoPoint(lat: coordinate.latitude, lon: coordinate.longitude),
+            pois: file.pois,
+            radiusMeters: Self.nearbyRadius)
     }
 
     // MARK: 코스 적용 · 분석
@@ -108,40 +255,26 @@ struct CourseScreen: View {
         courseName = lastCourseName
     }
 
+    /// 올린 코스를 지우고 현재 위치 모드로 돌아간다 — 캐시 파일까지 지워야 재진입 시 안 살아난다
+    private func clearCourse() {
+        try? FileManager.default.removeItem(at: Self.lastCourseURL)
+        lastCourseName = ""
+        course = []
+        courseName = ""
+        result = nil
+        notice = nil
+        if case .located = location.state { searchNearby() } else { location.request() }
+    }
+
     private static var lastCourseURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("LastCourse.gpx")
     }
 
-    // MARK: 내장 추천 코스
+    // MARK: 코스 지도 · 리스트
 
-    /// 서울 인기 코스 6종 — 제3자 GPX가 아니라 OSM 보행로(ODbL) 기반으로 자체 제작해 번들.
-    /// 거리 라벨은 제작 시점 실측값이라 GPX와 함께 갱신한다
-    private struct BundledCourse {
-        let file: String   // 번들 리소스 이름 (.gpx)
-        let name: String   // 표시 이름 — 지도 라벨에도 쓰인다
-        let km: String     // 메뉴 안내용 거리
-    }
-
-    private static let bundledCourses: [BundledCourse] = [
-        .init(file: "YeouidoLoop", name: "여의도 한 바퀴", km: "9.7"),
-        .init(file: "BanpoJamsu", name: "반포 잠수교 왕복", km: "5.1"),
-        .init(file: "SeokchonLake", name: "석촌호수 한 바퀴", km: "2.6"),
-        .init(file: "OlympicPark", name: "올림픽공원 한 바퀴", km: "4.4"),
-        .init(file: "NamsanNorth", name: "남산 북측순환로 왕복", km: "5.2"),
-        .init(file: "Cheonggyecheon", name: "청계천 종주", km: "5.9"),
-    ]
-
-    private func loadBundled(_ bundled: BundledCourse) {
-        guard let url = Bundle.main.url(forResource: bundled.file, withExtension: "gpx"),
-              let data = try? Data(contentsOf: url) else { return }
-        apply(data: data, name: bundled.name)
-    }
-
-    // MARK: 지도
-
-    private func mapCard(_ result: CourseSupplyEngine.Result) -> some View {
+    private func courseMapCard(_ result: CourseSupplyEngine.Result) -> some View {
         let coords = course.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         return ZStack(alignment: .bottomLeading) {
             Map(initialPosition: .region(RouteSnapshot.region(for: coords)),
@@ -152,43 +285,27 @@ struct CourseScreen: View {
                 ForEach(Array(visibleMatches(result).enumerated()), id: \.offset) { _, match in
                     Annotation("", coordinate: CLLocationCoordinate2D(latitude: match.poi.lat,
                                                                      longitude: match.poi.lon)) {
-                        ZStack {
-                            Circle().fill(match.poi.kind.color)
-                            Image(systemName: match.poi.kind.symbol)
-                                .font(.system(size: 7, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: 16, height: 16)
-                        .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
+                        poiPin(match.poi.kind)
                     }
                 }
             }
             .frame(height: 300)
             .id(courseName + String(course.count))  // 새 코스 업로드 시 카메라 리셋
 
-            Text("\(courseName) · \(Format.km(result.totalKm))km")
-                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.black.opacity(0.5),
-                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .padding(12)
+            mapBadge("\(courseName) · \(Format.km(result.totalKm))km")
         }
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(RR.line))
     }
 
-    // MARK: 보급 리스트
-
-    private func supplyListCard(_ result: CourseSupplyEngine.Result) -> some View {
+    private func courseListCard(_ result: CourseSupplyEngine.Result) -> some View {
         let visible = visibleMatches(result)
         return VStack(alignment: .leading, spacing: 14) {
             Text("보급 지점")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(RR.text)
 
-            kindFilterBar(result)
+            kindFilterBar { kind in result.matches.filter { $0.poi.kind == kind }.count }
 
             if result.matches.isEmpty {
                 Text("코스 150m 안에서는 보급 지점을 못 찾았어요. 물통을 챙기시는 편이 마음 편하겠어요.")
@@ -205,7 +322,9 @@ struct CourseScreen: View {
                 VStack(spacing: 0) {
                     ForEach(Array(visible.enumerated()), id: \.offset) { index, match in
                         if index > 0 { Divider().overlay(RR.line) }
-                        supplyRow(match)
+                        supplyRow(lead: "\(Format.km(match.courseKm))km",
+                                  poi: match.poi,
+                                  detail: "\(match.poi.kind.label) · 코스에서 \(Int(match.detourMeters.rounded()))m")
                     }
                 }
             }
@@ -221,12 +340,15 @@ struct CourseScreen: View {
         result.matches.filter { kindFilter.contains($0.poi.kind) }
     }
 
+    // MARK: 공용 조각 — 두 모드가 같은 컴포넌트를 쓴다
+
     /// 급수·화장실·편의점 필터 버튼 — 각각 아이콘 + 이름 + 개수.
-    /// 코스에 없는 종류는 버튼도 흐리게 두되 누를 수는 있게 한다 (없다는 사실 자체가 정보다)
-    private func kindFilterBar(_ result: CourseSupplyEngine.Result) -> some View {
+    /// 개수 세는 법만 모드마다 다르므로 클로저로 받는다.
+    /// 없는 종류는 버튼도 흐리게 두되 누를 수는 있게 한다 (없다는 사실 자체가 정보다)
+    private func kindFilterBar(count: @escaping (CoursePOI.Kind) -> Int) -> some View {
         HStack(spacing: 8) {
             ForEach([CoursePOI.Kind.water, .toilet, .convenience], id: \.self) { kind in
-                let count = result.matches.filter { $0.poi.kind == kind }.count
+                let total = count(kind)
                 let isOn = kindFilter.contains(kind)
                 Button {
                     toggleKind(kind)
@@ -236,18 +358,18 @@ struct CourseScreen: View {
                             .font(.system(size: 11, weight: .semibold))
                         Text(kind.label)
                             .font(.system(size: 12, weight: .semibold))
-                        Text("\(count)")
+                        Text("\(total)")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .opacity(0.75)
                     }
-                    .foregroundStyle(isOn ? .white : kind.color.opacity(count > 0 ? 1 : 0.45))
+                    .foregroundStyle(isOn ? .white : kind.color.opacity(total > 0 ? 1 : 0.45))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
                     .background(isOn ? kind.color : kind.softColor,
                                 in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(kind.label) \(count)개")
+                .accessibilityLabel("\(kind.label) \(total)개")
                 .accessibilityValue(isOn ? "표시 중" : "숨김")
             }
         }
@@ -264,27 +386,28 @@ struct CourseScreen: View {
         }
     }
 
-    private func supplyRow(_ match: CourseSupplyEngine.Match) -> some View {
+    /// 보급 한 줄 — 맨 앞 값만 모드마다 다르다 (주변은 "320m", 코스는 "2.4km")
+    private func supplyRow(lead: String, poi: CoursePOI, detail: String) -> some View {
         HStack(spacing: 12) {
-            Text("\(Format.km(match.courseKm))km")
+            Text(lead)
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundStyle(RR.text)
                 .frame(width: 56, alignment: .leading)
 
             ZStack {
-                Circle().fill(match.poi.kind.softColor)
-                Image(systemName: match.poi.kind.symbol)
+                Circle().fill(poi.kind.softColor)
+                Image(systemName: poi.kind.symbol)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(match.poi.kind.color)
+                    .foregroundStyle(poi.kind.color)
             }
             .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(match.poi.name)
+                Text(poi.name)
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(RR.text)
                     .lineLimit(1)
-                Text("\(match.poi.kind.label) · 코스에서 \(Int(match.detourMeters.rounded()))m")
+                Text(detail)
                     .font(.system(size: 11.5))
                     .foregroundStyle(RR.text3)
             }
@@ -293,142 +416,65 @@ struct CourseScreen: View {
         .padding(.vertical, 9)
     }
 
-    // MARK: 안내 · 버튼 · 출처
-
-    private var introCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: "map")
-                .font(.system(size: 24))
-                .foregroundStyle(RR.brand)
-            Text("아직 받은 코스가 없어요")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(RR.text)
-            Text("달릴 코스를 GPX 파일로 올려 주시면, 몇 km 지점에서 물을 마시고 화장실을 들르고 보급을 살 수 있는지 미리 짚어 드릴게요. 서울 인기 코스는 아래 '추천 코스'에서 바로 고르셔도 됩니다. 코스 파일은 기기 밖으로 나가지 않아요.")
-                .font(.system(size: 12.5))
-                .lineSpacing(4)
-                .foregroundStyle(RR.text2)
+    private func poiPin(_ kind: CoursePOI.Kind) -> some View {
+        ZStack {
+            Circle().fill(kind.color)
+            Image(systemName: kind.symbol)
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white)
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .rrCard()
+        .frame(width: 16, height: 16)
+        .overlay(Circle().strokeBorder(.white, lineWidth: 1.5))
     }
+
+    private func mapBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.5),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(12)
+    }
+
+    // MARK: 버튼 · 안내 · 출처
 
     private func uploadButtons(compact: Bool) -> some View {
         VStack(spacing: 10) {
             Button {
-                showGPXGuide = true
+                showImporter = true
             } label: {
-                Label("카카오맵으로 GPX 만들기",
-                      systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                Label(compact ? "다른 코스 올리기" : "GPX 코스 올리기",
+                      systemImage: "square.and.arrow.up")
                     .font(.system(size: 13.5, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent)
 
-            HStack(spacing: 10) {
-                Button {
-                    showImporter = true
-                } label: {
-                    Label(compact ? "다른 코스 올리기" : "GPX 파일 올리기",
-                          systemImage: "square.and.arrow.up")
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.borderedProminent)
-
-                Menu {
-                    ForEach(Self.bundledCourses, id: \.file) { bundled in
-                        Button("\(bundled.name) · \(bundled.km)km") { loadBundled(bundled) }
-                    }
-                } label: {
-                    Text("추천 코스")
+            if compact {
+                Button(action: clearCourse) {
+                    Label("현재 위치로 보기", systemImage: "location")
                         .font(.system(size: 13.5, weight: .semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                 }
                 .buttonStyle(.bordered)
+            } else {
+                Text("달릴 코스를 GPX로 올리시면 '몇 km 지점'까지 짚어 드려요. 코스 파일과 위치는 기기 밖으로 나가지 않아요.")
+                    .font(.system(size: 11.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text3)
+                    .padding(.horizontal, 4)
             }
-        }
-    }
-
-    /// 카카오맵 GPX 안내 시트 — 카카오맵엔 GPX 내보내기가 없어 무료 변환 웹 Map2GPX를
-    /// 한 번 거친다(2026-08 기준, map2gpx.com 가이드). 전 과정이 폰에서 끝나는 게 장점.
-    private var gpxGuideSheet: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 7) {
-                Eyebrow(text: "GPX 만들기")
-                Text("카카오맵으로 코스를 그려 오세요")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(RR.text)
-            }
-            .padding(.top, 26)
-
-            VStack(alignment: .leading, spacing: 14) {
-                guideStep(1, "카카오맵 앱에서 도보 길찾기로 출발지 → 경유지 → 도착지를 찍어 코스를 만듭니다.")
-                guideStep(2, "공유 메뉴의 'URL 복사'로 경로 링크(kko.to)를 복사합니다.")
-                guideStep(3, "Map2GPX에 링크를 붙여넣어 GPX를 내려받은 뒤, 여기서 'GPX 파일 올리기'로 올려 주세요.")
-            }
-
-            Text("카카오맵엔 GPX 내보내기가 없어서 무료 변환 사이트 Map2GPX를 한 번 거칩니다. 폰에서 다 끝나요.")
-                .font(.system(size: 11.5))
-                .lineSpacing(3)
-                .foregroundStyle(RR.text3)
-
-            HStack(spacing: 10) {
-                Button(action: openKakaoMap) {
-                    Label("카카오맵 열기", systemImage: "map")
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.bordered)
-
-                Link(destination: URL(string: "https://map2gpx.com")!) {
-                    Label("Map2GPX 열기", systemImage: "arrow.up.right.square")
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 22)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RR.bg.ignoresSafeArea())
-        .presentationDetents([.medium])
-    }
-
-    /// 카카오맵 앱을 열고, 없으면 앱스토어로 보낸다 — 커스텀 스킴은 실패해도 조용해서 폴백 필수
-    private func openKakaoMap() {
-        openURL(URL(string: "kakaomap://open")!) { accepted in
-            if !accepted {
-                openURL(URL(string: "https://apps.apple.com/kr/app/id304608425")!)
-            }
-        }
-    }
-
-    private func guideStep(_ number: Int, _ text: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text("\(number)")
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(RR.brand)
-                .frame(width: 22, height: 22)
-                .background(RR.brandSoft, in: Circle())
-            Text(text)
-                .font(.system(size: 13))
-                .lineSpacing(4)
-                .foregroundStyle(RR.text2)
         }
     }
 
     /// 음수대 데이터 공백 안내 — 서울·한강 중심이라 없는 게 아니라 "모르는" 것일 수 있다
     /// (기획서 §6 제약 · §4.13 미노출 가드)
     private var waterGapNote: some View {
-        Text("음수대 정보는 아직 서울·한강 공원 중심이에요. 이 코스에 안 보여도 실제로는 있을 수 있으니, 미덥지 않으면 물통을 챙겨 주세요.")
+        Text("음수대 정보는 아직 서울·한강 공원 중심이에요. 여기 안 보여도 실제로는 있을 수 있으니, 미덥지 않으면 물통을 챙겨 주세요.")
             .font(.system(size: 11.5))
             .lineSpacing(3)
             .foregroundStyle(RR.text3)

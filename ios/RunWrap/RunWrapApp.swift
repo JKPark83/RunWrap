@@ -6,12 +6,15 @@ import SwiftUI
 @main
 struct RunWrapApp: App {
     @StateObject private var health = HealthStore()
+    /// 도감 — 파일에서 한 번 읽어 앱 수명 동안 들고 간다 (기획서 §5)
+    @StateObject private var collection = CollectionStore()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(health)
+                .environmentObject(collection)
                 .task {
                     // 기동 시 옵저버 재등록 — 워치 러닝이 끝나면 백그라운드에서 깨워준다
                     let health = health
