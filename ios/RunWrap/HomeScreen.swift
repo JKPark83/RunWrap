@@ -1,12 +1,26 @@
 import SwiftUI
+import CoreLocation
 
-/// 홈 탭 — 새 성장 스테이지가 주인공 (기획서 v0.7 §6, 시안 1f/1g/1h).
+/// 홈 탭 — 새 성장 스테이지와 **오늘의 판단 카드** (기획서 v0.8 §6, 시안 1f/1g/1h).
 ///
-/// 첫 화면의 주인공을 지표에서 새로 바꿨다. 글자는 브리핑 1~2문장과 칩 라벨이 전부이고,
+/// 새가 첫 화면의 주인공이고, 그 아래가 "오늘 뛸까 말까"에 답하는 판단 카드다.
 /// 상세 지표·차트는 전부 리포트 탭의 일이다. 데이터 가공은 하지 않는다 —
-/// XP·단계는 `GrowthEngine`, 브리핑 문장은 `HomeBriefingEngine`, 승급 판정은 `LevelEngine`이 낸다.
+/// XP·단계는 `GrowthEngine`, 오늘의 판단은 `TodayVerdictEngine`, 승급 판정은 `LevelEngine`이 낸다.
+///
+/// 날씨(위치)를 여기서 조회한다. '오늘'이 탭에서 시트로 내려오면서 앱의 예보 창구가
+/// 홈으로 옮겨왔기 때문이다 — 수분 알람 예약(계획서 M9)도 함께 따라왔다.
 struct HomeScreen: View {
+    /// 판단 카드의 배터리·권장 세션 줄에서 리포트 탭으로 넘어가는 통로 (탭 전환은 RootView 몫)
+    var onSelectReport: () -> Void = {}
+
     @EnvironmentObject private var health: HealthStore
+    @Environment(\.openURL) private var openURL
+
+    @StateObject private var location = LocationProvider()
+    @State private var weather: CurrentWeather?
+    @State private var weatherFailed = false
+    @State private var showsToday = false
+    @State private var showsLastRun = false
 
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     /// 주간 목표 — 온보딩 Q5에서 항상 먼저 쓰이므로 이 기본값은 사실상 안전망이다.
@@ -34,6 +48,51 @@ struct HomeScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        // 위치 권한은 홈 첫 진입에서 묻는다 — 날씨 줄이 홈의 재료가 됐으니
+        // 사용자가 '오늘'을 찾아 들어오기를 기다릴 이유가 없다 (기획서 v0.8 §6)
+        .task { location.request() }
+        .onChange(of: location.state) { _, newState in
+            guard case .located(let coordinate) = newState else { return }
+            Task { await loadWeather(coordinate) }
+        }
+        .sheet(isPresented: $showsToday) { todaySheet }
+    }
+
+    /// '오늘'은 탭에서 시트로 내려왔다 — 날씨 줄을 눌렀을 때만 펼친다 (기획서 v0.8 §6)
+    private var todaySheet: some View {
+        NavigationStack {
+            TodayScreen()
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("닫기") { showsToday = false }
+                    }
+                }
+        }
+    }
+
+    private func loadWeather(_ coordinate: CLLocationCoordinate2D) async {
+        do {
+            let current = try await WeatherClient().current(latitude: coordinate.latitude,
+                                                            longitude: coordinate.longitude)
+            weather = current
+            // 수분 알람 갱신 (계획서 M9) — 날씨를 받아온 이 시점이 당일분 예약 트리거다.
+            // '오늘'이 시트가 된 뒤로 이 호출이 앱의 유일한 정기 트리거가 됐다
+            await NotificationScheduler.rescheduleHydration(forecastMaxC: current.forecastMaxC)
+        } catch {
+            weatherFailed = true
+        }
+    }
+
+    /// 화면이 쥐고 있는 위치·네트워크 상태를 엔진이 아는 값으로 접는다 (엔진은 둘 다 모른다)
+    private var weatherInput: TodayVerdictEngine.WeatherInput {
+        switch location.state {
+        case .denied: return .denied
+        case .failed: return .unavailable
+        default:
+            if let weather { return .current(weather) }
+            return weatherFailed ? .unavailable : .loading
+        }
     }
 
     @ViewBuilder
@@ -152,14 +211,16 @@ struct HomeScreen: View {
     @ViewBuilder
     private func loadedBody(runs: [RunSummary], growth: GrowthState, level: RunnerLevel,
                             promotion: RunnerLevel?, now: Date) -> some View {
-        let report = ReportEngine(now: now, level: level).weeklyReport(from: runs)
         let battery = health.vitals.flatMap { BatteryEngine.compute(vitals: $0, runs: runs, now: now) }
-        let briefing = HomeBriefingEngine.briefing(runs: runs,
-                                                   growth: growth,
-                                                   report: report,
-                                                   battery: battery,
-                                                   weeklyGoal: weeklyGoal,
-                                                   now: now)
+        let verdict = TodayVerdictEngine.verdict(runs: runs,
+                                                 battery: battery,
+                                                 weather: weatherInput,
+                                                 guide: trainingGuide(runs: runs, level: level,
+                                                                      batteryTone: battery?.tone,
+                                                                      now: now),
+                                                 hasRaceGoal: RaceDistance(rawValue: raceGoalRaw) != nil,
+                                                 weeklyGoal: weeklyGoal,
+                                                 now: now)
         // 승급 카드가 뜨면 새를 216 → 172로 줄여 카드 자리를 만든다 (시안 1h)
         let birdSize: CGFloat = promotion == nil ? 216 : 172
 
@@ -183,15 +244,11 @@ struct HomeScreen: View {
                         .padding(.top, 20)
                 }
 
-                if let briefing {
-                    Text(briefing)
-                        .font(.system(size: 14.5))
-                        .lineSpacing(14.5 * 0.55)
-                        .foregroundStyle(RR.text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(15)
-                        .rrCard()
-                        .padding(.top, 18)
+                if let verdict {
+                    VerdictCard(verdict: verdict, battery: battery, weather: weatherInput) { kind in
+                        tap(kind, runs: runs)
+                    }
+                    .padding(.top, 18)
                 }
 
                 chipRow(runs: runs, now: now)
@@ -202,6 +259,38 @@ struct HomeScreen: View {
             .padding(.bottom, 24)
         }
         .refreshable { await health.load() }
+        .navigationDestination(isPresented: $showsLastRun) {
+            if let last = runs.max(by: { $0.start < $1.start }) {
+                SessionDetailScreen(run: last)
+            }
+        }
+    }
+
+    /// 네 줄의 목적지 — 재료를 만든 화면으로 보낸다 (기획서 v0.8 §6).
+    /// 배터리·권장 세션은 둘 다 리포트 탭의 카드라 같은 곳으로 간다.
+    private func tap(_ kind: TodayVerdict.Line.Kind, runs: [RunSummary]) {
+        switch kind {
+        case .battery, .session:
+            onSelectReport()
+        case .weather:
+            // 권한을 거부한 상태에서는 앱 안에서 다시 물을 수 없다 — 설정으로 보낸다
+            if case .denied = location.state {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            } else {
+                showsToday = true
+            }
+        case .recovery:
+            showsLastRun = true
+        }
+    }
+
+    /// 주간 처방 — 리포트 탭과 같은 방식으로 만든다 (목표 레이스가 없으면 nil)
+    private func trainingGuide(runs: [RunSummary], level: RunnerLevel,
+                               batteryTone: RRTone?, now: Date) -> TrainingGuide? {
+        guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
+        return TrainingGuideEngine(now: now, level: level)
+            .guide(runs: runs, records: PersonalRecords.compute(runs: runs), race: race,
+                   goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil, batteryTone: batteryTone)
     }
 
     // MARK: - 스테이지 텍스트
@@ -378,6 +467,186 @@ struct HomeScreen: View {
 }
 
 // MARK: - 하위 뷰
+
+/// 오늘의 판단 카드 (기획서 v0.8 §6) — 판정 한 줄 + 그 판정의 재료 네 줄.
+///
+/// 위트는 제목줄이 맡는다 (브리핑 카드가 하던 몫). 재료 줄은 값이 있으면 그대로 보여주고,
+/// 없으면 숫자를 지어내지 않고 무엇을 하면 켜지는지만 말한다 — 판정·문구는 전부
+/// `TodayVerdictEngine`이 정하고 여기서는 색과 목적지만 붙인다.
+private struct VerdictCard: View {
+    let verdict: TodayVerdict
+    /// 타일 그림의 재료 — 문구는 전부 엔진이 낸 것을 쓰고, 여기서는 같은 값을 그림으로 한 번 더 보여준다
+    let battery: BatteryReport?
+    let weather: TodayVerdictEngine.WeatherInput
+    let onTap: (TodayVerdict.Line.Kind) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 배터리가 없으면 판정 자체가 없다 — 배지를 감추고 중립 문구만 남긴다
+            if let tone = verdict.tone {
+                ToneBadge(tone: tone)
+                    .padding(.bottom, 9)
+            }
+
+            Text(verdict.headline)
+                .font(RR.display(19))
+                .foregroundStyle(RR.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // 배터리·날씨는 눈으로 먼저 읽히는 값이라 글자 대신 타일 두 장으로 낸다.
+            // 남은 두 줄(권장 세션·회복 경과)은 문장이 곧 값이라 그대로 한 줄씩 둔다
+            HStack(spacing: 9) {
+                tile(verdict.battery) { batteryArt }
+                tile(verdict.weather) { weatherArt }
+            }
+            .padding(.top, 13)
+
+            Divider().overlay(RR.line).padding(.top, 13)
+            row(verdict.session)
+            Divider().overlay(RR.line)
+            row(verdict.recovery)
+        }
+        .padding(EdgeInsets(top: 15, leading: 15, bottom: 5, trailing: 15))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
+    }
+
+    // MARK: 타일 두 장
+
+    private func tile(_ line: TodayVerdict.Line, @ViewBuilder art: () -> some View) -> some View {
+        Button { onTap(line.kind) } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 4) {
+                    Text(line.label)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(RR.text3)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(RR.text3)
+                }
+                art()
+            }
+            .padding(EdgeInsets(top: 11, leading: 12, bottom: 12, trailing: 12))
+            // maxHeight를 열어 둬야 내용이 짧은 쪽(날씨)이 긴 쪽(배터리) 높이에 맞춰 늘어난다
+            .frame(maxWidth: .infinity, minHeight: 104, maxHeight: .infinity, alignment: .topLeading)
+            .background(RR.surface2, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 잔량 막대 + 큰 숫자 — 배터리는 "얼마나 남았나"가 한눈에 들어와야 하는 값이다
+    @ViewBuilder
+    private var batteryArt: some View {
+        if let battery {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("\(battery.level)")
+                        .font(RR.numeral(25))
+                        .foregroundStyle(battery.tone.color)
+                    Text(battery.statusLabel)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(RR.text2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                // 리포트 탭과 같은 게이지를 그대로 쓴다 — 칸 수로 잔량이 먼저 읽힌다
+                BatteryGauge(level: battery.level)
+            }
+        } else {
+            hintArt(symbol: "applewatch", line: verdict.battery)
+        }
+    }
+
+    /// 하늘 상태 아이콘 + 체감온도 + 복장 — '오늘' 시트의 세 카드를 한 장으로 줄인 요약
+    @ViewBuilder
+    private var weatherArt: some View {
+        switch weather {
+        case .current(let current):
+            let parts = TodayVerdictEngine.weatherParts(current, now: Date())
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    if let condition = WeatherCondition.of(current.weatherCode) {
+                        Image(systemName: condition.symbol)
+                            .font(.system(size: 21))
+                            .symbolRenderingMode(.multicolor)  // 시스템 멀티컬러 팔레트 — 색상 리터럴 아님
+                    }
+                    Text("\(Int(current.apparentC.rounded()))")
+                        .font(RR.numeral(25))
+                        .foregroundStyle(RR.text)
+                    Text("°C 체감")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(RR.text3)
+                }
+                if let outfit = parts.outfit {
+                    Text(parts.raining ? "비 · \(outfit)" : outfit)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(RR.text2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+            }
+        case .loading:
+            hintArt(symbol: "arrow.triangle.2.circlepath", line: verdict.weather)
+        case .denied:
+            hintArt(symbol: "location.slash", line: verdict.weather)
+        case .unavailable:
+            hintArt(symbol: "cloud.slash", line: verdict.weather)
+        }
+    }
+
+    /// 값이 없는 타일 — 숫자 자리를 비워 두고 무엇을 하면 켜지는지만 말한다
+    private func hintArt(symbol: String, line: TodayVerdict.Line) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 21))
+                .foregroundStyle(RR.text3)
+            Text(text(line))
+                .font(.system(size: 12))
+                .lineSpacing(2)
+                .foregroundStyle(RR.text3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func row(_ line: TodayVerdict.Line) -> some View {
+        Button { onTap(line.kind) } label: {
+            HStack(spacing: 10) {
+                Text(line.label)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+                    .frame(width: 66, alignment: .leading)
+
+                Text(text(line))
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(color(line))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func text(_ line: TodayVerdict.Line) -> String {
+        switch line.content {
+        case .value(let text), .hint(let text): text
+        }
+    }
+
+    /// 유도 문구는 값이 아니므로 한 단계 흐리게 — 값 줄만 톤 색을 입는다
+    private func color(_ line: TodayVerdict.Line) -> Color {
+        if case .hint = line.content { return RR.text3 }
+        return line.tone?.color ?? RR.text
+    }
+}
 
 /// XP 게이지 — 시안 210×8, radius 4, surface2 바탕 + line 테두리, 안쪽 brand 채움
 private struct XpGauge: View {

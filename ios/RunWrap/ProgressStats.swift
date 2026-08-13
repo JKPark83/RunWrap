@@ -63,7 +63,9 @@ struct PersonalRecords {
         let label: String        // "5K" · "10K" · "하프" · "풀"
         let distanceKm: Double   // 공인 거리
         let timeSec: Double      // 공인 거리 환산 기록 (페이스 × D)
-        let date: Date           // 달성일
+        let run: RunSummary      // 기록을 세운 세션 — 목록에서 탭하면 이 세션 상세로 간다
+        /// 달성일 — 세션 시작 시각과 같다
+        var date: Date { run.start }
     }
 
     /// 공인 거리 4종 (km)
@@ -73,14 +75,14 @@ struct PersonalRecords {
 
     static func compute(runs: [RunSummary]) -> [Entry] {
         targets.compactMap { target in
-            let candidates = runs.compactMap { run -> (time: Double, date: Date)? in
+            let candidates = runs.compactMap { run -> (time: Double, run: RunSummary)? in
                 guard let km = run.distanceKm, let pace = run.paceSecPerKm,
                       km >= target.km, km <= target.km * 1.10 else { return nil }
-                return (time: pace * target.km, date: run.start)
+                return (time: pace * target.km, run: run)
             }
             guard let best = candidates.min(by: { $0.time < $1.time }) else { return nil }
             return Entry(label: target.label, distanceKm: target.km,
-                         timeSec: best.time, date: best.date)
+                         timeSec: best.time, run: best.run)
         }
     }
 }

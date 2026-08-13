@@ -318,32 +318,51 @@ struct StatsScreen: View {
     }
 
     private func recordsCard(_ records: [PersonalRecords.Entry]) -> some View {
-        VStack(spacing: 0) {
-            ForEach(Array(records.enumerated()), id: \.element.label) { index, entry in
-                HStack(spacing: 12) {
-                    Text(entry.label)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(RR.brand)
-                        .frame(width: 44, alignment: .center)
-                        .padding(.vertical, 5)
-                        .background(RR.brandSoft,
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    Text(Format.duration(entry.timeSec))
-                        .font(.system(size: 17, weight: .bold, design: .monospaced))
-                        .foregroundStyle(RR.text)
-                    Spacer()
-                    Text(recordDate(entry.date))
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(RR.text3)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            // 추이 차트 카드와 붙어 있어 제목이 없으면 무슨 목록인지 읽히지 않는다
+            Eyebrow(text: "내 PB 목록")
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.top, 14)
+            ForEach(Array(records.enumerated()), id: \.element.label) { index, entry in
+                NavigationLink {
+                    SessionDetailScreen(run: entry.run,
+                                        weeklyContext: weeklyContext(for: entry.run))
+                } label: {
+                    recordRow(entry)
+                }
+                .buttonStyle(.plain)
                 if index < records.count - 1 {
                     Divider().overlay(RR.line).padding(.leading, 66)
                 }
             }
         }
         .rrCard()
+    }
+
+    /// PB 한 줄 — 세션 목록 행과 같은 구성(내용 · 날짜 · 셰브런)으로 탭 가능함을 알린다
+    private func recordRow(_ entry: PersonalRecords.Entry) -> some View {
+        HStack(spacing: 12) {
+            Text(entry.label)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(RR.brand)
+                .frame(width: 44, alignment: .center)
+                .padding(.vertical, 5)
+                .background(RR.brandSoft,
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Text(Format.duration(entry.timeSec))
+                .font(.system(size: 17, weight: .bold, design: .monospaced))
+                .foregroundStyle(RR.text)
+            Spacer(minLength: 8)
+            Text(recordDate(entry.date))
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(RR.text3)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(RR.text3)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
     }
 
     private func recordDate(_ date: Date) -> String {

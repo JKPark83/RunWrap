@@ -20,10 +20,12 @@ struct TrainingGuideEngineTests {
         (0..<12).map { run(daysAgo: Double($0) * 2.3 + 1, km: 10) }
     }
 
+    /// Entry의 달성일(`date`)은 기록을 세운 세션의 시작 시각이라, 그 세션을 함께 만들어 넣는다.
     private func record(label: String, km: Double, timeSec: Double,
                         daysAgo: Double) -> PersonalRecords.Entry {
         PersonalRecords.Entry(label: label, distanceKm: km, timeSec: timeSec,
-                              date: now.addingTimeInterval(-daysAgo * 86_400))
+                              run: run(daysAgo: daysAgo, km: km,
+                                       paceSecPerKm: timeSec / km))
     }
 
     @Test("Riegel 예측 — 5K 25:00 기록이면 10K는 52:07로 예측한다")

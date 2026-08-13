@@ -91,28 +91,30 @@ struct RootView: View {
     }
 }
 
-/// 5탭 구조 — 홈 / 리포트 / 오늘 / 코스 / 대회 (기획서 v0.7 §6).
-/// 홈(새 성장)이 첫 탭으로 오고, 통계 탭은 리포트의 "발전상" 세그먼트로 흡수되어 사라졌다.
+/// 4탭 구조 — 홈 / 리포트 / 코스 / 대회 (기획서 v0.8 §6).
+/// '오늘'은 탭에서 빠져 홈 판단 카드의 날씨 줄에서 여는 시트가 됐다 —
+/// 날씨 한 줄이 홈으로 올라온 뒤로는 매일 탭을 하나 차지할 만큼 자주 볼 화면이 아니다.
 private struct MainTabs: View {
+    /// 판단 카드의 배터리·권장 세션 줄이 리포트 탭으로 넘기려면 선택 탭을 여기서 쥐어야 한다
+    @State private var selection = Tab.home
+
+    private enum Tab { case home, report, course, race }
+
     var body: some View {
-        TabView {
-            NavigationStack { HomeScreen() }
-                // 새 아이콘은 에셋이 아니라 Shape이라 Label(image:)를 못 쓴다 — 뷰로 직접 조립한다
-                .tabItem {
-                    Label {
-                        Text("홈")
-                    } icon: {
-                        BirdTabIcon()
-                    }
-                }
+        TabView(selection: $selection) {
+            NavigationStack { HomeScreen(onSelectReport: { selection = .report }) }
+                // 새 아이콘은 에셋이 아니라 Shape을 래스터라이즈한 이미지다 (BirdTabIcon 주석 참고)
+                .tabItem { Label { Text("홈") } icon: { BirdTabIcon.image } }
+                .tag(Tab.home)
             NavigationStack { ReportHomeScreen() }
                 .tabItem { Label("리포트", systemImage: "figure.run") }
-            NavigationStack { TodayScreen() }
-                .tabItem { Label("오늘", systemImage: "sun.max") }
+                .tag(Tab.report)
             NavigationStack { CourseScreen() }
                 .tabItem { Label("코스", systemImage: "map") }
+                .tag(Tab.course)
             NavigationStack { RaceListScreen() }
                 .tabItem { Label("대회", systemImage: "flag.checkered") }
+                .tag(Tab.race)
         }
     }
 }

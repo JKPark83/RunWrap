@@ -8,6 +8,30 @@ enum OutfitItem: String, CaseIterable, Equatable {
     case waterproofCap, waterproofJacket
     case thermalTop, thermalBottom, beanie, neckWarmer
     case sunCap, sunglasses, sunscreen
+
+    /// 노출 라벨 — 오늘 화면의 타일과 홈 판단 카드의 한 줄이 같은 표기를 쓰도록 한곳에 둔다.
+    /// 아이콘 매핑은 여전히 화면 몫이다 (엔진은 UI를 모른다)
+    var label: String {
+        switch self {
+        case .singlet: "싱글렛"
+        case .shortSleeve: "반팔 티"
+        case .longSleeve: "긴팔 티"
+        case .shorts: "반바지"
+        case .tights: "타이츠"
+        case .jacket: "자켓"
+        case .gloves: "장갑"
+        case .windbreaker: "바람막이"
+        case .waterproofCap: "방수 캡"
+        case .waterproofJacket: "방수 자켓"
+        case .thermalTop: "방한 상의"
+        case .thermalBottom: "방한 하의"
+        case .beanie: "비니"
+        case .neckWarmer: "넥워머"
+        case .sunCap: "러닝 캡"
+        case .sunglasses: "선글라스"
+        case .sunscreen: "선크림"
+        }
+    }
 }
 
 /// 복장 룰 — 체감온도 구간을 기본으로 습도·바람·강수·자외선·계절을 가산한다

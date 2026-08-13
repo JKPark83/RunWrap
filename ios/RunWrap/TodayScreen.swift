@@ -100,7 +100,7 @@ struct TodayScreen: View {
 
                 Spacer()
 
-                if let condition = Self.condition(weather.weatherCode) {
+                if let condition = WeatherCondition.of(weather.weatherCode) {
                     VStack(spacing: 7) {
                         Image(systemName: condition.symbol)
                             .font(.system(size: 38))
@@ -130,25 +130,6 @@ struct TodayScreen: View {
         }
         .padding(EdgeInsets(top: 18, leading: 18, bottom: 6, trailing: 18))
         .rrCard()
-    }
-
-    /// WMO 날씨 코드 → SF 심볼·한국어 상태 (Open-Meteo weather_code, WMO 4677 기준)
-    private static func condition(_ code: Int?) -> (symbol: String, label: String)? {
-        guard let code else { return nil }
-        return switch code {
-        case 0: ("sun.max.fill", "맑음")
-        case 1: ("sun.max.fill", "대체로 맑음")
-        case 2: ("cloud.sun.fill", "구름 조금")
-        case 3: ("cloud.fill", "흐림")
-        case 45, 48: ("cloud.fog.fill", "안개")
-        case 51...57: ("cloud.drizzle.fill", "이슬비")
-        case 61...67: ("cloud.rain.fill", "비")
-        case 71...77: ("cloud.snow.fill", "눈")
-        case 80...82: ("cloud.heavyrain.fill", "소나기")
-        case 85, 86: ("cloud.snow.fill", "소낙눈")
-        case 95...99: ("cloud.bolt.rain.fill", "뇌우")
-        default: ("cloud.fill", "흐림")
-        }
     }
 
     /// 자외선지수 등급 라벨 — WHO UV Index 구간 기준
@@ -336,6 +317,30 @@ struct TodayScreen: View {
     }
 }
 
+// MARK: - 날씨 상태 매핑
+
+/// WMO 날씨 코드 → SF 심볼·한국어 상태 (Open-Meteo weather_code, WMO 4677 기준).
+/// 홈 판단 카드의 날씨 타일과 '오늘' 시트가 같은 아이콘을 쓰도록 파일 밖으로 꺼내 뒀다
+enum WeatherCondition {
+    static func of(_ code: Int?) -> (symbol: String, label: String)? {
+        guard let code else { return nil }
+        return switch code {
+        case 0: ("sun.max.fill", "맑음")
+        case 1: ("sun.max.fill", "대체로 맑음")
+        case 2: ("cloud.sun.fill", "구름 조금")
+        case 3: ("cloud.fill", "흐림")
+        case 45, 48: ("cloud.fog.fill", "안개")
+        case 51...57: ("cloud.drizzle.fill", "이슬비")
+        case 61...67: ("cloud.rain.fill", "비")
+        case 71...77: ("cloud.snow.fill", "눈")
+        case 80...82: ("cloud.heavyrain.fill", "소나기")
+        case 85, 86: ("cloud.snow.fill", "소낙눈")
+        case 95...99: ("cloud.bolt.rain.fill", "뇌우")
+        default: ("cloud.fill", "흐림")
+        }
+    }
+}
+
 // MARK: - 복장 그리드
 
 /// 복장 아이템 타일 그리드 — 아이콘·라벨 매핑은 화면 몫 (OutfitRules는 UI를 모른다).
@@ -347,12 +352,11 @@ private struct OutfitGrid: View {
         let columns = [GridItem(.adaptive(minimum: 68), spacing: 9)]
         LazyVGrid(columns: columns, spacing: 12) {
             ForEach(items, id: \.self) { item in
-                let meta = Self.meta(item)
                 VStack(spacing: 7) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(RR.brandSoft)
-                        switch meta.icon {
+                        switch Self.icon(item) {
                         case .symbol(let name):
                             Image(systemName: name)
                                 .font(.system(size: 27, weight: .medium))
@@ -364,7 +368,7 @@ private struct OutfitGrid: View {
                         }
                     }
                     .frame(height: 62)
-                    Text(meta.label)
+                    Text(item.label)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(RR.text)
                         .lineLimit(1)
@@ -381,26 +385,27 @@ private struct OutfitGrid: View {
     }
 
     /// 같은 조합에 함께 나오는 아이템끼리는 심볼이 겹치지 않게 배정했다
-    /// (타이츠·방한 하의처럼 동시에 안 나오는 쌍만 심볼을 공유)
-    private static func meta(_ item: OutfitItem) -> (icon: TileIcon, label: String) {
+    /// (타이츠·방한 하의처럼 동시에 안 나오는 쌍만 심볼을 공유).
+    /// 라벨은 `OutfitItem.label`에 있다 — 홈 판단 카드와 같은 표기를 쓰기 위해서다
+    private static func icon(_ item: OutfitItem) -> TileIcon {
         switch item {
-        case .singlet: (.shape(.singlet), "싱글렛")
-        case .shortSleeve: (.symbol("tshirt"), "반팔 티")
-        case .longSleeve: (.symbol("tshirt.fill"), "긴팔 티")
-        case .shorts: (.shape(.shorts), "반바지")
-        case .tights: (.symbol("figure.run"), "타이츠")
-        case .jacket: (.symbol(firstAvailable("jacket.fill", "wind")), "자켓")
-        case .gloves: (.symbol("hand.raised.fill"), "장갑")
-        case .windbreaker: (.symbol("wind"), "바람막이")
-        case .waterproofCap: (.symbol("umbrella"), "방수 캡")
-        case .waterproofJacket: (.symbol("cloud.rain"), "방수 자켓")
-        case .thermalTop: (.symbol("tshirt.fill"), "방한 상의")
-        case .thermalBottom: (.symbol("figure.run"), "방한 하의")
-        case .beanie: (.symbol(firstAvailable("hat.cap.fill", "snowflake")), "비니")
-        case .neckWarmer: (.symbol("thermometer.snowflake"), "넥워머")
-        case .sunCap: (.symbol(firstAvailable("hat.cap.fill", "sun.max.fill")), "러닝 캡")
-        case .sunglasses: (.symbol("sunglasses.fill"), "선글라스")
-        case .sunscreen: (.symbol("drop.fill"), "선크림")
+        case .singlet: .shape(.singlet)
+        case .shortSleeve: .symbol("tshirt")
+        case .longSleeve: .symbol("tshirt.fill")
+        case .shorts: .shape(.shorts)
+        case .tights: .symbol("figure.run")
+        case .jacket: .symbol(firstAvailable("jacket.fill", "wind"))
+        case .gloves: .symbol("hand.raised.fill")
+        case .windbreaker: .symbol("wind")
+        case .waterproofCap: .symbol("umbrella")
+        case .waterproofJacket: .symbol("cloud.rain")
+        case .thermalTop: .symbol("tshirt.fill")
+        case .thermalBottom: .symbol("figure.run")
+        case .beanie: .symbol(firstAvailable("hat.cap.fill", "snowflake"))
+        case .neckWarmer: .symbol("thermometer.snowflake")
+        case .sunCap: .symbol(firstAvailable("hat.cap.fill", "sun.max.fill"))
+        case .sunglasses: .symbol("sunglasses.fill")
+        case .sunscreen: .symbol("drop.fill")
         }
     }
 

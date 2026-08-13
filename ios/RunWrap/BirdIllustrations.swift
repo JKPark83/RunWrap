@@ -603,12 +603,25 @@ private struct FlyingTailShape: Shape {
 // MARK: - 탭바 아이콘
 
 /// SVG 12(양날개 펼친 새): `M120 62l-22 26c-34-8-70 2-86 24 30-4 56 2 76 18l14 34 18-22 18 22 14-34c20-16 46-22 76-18-16-22-52-32-86-24z`
-/// `fill="currentColor"` 단색 실루엣이라 색은 호출부의 `.foregroundStyle`을 따른다.
-struct BirdTabIcon: View {
-    var body: some View {
-        BirdTabIconShape()
-            .aspectRatio(1, contentMode: .fit)
-    }
+///
+/// `tabItem`의 라벨에서는 Text와 Image만 인식된다 — Shape 뷰를 그대로 넘기면 실루엣이
+/// 뭉개지고 "홈" 글자까지 사라진다. 그래서 한 번 래스터라이즈해 템플릿 Image로 캐시하고,
+/// 색(선택/비선택)은 탭바가 정하게 둔다.
+@MainActor
+enum BirdTabIcon {
+    /// SF Symbol 탭 아이콘과 눈높이를 맞춘 한 변(pt). 원본이 240 정사각이라 정사각으로 그린다
+    private static let side: CGFloat = 28
+
+    static let image: Image = {
+        let renderer = ImageRenderer(
+            content: BirdTabIconShape()
+                .frame(width: side, height: side)
+                .foregroundStyle(.black)   // 템플릿이라 이 색은 버려진다
+        )
+        renderer.scale = 3
+        guard let rendered = renderer.uiImage else { return Image(systemName: "bird") }
+        return Image(uiImage: rendered).renderingMode(.template)
+    }()
 }
 
 private struct BirdTabIconShape: Shape {
