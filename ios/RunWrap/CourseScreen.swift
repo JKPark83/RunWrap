@@ -13,6 +13,10 @@ struct CourseScreen: View {
     @State private var notice: String?
     @State private var showImporter = false
     @State private var showGPXGuide = false
+    /// 보급 종류 필터 — 켜진 종류만 지도·리스트에 남긴다.
+    /// 기본값은 셋 다 켬(= 전체 표시)이라 필터를 모르는 사용자도 종전과 같은 화면을 본다.
+    /// 마지막 하나는 끌 수 없다 — 전부 끄면 빈 화면이 되고, "전체 보기"는 셋 다 켠 상태다
+    @State private var kindFilter: Set<CoursePOI.Kind> = [.water, .toilet, .convenience]
     /// 마지막 코스 파일명 — 파일 자체는 Application Support에 캐시해 재진입 시 유지
     @AppStorage("lastCourseName") private var lastCourseName = ""
     @Environment(\.openURL) private var openURL
@@ -145,7 +149,7 @@ struct CourseScreen: View {
                 MapPolyline(coordinates: coords)
                     .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
                                                          lineCap: .round, lineJoin: .round))
-                ForEach(Array(result.matches.enumerated()), id: \.offset) { _, match in
+                ForEach(Array(visibleMatches(result).enumerated()), id: \.offset) { _, match in
                     Annotation("", coordinate: CLLocationCoordinate2D(latitude: match.poi.lat,
                                                                      longitude: match.poi.lon)) {
                         ZStack {
@@ -178,23 +182,28 @@ struct CourseScreen: View {
     // MARK: 보급 리스트
 
     private func supplyListCard(_ result: CourseSupplyEngine.Result) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("보급 지점")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(RR.text)
-                Spacer()
-                kindSummary(result)
-            }
+        let visible = visibleMatches(result)
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("보급 지점")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(RR.text)
+
+            kindFilterBar(result)
 
             if result.matches.isEmpty {
                 Text("코스 150m 안에서는 보급 지점을 못 찾았어요. 물통을 챙기시는 편이 마음 편하겠어요.")
                     .font(.system(size: 12.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text2)
+            } else if visible.isEmpty {
+                // 코스엔 보급이 있는데 지금 켠 종류만 없는 경우 — 위 두 문장과 원인이 다르다
+                Text("고르신 종류는 이 코스에 없어요. 위 버튼으로 다른 종류를 켜 보세요.")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text2)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(result.matches.enumerated()), id: \.offset) { index, match in
+                    ForEach(Array(visible.enumerated()), id: \.offset) { index, match in
                         if index > 0 { Divider().overlay(RR.line) }
                         supplyRow(match)
                     }
@@ -204,6 +213,55 @@ struct CourseScreen: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .rrCard()
+    }
+
+    /// 켜진 종류만 남긴 매칭 — 지도와 리스트가 같은 값을 본다
+    private func visibleMatches(_ result: CourseSupplyEngine.Result)
+        -> [CourseSupplyEngine.Match] {
+        result.matches.filter { kindFilter.contains($0.poi.kind) }
+    }
+
+    /// 급수·화장실·편의점 필터 버튼 — 각각 아이콘 + 이름 + 개수.
+    /// 코스에 없는 종류는 버튼도 흐리게 두되 누를 수는 있게 한다 (없다는 사실 자체가 정보다)
+    private func kindFilterBar(_ result: CourseSupplyEngine.Result) -> some View {
+        HStack(spacing: 8) {
+            ForEach([CoursePOI.Kind.water, .toilet, .convenience], id: \.self) { kind in
+                let count = result.matches.filter { $0.poi.kind == kind }.count
+                let isOn = kindFilter.contains(kind)
+                Button {
+                    toggleKind(kind)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: kind.symbol)
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(kind.label)
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("\(count)")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .opacity(0.75)
+                    }
+                    .foregroundStyle(isOn ? .white : kind.color.opacity(count > 0 ? 1 : 0.45))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 9)
+                    .background(isOn ? kind.color : kind.softColor,
+                                in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(kind.label) \(count)개")
+                .accessibilityValue(isOn ? "표시 중" : "숨김")
+            }
+        }
+    }
+
+    /// 종류를 켜고 끈다. 마지막 하나는 끄지 않는다 —
+    /// 전부 꺼진 지도는 정보가 없고, 사용자가 원한 건 "고르기"이지 "비우기"가 아니다
+    private func toggleKind(_ kind: CoursePOI.Kind) {
+        if kindFilter.contains(kind) {
+            guard kindFilter.count > 1 else { return }
+            kindFilter.remove(kind)
+        } else {
+            kindFilter.insert(kind)
+        }
     }
 
     private func supplyRow(_ match: CourseSupplyEngine.Match) -> some View {
@@ -233,23 +291,6 @@ struct CourseScreen: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 9)
-    }
-
-    private func kindSummary(_ result: CourseSupplyEngine.Result) -> some View {
-        HStack(spacing: 8) {
-            ForEach([CoursePOI.Kind.water, .toilet, .convenience], id: \.self) { kind in
-                let count = result.matches.filter { $0.poi.kind == kind }.count
-                if count > 0 {
-                    HStack(spacing: 3) {
-                        Image(systemName: kind.symbol)
-                            .font(.system(size: 9, weight: .semibold))
-                        Text("\(count)")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    }
-                    .foregroundStyle(kind.color)
-                }
-            }
-        }
     }
 
     // MARK: 안내 · 버튼 · 출처

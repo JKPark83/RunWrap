@@ -3,7 +3,9 @@ import Foundation
 /// 번들 CoursePOI.json의 한 항목 — tools/course-poi 파이프라인 산출 포맷과 1:1.
 /// 필드명이 1글자(k/n/la/lo)인 것은 55,000건 JSON 용량 절약 때문 (계획서 M12-1).
 struct CoursePOI: Decodable, Equatable {
-    enum Kind: String, Decodable {
+    /// Hashable은 화면의 종류 필터(Set<Kind>)가 요구한다 — RawRepresentable로 자동 합성되지만
+    /// 의존을 명시해 둔다 (CourseScreen.kindFilter)
+    enum Kind: String, Decodable, Hashable, CaseIterable {
         case convenience = "c"  // 편의점
         case toilet = "t"       // 화장실
         case water = "w"        // 음수대
