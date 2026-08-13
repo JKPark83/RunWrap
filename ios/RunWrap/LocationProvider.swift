@@ -2,7 +2,10 @@ import Foundation
 import CoreLocation
 
 /// 현재 위치 1회 조회 — CLLocationManager WhenInUse 래퍼 (계획서 M6).
-/// HealthStore의 enum State 패턴을 따른다. 위치는 날씨 요청 좌표로만 쓰고 저장하지 않는다.
+/// HealthStore의 enum State 패턴을 따른다. 위치는 좌표를 쓰고 버릴 뿐 저장하지 않는다.
+///
+/// 정확도는 쓰는 쪽이 정한다. 날씨는 km면 충분하지만(격자 자체가 그 단위다),
+/// 코스 탭의 주변 보급은 300m 밖 음수대를 짚어야 해서 km 오차로는 순서가 뒤집힌다.
 @MainActor
 final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
     enum State: Equatable {
@@ -28,10 +31,12 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
 
     private let manager = CLLocationManager()
 
-    override init() {
+    /// - Parameter accuracy: 기본값은 날씨용 km 정확도. 보급 지점처럼 100m 단위가
+    ///   의미를 갖는 쪽은 `kCLLocationAccuracyNearestTenMeters`를 넘긴다
+    init(accuracy: CLLocationAccuracy = kCLLocationAccuracyKilometer) {
         super.init()
         manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyKilometer  // 날씨용 — 정밀 위치 불필요
+        manager.desiredAccuracy = accuracy
     }
 
     func request() {
