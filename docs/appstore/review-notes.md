@@ -22,9 +22,9 @@ built-in demo mode. It is a normal, visible feature — not hidden or
 conditional.
 
 To turn it on:
-  1. Launch the app and complete the two onboarding steps
-     ("건강 데이터 연결" -> allow or deny the Health prompt, then choose a
-     goal/level and tap "시작하기").
+  1. Launch the app and complete onboarding (answer the short tap-only
+     survey, then tap "다음" (Next) on the result card -> allow or deny the
+     Health prompt; either choice continues into the app).
   2. Open the "리포트" tab (2nd of the 4 tabs at the bottom: 홈 / 리포트 /
      코스 / 대회) and tap the gear icon at the top right.
   3. In Settings, scroll to the "데모 모드" (Demo mode) section and turn on
@@ -108,7 +108,7 @@ real reports.
 없으므로 설계상 화면이 비어 보입니다. 그래서 앱에 데모 모드를 넣어 두었고, 숨긴 기능이
 아니라 설정 화면에 그대로 노출되는 정식 기능입니다.
 
-1. 앱 실행 → 온보딩 2단계 진행(건강 데이터 연결 → 목표·레벨 선택 → 시작하기)
+1. 앱 실행 → 온보딩 설문 진행 → 결과 카드에서 "다음" → 건강 권한 허용/거부(어느 쪽이든 진입)
 2. 리포트 탭 우측 상단 톱니 아이콘 탭
 3. 설정에서 **데모 모드 → "샘플 데이터로 둘러보기"** 켜기
 4. 뒤로 나오면 약 6개월치 합성 러닝 데이터로 모든 탭이 채워집니다
