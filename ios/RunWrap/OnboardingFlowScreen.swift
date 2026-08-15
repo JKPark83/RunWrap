@@ -170,7 +170,10 @@ struct OnboardingFlowScreen: View {
 
             Spacer(minLength: 24)
 
-            PrimaryButton(title: "건강 데이터 연결하기") {
+            // CTA 문구는 "다음"으로 고정한다 — 권한 요청 직전 버튼이 허용을 권유하면
+            // App Review 5.1.1(iv)에 걸린다("Continue"/"Next" 같은 중립 표현을 쓰라는 지적).
+            // 요청 이유는 아래 캡션으로만 설명하고, 버튼은 다음 단계로 넘어간다는 뜻만 갖는다.
+            PrimaryButton(title: "다음") {
                 // 저장이 먼저, 권한 요청이 나중 — 권한 시트에서 이탈해도 진단 결과는 남는다
                 model.persist(isRediagnosis: prefill != nil)
                 Task {
@@ -179,7 +182,7 @@ struct OnboardingFlowScreen: View {
                 }
             }
 
-            Text("다음 화면에서 Apple 건강 읽기 권한을 요청해요")
+            Text("리포트를 만들려면 러닝 기록이 필요해서, 다음 화면에서 Apple 건강 읽기 권한을 물어봐요. 허용 여부는 직접 정하시면 됩니다.")
                 .font(.system(size: 11.5))
                 .foregroundStyle(RR.text3)
                 .multilineTextAlignment(.center)
