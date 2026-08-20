@@ -7,6 +7,9 @@
      아니라 세션별 동의(ExerciseRouteRequestContract)에 매핑된다. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 외부 통신은 날씨(open-meteo)·대기질(에어코리아) 둘뿐 — 건강 데이터는 싣지 않는다 (기획서 §6) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- 러닝 코어 (iOS HealthPermissions.core 대응) -->
     <uses-permission android:name="android.permission.health.READ_EXERCISE" />
     <uses-permission android:name="android.permission.health.READ_DISTANCE" />
