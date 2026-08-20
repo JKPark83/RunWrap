@@ -18,7 +18,15 @@ struct CurrentWeather: Equatable {
 }
 
 struct WeatherClient {
-    var session: URLSession = .shared
+    /// 기동 스플래시가 이 요청의 결론을 기다린다 — 기본 60초 타임아웃은 기동을 볼모로
+    /// 잡으므로 10초로 묶는다. 실패도 "결론"이라 스플래시가 홈을 열 수 있다 (RootView 참조)
+    private static let bounded: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 10
+        return URLSession(configuration: configuration)
+    }()
+
+    var session: URLSession = WeatherClient.bounded
 
     func current(latitude: Double, longitude: Double) async throws -> CurrentWeather {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!

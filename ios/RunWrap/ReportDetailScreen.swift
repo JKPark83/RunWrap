@@ -24,6 +24,7 @@ struct ReportDetailScreen: View {
 
                 if let guide {
                     if let prediction = guide.prediction { predictionSection(prediction) }
+                    if let zones = guide.zones { zonesSection(zones) }
                     prescriptionSection(guide.prescription)
                     if let balance = guide.balance { balanceSection(balance) }
                 }
@@ -142,20 +143,40 @@ struct ReportDetailScreen: View {
                        explainBody: "T2 = T1 × (D2/D1)^1.06 — 기록 하나로 다른 거리의 완주 시간을 추정하는 경험식입니다 (Riegel 1981). 최근 8주 안의 최고 기록을 기준으로 씁니다.")
     }
 
+    /// 훈련 페이스 존 — 목표가 아니라 "현재 실력"(최근 PR의 VDOT)에서 산출한다는 것이 핵심
+    private func zonesSection(_ zones: TrainingGuide.PaceZones) -> some View {
+        section(color: RR.brand,
+                title: "훈련 페이스 · Daniels VDOT",
+                sentence: String(format: "현재 실력은 VDOT %.0f 수준입니다. 훈련 페이스는 목표 기록이 아니라 이 값에서 나옵니다.", zones.vdot),
+                // 인터벌 페이스는 리포트 카드의 페이스 표에 이미 있다 — 세 개를 다 넣으면
+                // 13pt monospaced 기준 한 줄 폭을 넘겨 줄바꿈되므로 두 개만 둔다
+                metrics: [("이지 \(Format.pace(zones.easySecPerKm.lowerBound))~\(Format.pace(zones.easySecPerKm.upperBound))", RR.text2),
+                          ("템포 \(Format.pace(zones.tempoSecPerKm))", RR.text2)],
+                explainTitle: "VDOT이란",
+                explainBody: "최근 8주 최고 기록에서 역산한 유효 최대산소섭취량입니다 (Daniels & Gilbert 1979). 이지런은 그 62~74%, 템포런은 88%, 인터벌은 97.5% 강도에 해당하는 페이스예요. 목표가 더 빨라도 훈련 페이스를 앞당기면 부상 위험만 커집니다 — 기록이 좋아지면 페이스가 따라 올라갑니다.")
+    }
+
     private func prescriptionSection(_ prescription: TrainingGuide.Prescription) -> some View {
-        let sentence = prescription.batteryLimited
-            ? "체력 배터리가 낮은 주입니다. 주간 거리는 유지하되 LSD는 하한으로 줄였어요."
-            : "지난 4주 부하에 10% 룰을 적용한 이번 주 처방입니다."
+        let sentence: String
+        if prescription.batteryLimited {
+            sentence = "체력 배터리가 낮은 주입니다. LSD는 하한으로 줄이고 인터벌은 뺐어요."
+        } else if let phase = prescription.phase, let days = prescription.daysToRace {
+            sentence = "대회까지 \(days == 0 ? "D-day" : "D-\(days)"), 지금은 \(phase.label)입니다. 단계에 맞춘 이번 주 처방이에요."
+        } else {
+            sentence = "지난 4주 부하에 10% 룰을 적용한 이번 주 처방입니다."
+        }
+        let lsdText = prescription.lsdKmHigh < 1
+            ? "LSD —"
+            : "LSD " + kmRangeText(prescription.lsdKmLow, prescription.lsdKmHigh)
         return section(color: RR.brand,
                        title: "주간 처방 · 10% 룰",
                        sentence: sentence,
                        metrics: [(kmRangeText(prescription.weeklyKmLow,
                                               prescription.weeklyKmHigh) + " km", RR.text2),
-                                 ("LSD " + kmRangeText(prescription.lsdKmLow,
-                                                       prescription.lsdKmHigh), RR.text2),
-                                 ("스피드 ≤\(prescription.speedSessionsMax)회", RR.text2)],
+                                 (lsdText, RR.text2),
+                                 ("퀄리티 \(prescription.qualityCount)회", RR.text2)],
                        explainTitle: "처방 기준",
-                       explainBody: "권장 주간 거리는 4주 평균의 100~110%(10% 룰 상한), LSD는 그중 25~35%입니다. 체력 배터리가 주의 이하면 LSD를 25% 하한으로 내립니다 (기획서 §4.9).")
+                       explainBody: "권장 주간 거리는 4주 평균의 100~110%(10% 룰 상한)이고, 종목·레벨별 피크 주간 거리에서 멈춥니다. LSD는 그중 25~35%, 퀄리티(템포런·인터벌)는 단계·레벨에 따라 주 0~2회입니다. 대회 날짜를 정하면 기초→강화→피크→테이퍼 단계로 볼륨을 조절하고, 체력 배터리가 주의 이하면 LSD 하한·인터벌 제외로 내립니다 (기획서 §4.9).")
     }
 
     private func balanceSection(_ balance: TrainingGuide.Balance) -> some View {

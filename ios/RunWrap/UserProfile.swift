@@ -113,6 +113,9 @@ enum ProfileKey {
     static let raceGoal = "profile.raceGoal"
     /// 목표 기록 (초) — 0이면 미입력으로 취급해 예측만 보여준다
     static let raceGoalSec = "profile.raceGoalSec"
+    /// 대회 날짜 (timeIntervalSince1970) — 0이면 미설정. 있으면 훈련 가이드가
+    /// D-day 주기화(기초→강화→피크→테이퍼)로 주간 처방을 조절한다
+    static let raceDate = "profile.raceDate"
 }
 
 /// 성장 시스템 저장 키 (기획서 §5).

@@ -1,5 +1,4 @@
 import SwiftUI
-import CoreLocation
 
 /// 홈 탭 — 새 성장 스테이지와 **오늘의 판단 카드** (기획서 v0.8 §6, 시안 1f/1g/1h).
 ///
@@ -7,18 +6,16 @@ import CoreLocation
 /// 상세 지표·차트는 전부 리포트 탭의 일이다. 데이터 가공은 하지 않는다 —
 /// XP·단계는 `GrowthEngine`, 오늘의 판단은 `TodayVerdictEngine`, 승급 판정은 `LevelEngine`이 낸다.
 ///
-/// 날씨(위치)를 여기서 조회한다. '오늘'이 탭에서 시트로 내려오면서 앱의 예보 창구가
-/// 홈으로 옮겨왔기 때문이다 — 수분 알람 예약(계획서 M9)도 함께 따라왔다.
+/// 날씨(위치)는 `WeatherStore`가 기동 시점에 조회를 마치고 내려준다 — 홈이 뜨기 전에
+/// 스플래시가 그 완료를 기다리는 구조라, 여기서는 읽기만 하고 로딩을 시작하지 않는다.
 struct HomeScreen: View {
     /// 판단 카드의 배터리·권장 세션 줄에서 리포트 탭으로 넘어가는 통로 (탭 전환은 RootView 몫)
     var onSelectReport: () -> Void = {}
 
     @EnvironmentObject private var health: HealthStore
+    @EnvironmentObject private var weather: WeatherStore
     @Environment(\.openURL) private var openURL
 
-    @StateObject private var location = LocationProvider()
-    @State private var weather: CurrentWeather?
-    @State private var weatherFailed = false
     @State private var showsToday = false
     @State private var showsLastRun = false
 
@@ -33,6 +30,7 @@ struct HomeScreen: View {
     /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 정해진 값을 그대로 쓴다
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
 
     @EnvironmentObject private var collection: CollectionStore
     @State private var showsCeremony = false
@@ -48,13 +46,6 @@ struct HomeScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        // 위치 권한은 홈 첫 진입에서 묻는다 — 날씨 줄이 홈의 재료가 됐으니
-        // 사용자가 '오늘'을 찾아 들어오기를 기다릴 이유가 없다 (기획서 v0.8 §6)
-        .task { location.request() }
-        .onChange(of: location.state) { _, newState in
-            guard case .located(let coordinate) = newState else { return }
-            Task { await loadWeather(coordinate) }
-        }
         .sheet(isPresented: $showsToday) { todaySheet }
     }
 
@@ -71,27 +62,13 @@ struct HomeScreen: View {
         }
     }
 
-    private func loadWeather(_ coordinate: CLLocationCoordinate2D) async {
-        do {
-            let current = try await WeatherClient().current(latitude: coordinate.latitude,
-                                                            longitude: coordinate.longitude)
-            weather = current
-            // 수분 알람 갱신 (계획서 M9) — 날씨를 받아온 이 시점이 당일분 예약 트리거다.
-            // '오늘'이 시트가 된 뒤로 이 호출이 앱의 유일한 정기 트리거가 됐다
-            await NotificationScheduler.rescheduleHydration(forecastMaxC: current.forecastMaxC)
-        } catch {
-            weatherFailed = true
-        }
-    }
-
-    /// 화면이 쥐고 있는 위치·네트워크 상태를 엔진이 아는 값으로 접는다 (엔진은 둘 다 모른다)
+    /// 스토어의 위치·네트워크 상태를 엔진이 아는 값으로 접는다 (엔진은 둘 다 모른다)
     private var weatherInput: TodayVerdictEngine.WeatherInput {
-        switch location.state {
-        case .denied: return .denied
-        case .failed: return .unavailable
-        default:
-            if let weather { return .current(weather) }
-            return weatherFailed ? .unavailable : .loading
+        switch weather.state {
+        case .idle, .loading: .loading
+        case .loaded(let current): .current(current)
+        case .denied: .denied
+        case .unavailable: .unavailable
         }
     }
 
@@ -220,6 +197,7 @@ struct HomeScreen: View {
                                                                       now: now),
                                                  hasRaceGoal: RaceDistance(rawValue: raceGoalRaw) != nil,
                                                  weeklyGoal: weeklyGoal,
+                                                 level: level,
                                                  now: now)
         // 승급 카드가 뜨면 새를 216 → 172로 줄여 카드 자리를 만든다 (시안 1h)
         let birdSize: CGFloat = promotion == nil ? 216 : 172
@@ -274,7 +252,7 @@ struct HomeScreen: View {
             onSelectReport()
         case .weather:
             // 권한을 거부한 상태에서는 앱 안에서 다시 물을 수 없다 — 설정으로 보낸다
-            if case .denied = location.state {
+            if case .denied = weather.state {
                 if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
             } else {
                 showsToday = true
@@ -290,7 +268,9 @@ struct HomeScreen: View {
         guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
         return TrainingGuideEngine(now: now, level: level)
             .guide(runs: runs, records: PersonalRecords.compute(runs: runs), race: race,
-                   goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil, batteryTone: batteryTone)
+                   goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil,
+                   raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
+                   batteryTone: batteryTone)
     }
 
     // MARK: - 스테이지 텍스트

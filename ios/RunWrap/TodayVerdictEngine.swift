@@ -49,12 +49,6 @@ enum TodayVerdictEngine {
         case current(CurrentWeather)
     }
 
-    /// 오늘 권장 거리의 상한 계수 — 최근 4주 최장 거리의 +10%까지만 (10% 룰, Gabbett 2016).
-    /// 주 후반에 잔여량이 몰려 "오늘 12km" 같은 값이 나오는 걸 막는 가드다.
-    static let longRunCapFactor = 1.1
-    /// 잔여량이 이보다 적으면 거리를 내지 않는다 — "오늘 0.4km"는 처방이 아니라 잡음이다
-    static let minPrescribedKm = 1.0
-
     /// - Parameters:
     ///   - runs: 전체 러닝 이력
     ///   - battery: 체력 배터리. 표본이 부족하면 nil로 들어온다
@@ -62,12 +56,14 @@ enum TodayVerdictEngine {
     ///   - guide: 주간 처방. 목표 레이스 미설정이거나 기록 3주 미만이면 nil
     ///   - hasRaceGoal: 목표 레이스 설정 여부 — guide가 nil인 이유를 갈라 유도 문구를 고른다
     ///   - weeklyGoal: 주간 목표 러닝 횟수
+    ///   - level: 러너 레벨 — 오늘의 훈련(인터벌 스펙 등)을 정할 때 쓴다
     static func verdict(runs: [RunSummary],
                         battery: BatteryReport?,
                         weather: WeatherInput,
                         guide: TrainingGuide?,
                         hasRaceGoal: Bool,
                         weeklyGoal: Int,
+                        level: RunnerLevel = .intermediate,
                         now: Date) -> TodayVerdict? {
         // 기록이 하나도 없으면 네 줄이 전부 유도 문구가 된다 — 환영이 아니라 과제 목록으로
         // 읽히므로 카드 자체를 내지 않는다 (홈은 첫 러닝 안내만 남긴다)
@@ -80,7 +76,7 @@ enum TodayVerdictEngine {
                             weather: weatherLine(weather, now: now),
                             session: sessionLine(runs: runs, battery: battery, guide: guide,
                                                  hasRaceGoal: hasRaceGoal,
-                                                 weeklyGoal: weeklyGoal, now: now),
+                                                 weeklyGoal: weeklyGoal, level: level, now: now),
                             recovery: recoveryLine(runs: runs, now: now))
     }
 
@@ -174,18 +170,13 @@ enum TodayVerdictEngine {
 
     // MARK: - 오늘 권장 세션
 
-    /// 주간 처방을 오늘 한 번치로 나눈다.
-    ///
-    /// 잔여km   = 기준 주간량 − 이번 주 소화 km
-    /// 남은횟수 = min(주간 목표 횟수 − 이번 주 러닝 횟수, 이번 주 남은 날 수)
-    /// 오늘km   = min(잔여km ÷ 남은횟수, 최근 4주 최장 거리 × 1.1)
-    ///
-    /// 기준 주간량은 처방 구간(만성 부하 ×1.0~1.1)의 중앙값을 쓰되,
-    /// 배터리가 하향 보정을 건 주(`batteryLimited`)에는 하한(만성 부하 그대로)으로 내린다 —
-    /// 회복이 덜 된 주에 증량까지 얹지 않기 위해서다.
+    /// 오늘의 훈련은 `TrainingGuideEngine.todayWorkout`이 정한다 (형태·거리·페이스).
+    /// 여기서는 그 결과를 홈 카드 한 줄 문구로 접는다 — "이지런 5.0km · 5′20″" 꼴.
+    /// 이지런 이름은 배터리 톤에 따라 가볍게/이지런/빌드업으로 갈라 쓴다 (기존 규칙 유지).
     private static func sessionLine(runs: [RunSummary], battery: BatteryReport?,
                                     guide: TrainingGuide?, hasRaceGoal: Bool,
-                                    weeklyGoal: Int, now: Date) -> TodayVerdict.Line {
+                                    weeklyGoal: Int, level: RunnerLevel,
+                                    now: Date) -> TodayVerdict.Line {
         let label = "오늘 권장"
         func line(_ content: TodayVerdict.Line.Content, _ tone: RRTone?) -> TodayVerdict.Line {
             .init(kind: .session, label: label, content: content, tone: tone)
@@ -196,27 +187,37 @@ enum TodayVerdictEngine {
             return line(.hint(hasRaceGoal ? "3주치 기록이 쌓이면 알려드려요"
                                           : "목표 대회를 정해 보세요"), nil)
         }
-        // 방전 임박에는 거리를 내지 않는다 — 오늘의 처방은 쉬는 것이다
-        if battery?.tone == .overload { return line(.value("오늘은 휴식"), .overload) }
 
-        let prescription = guide.prescription
-        let weeklyBase = prescription.batteryLimited
-            ? prescription.weeklyKmLow
-            : (prescription.weeklyKmLow + prescription.weeklyKmHigh) / 2
-        let remainKm = weeklyBase - weekKm(runs, now: now)
-        let remainSessions = min(weeklyGoal - weekRunCount(runs, now: now), daysLeftInWeek(now))
-
-        guard remainSessions > 0 else {
+        let today = TrainingGuideEngine(now: now, level: level)
+            .todayWorkout(runs: runs, guide: guide,
+                          batteryTone: battery?.tone, weeklyGoal: weeklyGoal)
+        switch today.kind {
+        case .rest:
+            // 방전 임박에는 거리를 내지 않는다 — 오늘의 처방은 쉬는 것이다
+            return line(.value("오늘은 휴식"), .overload)
+        case .doneCount:
             return line(.value("이번 주 횟수를 다 채우셨어요"), .improving)
-        }
-        guard remainKm >= minPrescribedKm else {
+        case .doneKm:
             return line(.value("이번 주 목표를 채우셨어요"), .improving)
+        case .easy, .lsd, .tempo, .interval:
+            return line(.value(sessionPhrase(today, batteryTone: battery?.tone)),
+                        battery?.tone ?? .steady)
         }
+    }
 
-        let capKm = longestKm(runs, fromDaysAgo: 28, now: now).map { $0 * longRunCapFactor }
-        let todayKm = min(remainKm / Double(remainSessions), capKm ?? .greatestFiniteMagnitude)
-        return line(.value("\(intensityLabel(battery?.tone)) \(Format.km(todayKm))km"),
-                    battery?.tone ?? .steady)
+    /// "이지런 5.0km · 5′20″" — 인터벌은 스펙이 이미 이름에 있어 거리를 겹쳐 쓰지 않고,
+    /// 페이스는 존 구간의 중앙값 하나만 낸다 (구간 전체는 리포트 탭 카드에서 본다)
+    private static func sessionPhrase(_ today: TodayWorkout, batteryTone: RRTone?) -> String {
+        let name = today.kind == .easy ? intensityLabel(batteryTone) : today.kind.label
+        let km: String? = switch today.kind {
+        case .interval: nil
+        default: today.distanceKm.map { "\(Format.km($0))km" }
+        }
+        let pace = today.paceSecPerKm.map {
+            Format.pace(($0.lowerBound + $0.upperBound) / 2)
+        }
+        return [name + (km.map { " \($0)" } ?? ""), pace].compactMap { $0 }
+            .joined(separator: " · ")
     }
 
     /// 강도 이름 — 배터리 톤 매핑. overload는 위에서 이미 갈라져 여기 오지 않는다
@@ -244,40 +245,11 @@ enum TodayVerdictEngine {
         return .init(kind: .recovery, label: "마지막 러닝", content: .value(text), tone: nil)
     }
 
-    // MARK: - 주간 창 (ISO 8601, 월요일 시작 — 홈 목표 칩과 같은 정의)
+    // MARK: - 달력 (ISO 8601, 월요일 시작 — 홈 목표 칩·TrainingGuideEngine과 같은 정의)
 
     private static var calendar: Calendar {
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = .current
         return calendar
-    }
-
-    private static func weekRuns(_ runs: [RunSummary], now: Date) -> [RunSummary] {
-        guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return [] }
-        return runs.filter { $0.start >= week.start && $0.start <= now }
-    }
-
-    private static func weekKm(_ runs: [RunSummary], now: Date) -> Double {
-        weekRuns(runs, now: now).compactMap(\.distanceKm).reduce(0, +)
-    }
-
-    private static func weekRunCount(_ runs: [RunSummary], now: Date) -> Int {
-        weekRuns(runs, now: now).count
-    }
-
-    /// 오늘을 포함한 이번 주 남은 날 수 (목요일이면 목·금·토·일 = 4)
-    private static func daysLeftInWeek(_ now: Date) -> Int {
-        guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return 1 }
-        return calendar.dateComponents([.day],
-                                       from: calendar.startOfDay(for: now),
-                                       to: week.end).day ?? 1
-    }
-
-    /// 최근 N일 안의 최장 거리 — 상한 가드의 기준. 거리 표본이 없으면 nil(상한 없음)
-    private static func longestKm(_ runs: [RunSummary], fromDaysAgo days: Int, now: Date) -> Double? {
-        let from = now.addingTimeInterval(TimeInterval(-days * 86_400))
-        return runs.filter { $0.start >= from && $0.start <= now }
-            .compactMap(\.distanceKm)
-            .max()
     }
 }

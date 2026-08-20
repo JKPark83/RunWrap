@@ -24,13 +24,18 @@ struct TodayVerdictEngineTests {
                       headline: "", factors: [])
     }
 
-    /// 주간 20~22km 처방 — 중앙값 21km가 기준 주간량이 된다
+    /// 주간 20~22km 처방 — 중앙값 21km가 기준 주간량이 된다.
+    /// zones는 nil로 둔다 — 페이스 존이 없으면 퀄리티 처방을 건너뛰므로(엔진 규칙)
+    /// 이 픽스처의 기대값은 이지런·LSD 계열만 나온다.
     private func guide(low: Double = 20, high: Double = 22,
                        batteryLimited: Bool = false) -> TrainingGuide {
         TrainingGuide(prediction: nil,
+                      zones: nil,
                       prescription: .init(weeklyKmLow: low, weeklyKmHigh: high,
                                           lsdKmLow: low * 0.25, lsdKmHigh: high * 0.35,
-                                          speedSessionsMax: 2, batteryLimited: batteryLimited),
+                                          tempoCount: 1, intervalCount: 1,
+                                          phase: nil, daysToRace: nil,
+                                          peakWeeklyKm: 40, batteryLimited: batteryLimited),
                       balance: nil)
     }
 
