@@ -2,8 +2,10 @@ import Foundation
 import Testing
 @testable import RunWrap
 
-/// 훈련 가이드 엔진 검증 — Riegel 예측, 세션 분류, 배터리 하향 보정, 표본 가드.
-/// now = 2026-08-10T09:00:00Z 고정.
+/// 훈련 가이드 엔진 검증 — Riegel 예측, VDOT 페이스 존, 주기화, 오늘의 훈련,
+/// 세션 분류, 배터리 하향 보정, 표본 가드.
+/// now = 2026-08-10T09:00:00Z = KST 2026-08-10(월) 18:00 고정 —
+/// 이번 주(ISO 8601) 창은 08-10 00:00 ~ 08-17 00:00 KST, 남은 날은 7일이다.
 struct TrainingGuideEngineTests {
     let now = ISO8601DateFormatter().date(from: "2026-08-10T09:00:00Z")!
     var engine: TrainingGuideEngine { TrainingGuideEngine(now: now) }
@@ -98,14 +100,180 @@ struct TrainingGuideEngineTests {
         #expect(gap.prediction?.tone == .caution)
     }
 
-    @Test("스피드 세션 상한 — 초보는 주 1회, 숙련은 주 2회")
-    func speedSessionCap() throws {
-        let beginner = try #require(TrainingGuideEngine(now: now, level: .beginner)
-            .guide(runs: baseRuns, records: [], race: .tenK, goalSec: nil, batteryTone: nil))
-        #expect(beginner.prescription.speedSessionsMax == 1)
+    // MARK: - VDOT 페이스 존
 
-        let experienced = try #require(engine.guide(runs: baseRuns, records: [], race: .tenK,
-                                                    goalSec: nil, batteryTone: nil))
-        #expect(experienced.prescription.speedSessionsMax == 2)
+    @Test("VDOT 역산 — 5K 19:57이면 VDOT ≈ 50 (Daniels 표 대조)")
+    func vdotFromRecord() throws {
+        let vdot = try #require(TrainingGuideEngine.vdot(distanceKm: 5, timeSec: 1_197))
+        #expect(abs(vdot - 50) < 0.5)
+    }
+
+    @Test("페이스 존 — VDOT 50이면 이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″ (Daniels 표)")
+    func paceZones() throws {
+        // 5K 19:57 → VDOT ≈ 50. 존 상수(62~74/88/97.5%)를 Daniels 표 페이스와 대조한다
+        let records = [record(label: "5K", km: 5.0, timeSec: 1_197, daysAgo: 7)]
+        let guide = try #require(engine.guide(runs: baseRuns, records: records, race: .tenK,
+                                              goalSec: nil, batteryTone: nil))
+        let zones = try #require(guide.zones)
+        #expect(abs(zones.easySecPerKm.lowerBound - 294) < 3)   // 4′54″ (74%)
+        #expect(abs(zones.easySecPerKm.upperBound - 338) < 3)   // 5′38″ (62%)
+        #expect(abs(zones.tempoSecPerKm - 255) < 3)             // 4′15″ (88%)
+        #expect(abs(zones.intervalSecPerKm - 235) < 3)          // 3′55″ (97.5%)
+    }
+
+    @Test("페이스 존 가드 — 8주 안의 PR이 없으면 존을 내지 않는다 (처방만 노출)")
+    func zonesRequireRecentRecord() throws {
+        let stale = [record(label: "5K", km: 5.0, timeSec: 1_197, daysAgo: 57)]
+        let guide = try #require(engine.guide(runs: baseRuns, records: stale, race: .tenK,
+                                              goalSec: nil, batteryTone: nil))
+        #expect(guide.zones == nil)
+        #expect(guide.prediction == nil)
+    }
+
+    @Test("목표 페이스 가드 — 이지 존보다 느리거나 세계기록보다 빠르면 내지 않는다")
+    func goalPaceGuard() throws {
+        // VDOT 50 → 이지 느린 끝 ≈ 338초/km. 종목·목표 기록이 어긋난 입력 실수 시나리오
+        let records = [record(label: "5K", km: 5.0, timeSec: 1_197, daysAgo: 7)]
+        func goalPace(race: RaceDistance, goalSec: Double) throws -> Double? {
+            try #require(engine.guide(runs: baseRuns, records: records, race: race,
+                                      goalSec: goalSec, batteryTone: nil)).zones?.goalSecPerKm
+        }
+        // 10K 45:00 → 270초/km — 이지(338)보다 빠르고 세계기록(150)보다 느려 정상 노출
+        #expect(try goalPace(race: .tenK, goalSec: 2_700) == 270)
+        // 10K 3:00:00 → 1,080초/km — 이지 존보다 느리다 (하프·풀 목표가 10K에 남은 실수)
+        #expect(try goalPace(race: .tenK, goalSec: 10_800) == nil)
+        // 풀 30:00 → 42.7초/km — 5000m 세계기록 페이스(≈151초/km)보다 빠르다
+        #expect(try goalPace(race: .full, goalSec: 1_800) == nil)
+    }
+
+    // MARK: - 주기화 (대회 날짜)
+
+    @Test("주기화 단계 — 남은 주 수로 기초→강화→피크→테이퍼→대회 주간을 가른다")
+    func phaseBoundaries() {
+        // 풀코스(테이퍼 2주): 10주 기초 / 9주 강화 / 5주 피크 / 2주 테이퍼 / 0주 대회 주간
+        #expect(TrainingGuideEngine.phase(daysToRace: 70, race: .full) == .base)
+        #expect(TrainingGuideEngine.phase(daysToRace: 63, race: .full) == .build)
+        #expect(TrainingGuideEngine.phase(daysToRace: 35, race: .full) == .peak)
+        #expect(TrainingGuideEngine.phase(daysToRace: 14, race: .full) == .taper)
+        #expect(TrainingGuideEngine.phase(daysToRace: 3, race: .full) == .raceWeek)
+        // 지난 날짜는 단계 없음, 10K는 테이퍼 없이 1주 전이 이미 피크
+        #expect(TrainingGuideEngine.phase(daysToRace: -1, race: .full) == nil)
+        #expect(TrainingGuideEngine.phase(daysToRace: 7, race: .tenK) == .peak)
+    }
+
+    @Test("주기화 볼륨 — 테이퍼는 60~70%, 대회 주간은 40~50%로 감량하고 LSD·퀄리티를 끈다")
+    func periodizedVolume() throws {
+        // chronic 30 → 테이퍼(풀코스 D-10): 30×0.6~0.7 = 18~21km
+        let taper = try #require(engine.guide(
+            runs: baseRuns, records: [], race: .full, goalSec: nil,
+            raceDate: now.addingTimeInterval(10 * 86_400), batteryTone: nil))
+        #expect(taper.prescription.phase == .taper)
+        #expect(taper.prescription.daysToRace == 10)
+        #expect(abs(taper.prescription.weeklyKmLow - 18) < 0.01)
+        #expect(abs(taper.prescription.weeklyKmHigh - 21) < 0.01)
+
+        // 대회 주간(D-3): 30×0.4~0.5 = 12~15km, LSD 없음, 퀄리티 0회
+        let raceWeek = try #require(engine.guide(
+            runs: baseRuns, records: [], race: .full, goalSec: nil,
+            raceDate: now.addingTimeInterval(3 * 86_400), batteryTone: nil))
+        #expect(raceWeek.prescription.phase == .raceWeek)
+        #expect(abs(raceWeek.prescription.weeklyKmLow - 12) < 0.01)
+        #expect(abs(raceWeek.prescription.weeklyKmHigh - 15) < 0.01)
+        #expect(raceWeek.prescription.lsdKmHigh == 0)
+        #expect(raceWeek.prescription.qualityCount == 0)
+    }
+
+    @Test("피크 상한 — 10% 룰 점증이 종목·레벨 피크 거리에 닿으면 더 올리지 않는다")
+    func peakWeeklyKmCap() throws {
+        // chronic 30, 5K 중급 피크 30 → 상한이 33(×1.1)이 아니라 30에서 멈춘다
+        let guide = try #require(engine.guide(runs: baseRuns, records: [], race: .fiveK,
+                                              goalSec: nil, batteryTone: nil))
+        #expect(abs(guide.prescription.weeklyKmHigh - 30) < 0.01)
+    }
+
+    @Test("퀄리티 구성 — 레벨·단계별 템포/인터벌 횟수, 배터리 하향이면 인터벌 제외")
+    func qualityMix() {
+        // 날짜 미설정(nil)은 피크 수준: 초보 (1,0), 중급 (1,1)
+        #expect(TrainingGuideEngine.qualityMix(phase: nil, level: .beginner,
+                                               batteryLimited: false) == (1, 0))
+        #expect(TrainingGuideEngine.qualityMix(phase: nil, level: .intermediate,
+                                               batteryLimited: false) == (1, 1))
+        // 기초기는 템포만, 대회 주간은 전부 끈다
+        #expect(TrainingGuideEngine.qualityMix(phase: .base, level: .intermediate,
+                                               batteryLimited: false) == (1, 0))
+        #expect(TrainingGuideEngine.qualityMix(phase: .raceWeek, level: .advanced,
+                                               batteryLimited: false) == (0, 0))
+        // 배터리 하향 주간은 인터벌을 빼고 템포만 남긴다
+        #expect(TrainingGuideEngine.qualityMix(phase: nil, level: .advanced,
+                                               batteryLimited: true) == (1, 0))
+    }
+
+    // MARK: - 오늘의 훈련
+
+    @Test("오늘의 훈련 — 어제 롱런(LSD 하한 이상)을 뛰었으면 오늘은 회복 이지런")
+    func todayAfterHardDay() throws {
+        // baseRuns의 최신 러닝 = daysAgo 1(어제 저녁) 10km ≥ LSD 하한 7.5 → 하드-이지 원칙
+        let guide = try #require(engine.guide(runs: baseRuns, records: [], race: .tenK,
+                                              goalSec: nil, batteryTone: .steady))
+        let today = engine.todayWorkout(runs: baseRuns, guide: guide,
+                                        batteryTone: .steady, weeklyGoal: 4)
+        #expect(today.kind == .easy)
+        #expect(today.reason == .hardRecently)
+    }
+
+    @Test("오늘의 훈련 — 남은 횟수가 1회면 미완의 롱런(LSD)부터 처방한다")
+    func todayLsdDue() throws {
+        // 이번 주 0회, 최근 러닝은 그제(토) — 주 1회 목표라 오늘이 롱런의 마지막 기회
+        let runs = (0..<12).map { run(daysAgo: Double($0) * 2.2 + 2, km: 10) }
+        let guide = try #require(engine.guide(runs: runs, records: [], race: .tenK,
+                                              goalSec: nil, batteryTone: .steady))
+        let today = engine.todayWorkout(runs: runs, guide: guide,
+                                        batteryTone: .steady, weeklyGoal: 1)
+        #expect(today.kind == .lsd)
+        #expect(today.reason == .lsdDue)
+        // LSD 구간 7.5~11.55의 중앙값 9.525km — 상한 11km(10×1.1)에 걸리지 않는다
+        let km = try #require(today.distanceKm)
+        #expect(abs(km - 9.525) < 0.01)
+    }
+
+    @Test("오늘의 훈련 — 퀄리티 잔여면 템포런 20분 분량을 T 페이스로 처방한다")
+    func todayTempo() throws {
+        // 이번 주 스피드 0회 < 템포 처방 1회 → 템포 차례. T ≈ 255초 × 20분 → 4.7km
+        let runs = (0..<12).map { run(daysAgo: Double($0) * 2.2 + 2, km: 10) }
+        let records = [record(label: "5K", km: 5.0, timeSec: 1_197, daysAgo: 7)]
+        let guide = try #require(engine.guide(runs: runs, records: records, race: .tenK,
+                                              goalSec: nil, batteryTone: .steady))
+        let today = engine.todayWorkout(runs: runs, guide: guide,
+                                        batteryTone: .steady, weeklyGoal: 4)
+        #expect(today.kind == .tempo)
+        #expect(today.reason == .qualityDue)
+        let km = try #require(today.distanceKm)
+        #expect(abs(km - 4.7) < 0.1)
+        #expect(today.paceSecPerKm?.lowerBound == today.paceSecPerKm?.upperBound)
+    }
+
+    @Test("오늘의 훈련 — 이번 주 스피드 1회를 이미 했으면 인터벌 차례다 (중급 5×800m)")
+    func todayInterval() throws {
+        // 목요일 저녁 기준: 화요일에 빠른 6km(310 ≤ 4주 평균 355.8×0.9)를 이미 뛰었다.
+        // 하드-이지 창(어제 0시~)은 지났고, 남은 날 4일 > 2라 LSD 규칙도 건너뛴다
+        let now2 = ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z")!
+        let engine2 = TrainingGuideEngine(now: now2)
+        func run2(daysAgo: Double, km: Double, paceSecPerKm: Double = 360) -> RunSummary {
+            RunSummary(id: UUID(), start: now2.addingTimeInterval(-daysAgo * 86_400),
+                       durationSec: paceSecPerKm * km, distanceMeters: km * 1_000,
+                       avgHeartRate: 150)
+        }
+        var runs = (0..<11).map { run2(daysAgo: Double($0) * 2.1 + 4, km: 10) }
+        runs.append(run2(daysAgo: 2, km: 6, paceSecPerKm: 310))
+        let records = [PersonalRecords.Entry(label: "5K", distanceKm: 5, timeSec: 1_197,
+                                             run: run2(daysAgo: 7, km: 5,
+                                                       paceSecPerKm: 239.4))]
+        let guide = try #require(engine2.guide(runs: runs, records: records, race: .tenK,
+                                               goalSec: nil, batteryTone: .steady))
+        let today = engine2.todayWorkout(runs: runs, guide: guide,
+                                         batteryTone: .steady, weeklyGoal: 4)
+        #expect(today.kind == .interval(reps: 5, meters: 800))
+        #expect(today.reason == .qualityDue)
+        #expect(today.distanceKm == 4.0)   // 5 × 800m 본훈련 합계
     }
 }

@@ -9,6 +9,8 @@ struct SettingsScreen: View {
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    // 대회 날짜 — 0이면 미설정. Date를 직접 저장할 수 없어 timeIntervalSince1970로 둔다
+    @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
     /// 다시 진단받기 — 온보딩 설문을 시트로 다시 띄운다 (기획서 §7)
     @State private var isRediagnosing = false
     // 알림 (계획서 M8) — 기본값은 NotificationScheduler.rescheduleWeekly의 폴백과 같아야 한다
@@ -54,6 +56,7 @@ struct SettingsScreen: View {
                     optionRow(label: "없음", caption: "훈련 가이드 카드를 끕니다",
                               isSelected: raceGoalRaw.isEmpty) {
                         raceGoalRaw = ""
+                        raceDateRaw = 0
                     }
                     ForEach(RaceDistance.allCases, id: \.self) { race in
                         optionRow(label: race.label,
@@ -65,6 +68,13 @@ struct SettingsScreen: View {
                 }
                 if !raceGoalRaw.isEmpty {
                     section(title: "목표 기록") { goalTimeRow }
+                    // 대회 날짜 — 있으면 훈련 가이드가 D-day 주기화로 처방을 조절한다 (§4.9)
+                    section(title: "대회 날짜") {
+                        toggleRow(label: "대회 날짜로 맞추기",
+                                  caption: "대회일까지 기초→강화→테이퍼 단계로 처방해요",
+                                  isOn: raceDateBinding)
+                        if raceDateRaw > 0 { raceDateRow }
+                    }
                 }
                 // 알림 — 로컬 알림 2종 (계획서 M8). 토글을 켤 때 시스템 권한을 요청한다
                 section(title: "알림") {
@@ -281,6 +291,32 @@ struct SettingsScreen: View {
 
     /// UNCalendarNotificationTrigger의 weekday와 같은 순서 (1 = 일요일)
     private static let weekdayNames = ["일", "월", "화", "수", "목", "금", "토"]
+
+    /// 대회 날짜 토글 — 켜면 8주 뒤(일반적인 최소 준비 기간)를 기본값으로 넣는다
+    private var raceDateBinding: Binding<Bool> {
+        Binding(get: { raceDateRaw > 0 },
+                set: { isOn in
+                    raceDateRaw = isOn
+                        ? Date().addingTimeInterval(8 * 7 * 86_400).timeIntervalSince1970
+                        : 0
+                })
+    }
+
+    /// 대회 날짜 선택 — 오늘부터 1년 안. 지난 날짜는 고를 수 없다 (주기화가 무의미해진다)
+    private var raceDateRow: some View {
+        DatePicker("대회일",
+                   selection: Binding(
+                       get: { Date(timeIntervalSince1970: raceDateRaw) },
+                       set: { raceDateRaw = $0.timeIntervalSince1970 }),
+                   in: Date()...Date().addingTimeInterval(366 * 86_400),
+                   displayedComponents: .date)
+            .datePickerStyle(.compact)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(RR.text)
+            .tint(RR.brand)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+    }
 
     /// 목표 기록 입력 — 시:분:초 휠. 0:00:00이면 미입력으로 취급해 예측만 보여준다
     private var goalTimeRow: some View {
