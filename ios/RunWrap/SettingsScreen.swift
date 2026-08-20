@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 설정 — 프로필(목적·레벨) 변경. 진입: 리포트 홈 헤더의 기어 아이콘 (계획서 M2).
+/// 설정 — 프로필(목적·레벨) 변경. 진입: 홈 헤더의 기어 아이콘 (계획서 M2).
 /// 이후 마일스톤의 알림 토글·목표 입력도 이 화면에 추가된다.
 struct SettingsScreen: View {
     @EnvironmentObject private var health: HealthStore
