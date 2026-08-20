@@ -8,7 +8,7 @@ struct ReportSnapshot: Codable, Equatable {
     let headline: String       // WeeklyReport.headline
     let suggestion: String?    // 다음 주 제안
     let weekKm: Double         // 최근 7일 거리 합
-    let runCount: Int          // 이번 달력 주 러닝 횟수
+    let runCount: Int          // 최근 7일 러닝 횟수
 
     /// 리포트 + 원본 기록에서 스냅샷을 만든다 (순수 함수 — 테스트 대상)
     static func make(report: WeeklyReport, runs: [RunSummary], now: Date) -> ReportSnapshot {

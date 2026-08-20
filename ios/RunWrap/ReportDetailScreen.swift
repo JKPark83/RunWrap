@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// 리포트 요약 — 주간 지표를 문장 + 근거 수치 + 용어 설명으로 풀어낸다 (시안 "리포트 요약")
+/// 리포트 요약 — 최근 7일 지표를 문장 + 근거 수치 + 용어 설명으로 풀어낸다 (시안 "리포트 요약")
 struct ReportDetailScreen: View {
     let report: WeeklyReport
-    /// 훈련 가이드 — 훈련 모드 + 목표 레이스 설정 시에만 값이 온다 (계획서 M7)
+    /// 훈련 가이드 — 목표 레이스 설정 시에만 값이 온다 (계획서 M7)
     var guide: TrainingGuide? = nil
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Eyebrow(text: "\(report.weekLabel) · \(report.dateRange)")
+                    Eyebrow(text: "최근 7일 · \(report.dateRange)")
                     Text(report.headline)
                         .font(.system(size: 26, weight: .bold))
                         .lineSpacing(5)
@@ -57,7 +57,7 @@ struct ReportDetailScreen: View {
             .padding(.bottom, 26)
         }
         .background(RR.bg.ignoresSafeArea())
-        .navigationTitle("주간 요약")
+        .navigationTitle("리포트 요약")
         .navigationBarTitleDisplayMode(.inline)
     }
 

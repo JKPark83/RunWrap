@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// 리포트 탭 — 상단 세그먼트로 [이번 주 | 발전상]을 가른다 (기획서 v0.7 §6).
+/// 런미새 리포트 탭 — 상단 세그먼트로 [내 상태 | 이번달 | 나의 성장기]를 가른다 (이슈 #21).
 ///
-/// v0.7에서 통계 탭이 사라지고 이 화면의 "발전상" 세그먼트로 흡수됐다.
-/// 다이어트/훈련 목적별 배치 분기도 제거됐다 — 목적은 문장의 강조점만 바꾸고,
-/// 어떤 카드를 보여줄지는 레벨 게이트(`ReportGate`, §4)가 정한다.
+/// v0.7에서 통계 탭이 이 화면의 세그먼트로 흡수됐고, #21에서 월간(이번달)과
+/// 장기 추이(나의 성장기)로 다시 나뉘었다. 다이어트/훈련 목적별 배치 분기는 없다 —
+/// 목적은 문장의 강조점만 바꾸고, 어떤 카드를 보여줄지는 레벨 게이트(`ReportGate`, §4)가 정한다.
 struct ReportHomeScreen: View {
     @EnvironmentObject private var health: HealthStore
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
@@ -14,16 +14,17 @@ struct ReportHomeScreen: View {
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
-    @State private var tab: ReportTab = .thisWeek
+    @State private var tab: ReportTab = .myState
 
-    /// 리포트 탭 세그먼트 — 통계 탭을 흡수한 자리 (§6)
+    /// 리포트 탭 세그먼트 (이슈 #21) — 내 상태(최근 7일) / 이번달(월간) / 나의 성장기(장기 추이)
     enum ReportTab: String, CaseIterable {
-        case thisWeek, progress
+        case myState, month, growth
 
         var label: String {
             switch self {
-            case .thisWeek: "이번 주"
-            case .progress: "발전상"
+            case .myState: "내 상태"
+            case .month: "이번달"
+            case .growth: "나의 성장기"
             }
         }
     }
@@ -39,9 +40,7 @@ struct ReportHomeScreen: View {
                         BatteryEngine.compute(vitals: $0, runs: runs)
                     }
                     switch tab {
-                    case .thisWeek:
-                        let guide = trainingGuide(runs: runs, level: level,
-                                                  batteryTone: battery?.tone)
+                    case .myState:
                         ReportHomeContent(report: ReportEngine(level: level).weeklyReport(from: runs),
                                           battery: battery,
                                           level: level,
@@ -52,22 +51,27 @@ struct ReportHomeScreen: View {
                                           cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
                                                                             runs: runs, now: Date()),
                                           form: FormTrend.compute(runs: runs, now: Date()),
-                                          guide: guide,
-                                          today: guide.map {
-                                              TrainingGuideEngine(now: Date(), level: level)
-                                                  .todayWorkout(runs: runs, guide: $0,
-                                                                batteryTone: battery?.tone,
-                                                                weeklyGoal: weeklyGoal)
-                                          },
+                                          guide: trainingGuide(runs: runs, level: level,
+                                                               batteryTone: battery?.tone),
                                           walkRun: WalkRunEngine.plan(
                                               cycleStartedAt: cycleStartedAt,
                                               weeklyGoal: weeklyGoal,
                                               runs: runs, now: Date()),
+                                          raceStatus: RaceOutlookEngine.status(
+                                              race: RaceDistance(rawValue: raceGoalRaw),
+                                              goalSec: Double(raceGoalSec),
+                                              raceDate: raceDateRaw > 0
+                                                  ? Date(timeIntervalSince1970: raceDateRaw) : nil,
+                                              records: PersonalRecords.compute(runs: runs),
+                                              now: Date()),
                                           segment: segment)
                             .refreshable { await health.load() }
-                    case .progress:
-                        // 발전상 — 옛 통계 탭 본문을 그대로 쓴다 (§6 "리포트 탭 상단 세그먼트로 흡수")
+                    case .month:
+                        // 이번달 — 옛 통계 탭의 월간 본문 (§6 "리포트 탭 상단 세그먼트로 흡수")
                         StatsScreen(segment: AnyView(segment))
+                    case .growth:
+                        // 나의 성장기 — 장기 추이 차트 3종 + PB 목록 (이슈 #21)
+                        GrowthScreen(segment: AnyView(segment))
                     }
                 }
             }
@@ -76,7 +80,7 @@ struct ReportHomeScreen: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    /// [이번 주 | 발전상] 세그먼트 — 두 세그먼트가 같은 컨트롤을 공유한다
+    /// [내 상태 | 이번달 | 나의 성장기] 세그먼트 — 세 화면이 같은 컨트롤을 공유한다
     private var segment: some View {
         Picker("", selection: $tab) {
             ForEach(ReportTab.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -124,12 +128,12 @@ struct ReportHomeContent: View {
     var cross: CrossTrainingEngine.Summary? = nil
     /// 주간 케이던스 추이 — 최근 28일 케이던스 표본이 부족하면 엔진이 nil을 준다 (계획서 M4)
     var form: FormTrend? = nil
-    /// 훈련 가이드 — 훈련 모드 + 목표 레이스 설정 시에만 값이 온다 (계획서 M7)
+    /// 훈련 가이드 — 상세 화면 전달용. 홈 카드는 지금은 숨긴다 (이슈 #21)
     var guide: TrainingGuide? = nil
-    /// 오늘의 훈련 — 가이드가 있을 때 화면이 이력·배터리로 계산해 넘긴다 (§4.9 v2)
-    var today: TodayWorkout? = nil
     /// 걷뛰 처방 — 런린이 전용 (§4). 사이클 시작 시각이 없으면 엔진이 nil을 준다
     var walkRun: WalkRunEngine.Plan? = nil
+    /// 대회 목표 상태 — 체력 배터리 카드 하단 섹션 재료 (이슈 #21). 샘플 시트에서는 nil
+    var raceStatus: RaceOutlookEngine.Status? = nil
     /// 샘플 리포트 시트에서는 상세 이동 대신 배너를 단다
     var isSample = false
     /// [이번 주 | 발전상] 세그먼트 — 샘플 시트에서는 넘기지 않아 nil이다
@@ -176,9 +180,7 @@ struct ReportHomeContent: View {
 
                 if let form, ReportGate.shows(.form, level: level) { formTrendCard(form) }
 
-                if let guide, ReportGate.shows(.trainingGuide, level: level) {
-                    trainingGuideCard(guide)
-                }
+                // 훈련 가이드 카드는 지금은 숨긴다 (이슈 #21) — 상세 화면의 가이드 섹션은 유지
 
                 if report.isEmpty { insufficientCard }
 
@@ -211,23 +213,15 @@ struct ReportHomeContent: View {
         .background(RR.bg.ignoresSafeArea())
     }
 
+    /// 날짜 배지는 #21에서 삭제 — 기간은 아이브로에 함께 적는다
     private var header: some View {
-        HStack(alignment: .bottom, spacing: 12) {
-            VStack(alignment: .leading, spacing: 7) {
-                Eyebrow(text: report.weekLabel)
-                Text("주간 리포트")
-                    .font(RR.display(33))
-                    .foregroundStyle(RR.text)
-            }
-            Spacer()
-            Text(report.dateRange)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(RR.text2)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(RR.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(RR.line))
+        VStack(alignment: .leading, spacing: 7) {
+            Eyebrow(text: "Last 7 days · \(report.dateRange)")
+            Text("런미새 리포트")
+                .font(RR.display(33))
+                .foregroundStyle(RR.text)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 6)
     }
 
@@ -432,6 +426,10 @@ struct ReportHomeContent: View {
                 .foregroundStyle(RR.text3)
                 .padding(.top, 13)
 
+            if let raceStatus {
+                raceOutlookSection(raceStatus)
+            }
+
             disclaimer("건강 상태를 진단하거나 의학적 조언을 하지 않습니다. 통증이나 이상이 있다면 전문가와 상담하세요.")
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
@@ -480,6 +478,74 @@ struct ReportHomeContent: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .rrCard()
+    }
+
+    // MARK: 대회 목표 섹션 (배터리 카드 하단, 이슈 #21)
+
+    /// 설정 상태에 따라 안내·D-day·예상 완주 기록을 보여준다.
+    /// 상태 판정은 RaceOutlookEngine이 한다 — 여기서는 switch로 그리기만.
+    @ViewBuilder
+    private func raceOutlookSection(_ status: RaceOutlookEngine.Status) -> some View {
+        Divider().overlay(RR.line).padding(.top, 14)
+        switch status {
+        case .notConfigured:
+            Text("설정에서 대회 목표(레이스·기록·날짜)를 정하면 여기에 D-day와 예상 완주 기록이 떠요")
+                .font(.system(size: 11.5))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
+        case .raceFinished(let race):
+            Text("\(race.label) 대회 날짜가 지났어요 — 설정에서 다음 대회 목표를 정해 주세요")
+                .font(.system(size: 11.5))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
+        case .awaitingRecords(let race, let days):
+            VStack(alignment: .leading, spacing: 9) {
+                dDayChip(days: days, race: race)
+                Text("최근 8주 기록이 쌓이면 예상 완주 기록도 보여드려요")
+                    .font(.system(size: 11.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.top, 12)
+        case .ready(let outlook):
+            VStack(alignment: .leading, spacing: 9) {
+                dDayChip(days: outlook.daysToRace, race: outlook.race)
+                (Text("예상 완주 ").foregroundStyle(RR.text)
+                    + Text(Format.duration(outlook.predictedSec))
+                        .foregroundStyle(outlook.tone.color)
+                    + Text(" · " + Format.paceKm(outlook.predictedPaceSecPerKm))
+                        .foregroundStyle(RR.text2))
+                    .font(.system(size: 16, weight: .bold))
+                Text(outlookCaption(outlook))
+                    .font(.system(size: 11.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.top, 12)
+        }
+    }
+
+    /// "D-38 · 풀코스" — 대회 당일은 "D-day"
+    private func dDayChip(days: Int, race: RaceDistance) -> some View {
+        Text("\(days == 0 ? "D-day" : "D-\(days)") · \(race.label)")
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(RR.brand)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(RR.brandSoft, in: Capsule())
+    }
+
+    /// "목표 4:00:00 · 최근 8주 기록 기준 Riegel 예측 · 8월 평년 더위 보정 +12초/km".
+    /// 더위 보정은 대회 장소를 모르는 채 쓰는 서울 평년값 근사라 "평년"을 밝힌다
+    private func outlookCaption(_ outlook: RaceOutlookEngine.Outlook) -> String {
+        var caption = "목표 \(Format.duration(outlook.goalSec)) · 최근 8주 기록 기준 Riegel 예측"
+        if outlook.heatDeltaSecPerKm > 0 {
+            caption += String(format: " · %d월 평년 더위 보정 +%.0f초/km",
+                              outlook.raceMonth, outlook.heatDeltaSecPerKm)
+        }
+        return caption
     }
 
     // MARK: 주간 거리 카드
@@ -669,7 +735,7 @@ struct ReportHomeContent: View {
         }
     }
 
-    // MARK: 훈련 가이드 카드 (Riegel 진단 + 주간 처방) — 기획서 §4.9, 계획서 M7
+    // MARK: 걷뛰 카드 — 기획서 §4
 
     /// 걷뛰 카드 — 런린이가 오늘 그대로 따라 할 수 있는 한 세션 처방 (§4).
     /// 수치를 감춘 다른 런린이 카드와 달리 여기서는 분·세트를 그대로 보여준다 —
@@ -732,193 +798,6 @@ struct ReportHomeContent: View {
         .frame(height: 10)
         .accessibilityElement()
         .accessibilityLabel("걷기 \(Format.walkRunMinutes(plan.walkMinutes))분, 뛰기 \(Format.walkRunMinutes(plan.runMinutes))분 비율")
-    }
-
-    private func trainingGuideCard(_ guide: TrainingGuide) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "target", title: "훈련 가이드", code: "COACH",
-                       tint: guide.prediction?.tone.color ?? RR.brand,
-                       soft: guide.prediction?.tone.softColor ?? RR.brandSoft,
-                       info: CardInfoText.guide)
-
-            Text(guideHeadline(guide))
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(RR.text)
-                .lineSpacing(4)
-                .padding(.top, 13)
-
-            if let prediction = guide.prediction {
-                Text(predictionCaption(prediction))
-                    .font(.system(size: 13))
-                    .foregroundStyle(RR.text2)
-                    .padding(.top, 7)
-            }
-
-            // D-day 칩 — 대회 날짜를 설정했을 때만. 단계가 곧 이번 주 처방의 근거다
-            if let chip = phaseChipText(guide.prescription) {
-                Text(chip)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(RR.brand)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .background(RR.brandSoft, in: Capsule())
-                    .padding(.top, 9)
-            }
-
-            Divider().overlay(RR.line).padding(.top, 14)
-
-            HStack(spacing: 8) {
-                metric(label: "권장 주간",
-                       value: kmRange(guide.prescription.weeklyKmLow,
-                                      guide.prescription.weeklyKmHigh),
-                       unit: "km", color: RR.text)
-                metric(label: "LSD 목표",
-                       value: guide.prescription.lsdKmHigh < 1
-                           ? "—"
-                           : kmRange(guide.prescription.lsdKmLow,
-                                     guide.prescription.lsdKmHigh),
-                       unit: "km", color: RR.text)
-                metric(label: "퀄리티",
-                       value: "\(guide.prescription.qualityCount)",
-                       unit: "회/주", color: RR.text)
-            }
-            .padding(.top, 13)
-
-            if let zones = guide.zones {
-                paceZoneRows(zones)
-                    .padding(.top, 14)
-            }
-
-            if let today {
-                todayWorkoutBox(today)
-                    .padding(.top, 14)
-            }
-
-            if guide.prescription.batteryLimited {
-                Text("체력 배터리가 낮아 이번 주는 LSD 하한으로 줄이고 인터벌을 뺐어요")
-                    .font(.system(size: 11.5))
-                    .lineSpacing(3)
-                    .foregroundStyle(RR.text3)
-                    .padding(.top, 10)
-            }
-
-            disclaimer("훈련 처방은 기록을 바탕으로 한 참고 정보이며 의학적 조언이 아닙니다.")
-        }
-        .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
-        .rrCard()
-    }
-
-    private func guideHeadline(_ guide: TrainingGuide) -> String {
-        guard let prediction = guide.prediction else {
-            // 8주 내 PR이 없어 예측은 못 해도 처방은 나간다
-            return "이번 주 훈련 처방이 준비됐어요"
-        }
-        let time = Format.duration(prediction.predictedSec)
-        return level == .beginner
-            ? "지금 흐름이면 \(prediction.race.label)\(prediction.race.objectParticle) \(time)에 들어올 수 있어요"
-            : "\(prediction.race.label) 예상 완주 \(time)"
-    }
-
-    private func predictionCaption(_ prediction: TrainingGuide.Prediction) -> String {
-        var caption = "\(prediction.baseLabel) \(Format.duration(prediction.baseTimeSec)) 기록 기준 Riegel 예측"
-        if let goal = prediction.goalSec {
-            caption += " · 목표 \(Format.duration(goal))"
-        }
-        return caption
-    }
-
-    /// "D-38 · 강화기" — 대회 당일은 "D-day · 대회 주간"
-    private func phaseChipText(_ prescription: TrainingGuide.Prescription) -> String? {
-        guard let phase = prescription.phase, let days = prescription.daysToRace else { return nil }
-        return "\(days == 0 ? "D-day" : "D-\(days)") · \(phase.label)"
-    }
-
-    /// 훈련 페이스 존 — 예측에 쓴 것과 같은 최근 PR에서 역산한 **현재 실력** 기준.
-    /// 목표 기록이 더 빨라도 훈련 페이스는 올라가지 않는다 (부상 방지, Daniels)
-    private func paceZoneRows(_ zones: TrainingGuide.PaceZones) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("훈련 페이스 — 최근 기록 기준")
-                .font(.system(size: 11))
-                .foregroundStyle(RR.text3)
-            paceRow(name: "이지 · LSD",
-                    value: "\(Format.pace(zones.easySecPerKm.lowerBound))~\(Format.pace(zones.easySecPerKm.upperBound))")
-            paceRow(name: "템포런", value: Format.pace(zones.tempoSecPerKm))
-            paceRow(name: "인터벌", value: Format.pace(zones.intervalSecPerKm))
-            if let goal = zones.goalSecPerKm {
-                paceRow(name: "목표 레이스", value: Format.pace(goal))
-            }
-        }
-    }
-
-    private func paceRow(name: String, value: String) -> some View {
-        HStack {
-            Text(name)
-                .font(.system(size: 13))
-                .foregroundStyle(RR.text2)
-            Spacer(minLength: 8)
-            Text(value + "/km")
-                .font(.system(size: 13.5, weight: .bold, design: .monospaced))
-                .foregroundStyle(RR.text)
-        }
-    }
-
-    /// 오늘의 훈련 — 홈 카드와 같은 추천을 근거 문장과 함께 보여준다
-    private func todayWorkoutBox(_ today: TodayWorkout) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("오늘의 훈련")
-                .font(.system(size: 11))
-                .foregroundStyle(RR.text3)
-            Text(todayHeadline(today))
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(RR.text)
-            if let reason = todayReason(today) {
-                Text(reason)
-                    .font(.system(size: 11.5))
-                    .lineSpacing(3)
-                    .foregroundStyle(RR.text2)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(RR.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    /// "이지런 5.2km @ 5′05″~5′38″/km" — 인터벌은 스펙이 이름에 이미 있어 거리를 겹쳐 쓰지 않는다
-    private func todayHeadline(_ today: TodayWorkout) -> String {
-        switch today.kind {
-        case .rest: return "휴식 — 오늘은 쉬는 게 훈련이에요"
-        case .doneCount: return "완료 — 이번 주 횟수를 다 채웠어요"
-        case .doneKm: return "완료 — 이번 주 거리를 다 채웠어요"
-        case .easy, .lsd, .tempo, .interval: break
-        }
-        var text = today.kind.label
-        if case .interval = today.kind {} else if let km = today.distanceKm {
-            text += " \(Format.km(km))km"
-        }
-        if let pace = today.paceSecPerKm {
-            text += pace.upperBound - pace.lowerBound < 1
-                ? " @ \(Format.paceKm(pace.lowerBound))"
-                : " @ \(Format.pace(pace.lowerBound))~\(Format.pace(pace.upperBound))/km"
-        }
-        return text
-    }
-
-    /// 왜 이 훈련인지 — 추천 근거 한 줄 (rest·done 계열은 제목이 이미 설명한다)
-    private func todayReason(_ today: TodayWorkout) -> String? {
-        switch today.reason {
-        case .battery: "체력 배터리가 낮아 오늘은 가볍게 가요"
-        case .hardRecently: "어제 강하게 뛰어서 오늘은 회복 러닝이에요"
-        case .lsdDue: "이번 주 롱런이 아직이에요 — 오늘이 적기예요"
-        case .qualityDue: "이번 주 퀄리티 세션 차례예요"
-        case .fill: "남은 주간 거리를 나눠 뛰는 날이에요"
-        case .none: nil
-        }
-    }
-
-    /// "30~33" / 상·하한이 같으면 "7.5" 하나만
-    private func kmRange(_ low: Double, _ high: Double) -> String {
-        high - low < 0.05 ? String(format: "%.1f", low)
-                          : String(format: "%.1f~%.1f", low, high)
     }
 
     /// 카드 하단 면책 문구 — 심사 지침 1.4.1은 건강 관련 해석에 의학적 조언이 아님을
@@ -1009,8 +888,8 @@ struct EmptyReportScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Eyebrow(text: "This week")
-                    Text("주간 리포트")
+                    Eyebrow(text: "Last 7 days")
+                    Text("런미새 리포트")
                         .font(RR.display(33))
                         .foregroundStyle(RR.text)
                 }

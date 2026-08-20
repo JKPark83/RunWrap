@@ -1,7 +1,8 @@
 import Foundation
 
-/// 주간 리포트 화면용 구조화 지표 — Insight(문장)와 같은 산식·가드를 쓰되,
+/// 런미새 리포트('내 상태') 화면용 구조화 지표 — Insight(문장)와 같은 산식·가드를 쓰되,
 /// 카드/차트가 그릴 수 있도록 수치를 그대로 노출한다.
+/// 판정·헤더 표기는 달력 주가 아니라 롤링 최근 7일 기준이다 (이슈 #21).
 ///
 /// 산식과 미노출 가드는 ReportEngine 주석 참조. 여기서도 동일하게,
 /// 표본이 부족하면 해당 카드를 아예 만들지 않는다(nil).
@@ -44,13 +45,12 @@ struct WeeklyReport {
         var paceDeltaSec: Double { previousPaceSec - recentPaceSec }  // 양수면 빨라짐
     }
 
-    let weekLabel: String          // "2026년 8월 2째주" — 그 주 목요일 기준 (Format.weekLabel)
-    let dateRange: String          // "8.3 – 8.9"
+    let dateRange: String          // "8.15 – 8.21" — 롤링 최근 7일 (오늘 포함)
     let distance: DistanceCard?
     let acwr: AcwrCard?
     let efficiency: EfficiencyCard?
     let streakWeeks: Int           // 주 1회 이상 달린 ISO 주 연속 개수
-    let weekRunCount: Int          // 이번 달력 주 러닝 횟수 (streak 카드 캡션용)
+    let weekRunCount: Int          // 최근 7일 러닝 횟수 (streak 카드 캡션·알림 본문용)
 
     var isEmpty: Bool { distance == nil && acwr == nil && efficiency == nil }
 
@@ -79,19 +79,19 @@ struct WeeklyReport {
 
 extension ReportEngine {
     func weeklyReport(from runs: [RunSummary]) -> WeeklyReport {
-        var calendar = Calendar(identifier: .iso8601)  // 월요일 시작
+        var calendar = Calendar(identifier: .iso8601)  // 월요일 시작 — 주별 차트용
         calendar.timeZone = .current
         let week = calendar.dateInterval(of: .weekOfYear, for: now)
             ?? DateInterval(start: now, duration: 7 * 86_400)
-        let range = "\(shortDate(week.start)) – \(shortDate(week.end.addingTimeInterval(-1)))"
+        // 헤더 표기·횟수는 달력 주가 아니라 롤링 최근 7일 (이슈 #21) — 오늘 포함
+        let range = "\(shortDate(day(-6))) – \(shortDate(now))"
 
-        return WeeklyReport(weekLabel: Format.weekLabel(weekStart: week.start, withYear: true),
-                            dateRange: range,
+        return WeeklyReport(dateRange: range,
                             distance: distanceCard(runs, calendar: calendar, currentWeek: week),
                             acwr: acwrCard(runs),
                             efficiency: efficiencyCard(runs),
                             streakWeeks: Self.streakWeeks(runs: runs, now: now),
-                            weekRunCount: runs.filter { week.contains($0.start) }.count)
+                            weekRunCount: runs.filter { $0.start >= day(-7) && $0.start < now }.count)
     }
 
     // MARK: - 카드 계산
