@@ -219,7 +219,7 @@
     <h1>RunWrap 기능·산식 정리</h1>
     <div class="sub">애플워치 러닝 데이터를 해석하는 온디바이스 계산 로직 총정리 문서 — 입력 데이터 · 계산식 · 미노출 가드 · 톤 판정 기준 · 출처</div>
     <div class="meta-row">
-      <span class="meta-chip">생성일 2026-08-11</span>
+      <span class="meta-chip">생성일 2026-08-11 · 갱신 2026-08-20 (7절 훈련 가이드 v2)</span>
       <span class="meta-chip">코드 기준: main 브랜치</span>
       <span class="meta-chip">대상: ios/RunWrap/*.swift (엔진 8종)</span>
     </div>
@@ -531,7 +531,7 @@
       <tr><th>입력</th><td><code>PersonalRecords.Entry</code>(8절 참고) 중 <b>최근 8주(56일) 이내</b> 달성분만 후보</td></tr>
       <tr><th>계산식</th><td><code>predictedSec = T1 × (D2/D1)^1.06</code><br>
         각 후보 PR마다 계산한 뒤, 예측이 가장 빠른(최솟값) 것을 채택</td></tr>
-      <tr><th>미노출 가드</th><td>최근 8주 내 PR이 하나도 없으면 예측만 nil (처방은 그대로 노출됨)</td></tr>
+      <tr><th>미노출 가드</th><td>최근 8주 내 PR이 하나도 없으면 예측·페이스 존(7.2절)이 nil (처방은 그대로 노출됨)</td></tr>
       <tr><th>톤 판정 (목표 대비)</th><td>
         <span class="tone tone-steady"><span class="dot"></span>steady</span> 목표 기록 미입력<br>
         <span class="tone tone-improving"><span class="dot"></span>improving</span> predicted ≤ goal (달성권)<br>
@@ -541,17 +541,65 @@
       <tr><th>출처</th><td>Riegel, 1981</td></tr>
     </table>
 
-    <h3 class="metric-title">7.2 주간 처방 (Prescription)</h3>
+    <h3 class="metric-title">7.2 훈련 페이스 존 (PaceZones — Daniels VDOT)</h3>
     <table class="spec">
-      <tr><th>권장 주간 거리</th><td><code>weeklyKmLow = chronic(4주 주평균)</code>, <code>weeklyKmHigh = chronic × 1.1</code> (10% 룰 상한)</td></tr>
-      <tr><th>LSD 목표</th><td><code>lsdKmLow = weeklyLow × 0.25</code> (항상)<br>
-        <code>lsdKmHigh</code>: 배터리 하향 보정 시 <code>weeklyLow × 0.25</code>(=하한 고정), 아니면 <code>weeklyHigh × 0.35</code></td></tr>
-      <tr><th>배터리 하향 보정</th><td><code>batteryLimited = (batteryTone == overload) OR (batteryTone == caution)</code> — 참이면 LSD 상단을 하한과 같은 값으로 고정</td></tr>
-      <tr><th>스피드 세션 상한</th><td><code>speedSessionsMax</code> = 초보 1회 / 숙련 2회</td></tr>
+      <tr><th>입력</th><td>7.1절과 <b>같은 PR</b> (최근 8주 내 예측이 가장 좋은 기록) 하나</td></tr>
+      <tr><th>VDOT 역산</th><td><code>v = D×1000 / t</code> (m/분, t는 분)<br>
+        <code>vo2(v) = −4.60 + 0.182258·v + 0.000104·v²</code><br>
+        <code>f(t) = 0.8 + 0.1894393·e^(−0.012778t) + 0.2989558·e^(−0.1932605t)</code> (t분 동안 유지 가능한 %VO₂max)<br>
+        <code>VDOT = vo2(v) / f(t)</code></td></tr>
+      <tr><th>미노출 가드</th><td>VDOT이 <b>20~90 밖</b>이면 입력 이상치로 보고 존 전체 nil (가정 — Daniels 표 수록 구간 30~85)</td></tr>
+      <tr><th>존 페이스</th><td>vo2 이차식을 속도에 대해 역산해 <code>60000/v</code> 초/km로 변환.<br>
+        이지 <b>74%(빠른 끝)~62%(느린 끝)</b> / 템포 <b>88%</b> / 인터벌 <b>97.5%</b><br>
+        목표 페이스 = <code>goalSec / raceKm</code> (목표 기록 미입력이면 nil)</td></tr>
+      <tr><th>원칙</th><td>페이스는 목표 기록이 아니라 <b>현재 실력(VDOT)</b> 기준 — 목표가 더 빨라도 존은 올라가지 않는다 (부상 방지). 갭은 7.1절 진단으로만 보여준다.</td></tr>
+      <tr><th>검증</th><td>VDOT 50(5K 19:57) 기준 이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″ — Daniels 표와 일치 확인</td></tr>
+      <tr><th>출처</th><td>Daniels &amp; Gilbert, "Oxygen Power" (1979) · 존 정의는 Daniels' Running Formula</td></tr>
+    </table>
+
+    <h3 class="metric-title">7.3 주기화 (Phase — 대회 날짜)</h3>
+    <table class="spec">
+      <tr><th>입력</th><td>설정의 대회 날짜(선택). <code>daysToRace</code> = 자정 경계 기준 날짜 차 (대회 당일 = 0). 미설정·지난 날짜면 단계 없이 평상시 처방</td></tr>
+      <tr><th>단계 판정</th><td><code>weeks = daysToRace / 7</code>, 테이퍼 주 수 = 풀 2 / 하프 1 / 5K·10K 0<br>
+        <code>weeks == 0</code> → <b>대회 주간</b> · <code>≤ taper</code> → <b>테이퍼</b> · <code>≤ taper+3</code> → <b>피크</b> · <code>≤ taper+7</code> → <b>강화기</b> · 그 밖 → <b>기초기</b></td></tr>
+      <tr><th>비고</th><td>(가정 — 일반 훈련 플랜 관례: 피크 3주 + 강화 4주 + 나머지 기초)</td></tr>
+    </table>
+
+    <h3 class="metric-title">7.4 주간 처방 (Prescription)</h3>
+    <table class="spec">
+      <tr><th>권장 주간 거리 (평상시)</th><td><code>weeklyKmLow = chronic(4주 주평균)</code><br>
+        <code>weeklyKmHigh = max(chronic, min(chronic × 1.1, peakWeeklyKm))</code> — 10% 룰 상한 + 피크 주간 거리에서 정지</td></tr>
+      <tr><th>테이퍼·대회 주간 감량</th><td><code>built = min(chronic, peakWeeklyKm)</code> 기준<br>
+        테이퍼: <code>built × 0.6 ~ 0.7</code> · 대회 주간: <code>built × 0.4 ~ 0.5</code> (가정 — 일반 플랜 관례)</td></tr>
+      <tr><th>피크 주간 거리 표</th><td>종목 × 레벨(런린이/런잘알/런신) km:<br>
+        5K 20/30/45 · 10K 25/40/55 · 하프 35/50/70 · 풀 45/65/90 (가정 — 일반 플랜 관례 수준)</td></tr>
+      <tr><th>LSD 목표</th><td>대회 주간이면 <b>0</b> (롱런 없이 간다)<br>
+        그 외: <code>lsdKmLow = weeklyLow × 0.25</code>, <code>lsdKmHigh</code> = 배터리 하향 보정 시 <code>weeklyLow × 0.25</code>(=하한 고정), 아니면 <code>weeklyHigh × 0.35</code></td></tr>
+      <tr><th>퀄리티 믹스 (템포, 인터벌)</th><td>단계 × 레벨:<br>
+        대회 주간 (0,0) · 테이퍼·기초기 = 런린이 (0,0), 그 외 (1,0) · 강화기 = 런신 (1,1), 그 외 (1,0) · 피크·날짜 미설정 = 런린이 (1,0), 그 외 (1,1)</td></tr>
+      <tr><th>배터리 하향 보정</th><td><code>batteryLimited = (batteryTone == overload) OR (batteryTone == caution)</code> — 참이면 LSD 상단을 하한으로 고정하고 <b>인터벌을 0으로</b></td></tr>
       <tr><th>출처</th><td>LSD 25~35% 범위는 기획서 §4.9 그대로. 배터리 연동 하향 로직은 코드 자체 설계 (<a href="#fn6" class="fnref">각주 6</a> 참고)</td></tr>
     </table>
 
-    <h3 class="metric-title">7.3 세션 강도 분류 (SessionKind)</h3>
+    <h3 class="metric-title">7.5 오늘의 훈련 (TodayWorkout — 동적 추천)</h3>
+    <table class="spec">
+      <tr><th>입력</th><td>이번 주(ISO 8601, 월요일 시작) 세션 + 주간 목표 횟수(<code>weeklyGoal</code>) + 배터리 톤 + 7.4절 처방. 홈 판단 카드의 권장 세션 줄과 리포트 카드의 "오늘의 훈련" 박스가 같은 결과를 쓴다</td></tr>
+      <tr><th>기준량</th><td><code>weeklyBase</code> = 배터리 하향 시 <code>weeklyKmLow</code>, 아니면 <code>(low+high)/2</code><br>
+        <code>remainKm = weeklyBase − 이번 주 누적 km</code><br>
+        <code>remainSessions = min(weeklyGoal − 이번 주 세션 수, 이번 주 남은 날 수)</code><br>
+        <code>splitKm = remainKm / remainSessions</code></td></tr>
+      <tr><th>판정 순서 (위가 우선)</th><td>
+        ① 배터리 <b>overload</b> → 휴식<br>
+        ② <code>remainSessions ≤ 0</code> → 완료(횟수) · ③ <code>remainKm &lt; 1km</code> → 완료(거리)<br>
+        ④ 배터리 <b>caution</b> → 이지 <code>splitKm</code> (강한 세션은 회복 뒤로)<br>
+        ⑤ 어제 0시 이후 스피드(4주 평균 페이스 × 0.9 이하) 또는 롱런(<code>≥ lsdKmLow</code>)을 뛰었으면 → 이지 (하드-이지 원칙)<br>
+        ⑥ 이번 주 LSD 미완 && (남은 날 ≤ 2 또는 남은 횟수 1) → LSD <code>(lsdLow+lsdHigh)/2</code>, 이지 페이스<br>
+        ⑦ 이번 주 스피드 세션 수 &lt; 템포 처방 → <b>템포 20분</b> (<code>1200s / T페이스</code>, 0.1km 반올림 — Daniels T 워크아웃 관례 20~40분의 하한). 그다음 &lt; 퀄리티 합계 → <b>인터벌</b> (런린이 4×400m / 런잘알 5×800m / 런신 5×1000m, I 페이스). 페이스 존 없으면 건너뛴다<br>
+        ⑧ 그 외 → 이지 (LSD가 남았으면 그 몫 <code>lsdMid</code>를 빼고 <code>remainSessions−1</code>로 분배)</td></tr>
+      <tr><th>상한 가드</th><td>오늘 거리는 <b>최근 4주 최장 거리 × 1.1</b>까지만 (10% 룰, Gabbett 2016) — 주 후반에 잔여량이 몰려 과도한 처방이 나오는 걸 막는다. 잔여량 1km 미만은 거리를 내지 않는다("오늘 0.4km"는 잡음)</td></tr>
+    </table>
+
+    <h3 class="metric-title">7.6 세션 강도 분류 (SessionKind)</h3>
     <table class="spec">
       <tr><th>분류 규칙</th><td>(가정 — 계획서 M7, 우선순위 순서대로 판정)<br>
         1) <code>LSD</code>: 그 주 최장 거리 <b>이면서</b> 그 주 총거리의 35% 이상<br>
@@ -560,7 +608,7 @@
       <tr><th>비고</th><td>동률 최장거리는 모두 LSD 후보. LSD 판정이 스피드보다 코드 순서상 우선한다.</td></tr>
     </table>
 
-    <h3 class="metric-title">7.4 강도 밸런스 (Balance)</h3>
+    <h3 class="metric-title">7.7 강도 밸런스 (Balance)</h3>
     <table class="spec">
       <tr><th>입력</th><td>최근 7일 세션 (비어 있으면 nil)</td></tr>
       <tr><th>계산식</th><td><code>speedSharePct = 스피드 세션 수 / 전체 세션 수 × 100</code> (가정 — 세션 <b>횟수</b> 기준이며 운동 시간 기준이 아니다)</td></tr>
@@ -659,10 +707,10 @@
     <p class="lead">설계 원칙: "엔진은 프로필을 모른다." <code>RunGoal</code>·<code>RunLevel</code>은 화면 계층에서만 쓰이고, 위 절들의 수치 산식·가드·톤 임계값은 프로필 값과 무관하게 항상 동일하게 계산된다.</p>
     <table class="spec">
       <tr><th>레벨(RunLevel)이 바꾸는 것</th><td>① 2절 인사이트 문장의 난이도(초보: 쉬운 표현 / 숙련: ACWR·EF 등 지표 용어 그대로)<br>
-        ② 7.2절 <code>speedSessionsMax</code> (초보 1회 / 숙련 2회) — 유일하게 <b>수치</b>에 직접 영향을 주는 지점</td></tr>
+        ② 7.4절 피크 주간 거리 표·퀄리티 믹스, 7.5절 인터벌 스펙(4×400 / 5×800 / 5×1000) — 훈련 가이드에서는 레벨이 <b>수치</b>에 직접 영향을 준다 (<code>TrainingGuideEngine.level</code>로 주입)</td></tr>
       <tr><th>목적(RunGoal)이 바꾸는 것</th><td>카드 <b>노출 여부·순서</b>만 바꾼다 — 수치 산식은 그대로.<br>
         <code>diet</code>: 칼로리 카드 → 몸무게 카드 → streak 카드(1주 이상일 때)를 배터리·거리보다 먼저 배치하고, ACWR 카드를 효율 카드 뒤로 미룬다.<br>
-        <code>training</code>: 기존 순서(거리 → ACWR → 효율) 유지. 훈련 가이드 카드는 <code>goal == training</code>이고 목표 레이스가 설정된 경우에만 계산·노출된다(<code>ReportHomeScreen.trainingGuide</code>).</td></tr>
+        <code>training</code>: 기존 순서(거리 → ACWR → 효율) 유지. 훈련 가이드 카드는 <b>목표 레이스가 설정된 경우</b>에만 계산·노출된다(<code>ReportHomeScreen.trainingGuide</code> — v0.7부터 목적과 무관).</td></tr>
     </table>
     <div class="note">기획서 §4.5는 다이어트 목적일 때 처방 문장의 "톤"이 바뀐다고 서술하지만, 실제로는 문장 자체가 달라지지 않는다 — <a href="#fn5" class="fnref">각주 5</a> 참고.</div>
   </section>

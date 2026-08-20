@@ -33,6 +33,7 @@ struct HomeScreen: View {
     /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 정해진 값을 그대로 쓴다
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
 
     @EnvironmentObject private var collection: CollectionStore
     @State private var showsCeremony = false
@@ -220,6 +221,7 @@ struct HomeScreen: View {
                                                                       now: now),
                                                  hasRaceGoal: RaceDistance(rawValue: raceGoalRaw) != nil,
                                                  weeklyGoal: weeklyGoal,
+                                                 level: level,
                                                  now: now)
         // 승급 카드가 뜨면 새를 216 → 172로 줄여 카드 자리를 만든다 (시안 1h)
         let birdSize: CGFloat = promotion == nil ? 216 : 172
@@ -290,7 +292,9 @@ struct HomeScreen: View {
         guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
         return TrainingGuideEngine(now: now, level: level)
             .guide(runs: runs, records: PersonalRecords.compute(runs: runs), race: race,
-                   goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil, batteryTone: batteryTone)
+                   goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil,
+                   raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
+                   batteryTone: batteryTone)
     }
 
     // MARK: - 스테이지 텍스트
