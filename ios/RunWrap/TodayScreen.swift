@@ -5,8 +5,11 @@ import CoreLocation
 /// 복장은 SF 심볼 + 라벨 칩으로 표현한다 — 전용 일러스트는 후속 제작 항목.
 struct TodayScreen: View {
     @StateObject private var location = LocationProvider()
+    @StateObject private var airQuality = AirQualityStore()
     @State private var weather: CurrentWeather?
     @State private var weatherFailed = false
+    /// 첫 진입 로딩이 끝나기 전에 당겨서 새로고침이 겹치면 조회가 이중으로 나간다 — 한 번에 하나만
+    @State private var isReloading = false
 
     var body: some View {
         ScrollView {
@@ -24,18 +27,23 @@ struct TodayScreen: View {
                     noticeCard("위치 권한이 꺼져 있어요",
                                message: "설정 > RunWrap에서 위치 접근을 허용하면 현재 위치의 날씨와 복장 추천을 볼 수 있어요.",
                                symbol: "location.slash")
-                case .failed:
+                // 새로고침 중 일시 실패로 이미 떠 있는 카드를 지우지 않는다 — 보여줄 값이 없을 때만 안내
+                case .failed where weather == nil:
                     noticeCard("현재 위치를 확인하지 못했어요",
-                               message: "잠시 뒤 탭을 다시 열면 다시 시도해요.",
+                               message: "화면을 아래로 당기면 다시 시도해요.",
                                symbol: "location.slash")
                 default:
                     if let weather {
                         weatherCard(weather)
+                        // 대기질은 부가 정보 — 로딩·실패 상태는 자리조차 만들지 않는다 (미노출 가드)
+                        if case .loaded(let air) = airQuality.state {
+                            airQualityCard(air)
+                        }
                         adviceCard(weather)
                         outfitCard(weather)
                     } else if weatherFailed {
                         noticeCard("날씨를 불러오지 못했어요",
-                                   message: "네트워크 상태를 확인하고 탭을 다시 열어 주세요.",
+                                   message: "네트워크 상태를 확인하고 화면을 아래로 당겨 새로고침해 주세요.",
                                    symbol: "cloud.slash")
                     } else {
                         loadingCard
@@ -48,11 +56,42 @@ struct TodayScreen: View {
             .padding(.bottom, 26)
         }
         .background(RR.bg.ignoresSafeArea())
-        .task { location.request() }
-        .onChange(of: location.state) { _, newState in
-            guard case .located(let coordinate) = newState else { return }
-            Task { await loadWeather(coordinate) }
+        .task { await reload() }
+        // 비구조 Task로 감싸는 이유는 HomeScreen의 refreshable 주석 참조 —
+        // 갱신 중 재렌더가 액션 태스크를 취소해 위치 결론 대기가 잘리는 것을 막는다
+        .refreshable { await Task { await reload() }.value }
+    }
+
+    /// 위치부터 다시 잡아 날씨·대기질을 조회한다 — 첫 진입(.task)과 당겨서 새로고침이 같은 경로다.
+    /// 거부·실패 결론은 location.state에 남아 본문 switch가 안내 카드로 그린다
+    private func reload() async {
+        guard !isReloading else { return }
+        isReloading = true
+        defer { isReloading = false }
+
+        location.request()
+        // LocationProvider는 델리게이트 기반이라 @Published 스트림으로 결론만 소비한다 (WeatherStore와 같은 패턴)
+        var coordinate: CLLocationCoordinate2D?
+        for await locationState in location.$state.values {
+            switch locationState {
+            case .idle, .loading:
+                continue
+            case .located(let located):
+                coordinate = located
+            case .denied, .failed:
+                return
+            }
+            break
         }
+        guard let coordinate else { return }
+
+        // 실패 표시는 이번 조회 결과로 다시 정한다 — 직전 날씨 값은 새 값이 올 때까지 유지
+        weatherFailed = false
+        // 날씨와 독립으로 조회한다 — 한쪽이 실패해도 다른 쪽 카드는 성립한다
+        async let weatherReload: Void = loadWeather(coordinate)
+        async let airReload: Void = airQuality.refresh(latitude: coordinate.latitude,
+                                                       longitude: coordinate.longitude)
+        _ = await (weatherReload, airReload)
     }
 
     private func loadWeather(_ coordinate: CLLocationCoordinate2D) async {
@@ -104,7 +143,8 @@ struct TodayScreen: View {
                     VStack(spacing: 7) {
                         Image(systemName: condition.symbol)
                             .font(.system(size: 38))
-                            .symbolRenderingMode(.multicolor)  // 시스템 멀티컬러 팔레트 — 색상 리터럴 아님
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(condition.tint, condition.tint2)
                         Text(condition.label)
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(RR.text2)
@@ -159,6 +199,74 @@ struct TodayScreen: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 12)
+    }
+
+    // MARK: 대기질 카드 (이슈 #8)
+
+    /// 에어코리아 원 수치·공식 등급을 가공 없이 그대로 보여준다 — KOGL 제3유형(변경금지) 준수.
+    /// 배지의 대표 등급도 공식 등급 중에서 고를 뿐(AirQualityEngine.representativeGrade) 새로 만들지 않는다
+    private func airQualityCard(_ air: AirQuality) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("지금 공기질")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("air")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+            }
+
+            if let grade = AirQualityEngine.representativeGrade(air) {
+                ToneBadge(tone: grade.tone, label: grade.label, code: "AIRKOREA")
+                    .padding(.top, 12)
+            }
+
+            VStack(spacing: 0) {
+                // 결측 항목(통신장애·점검)은 줄 자체를 내지 않는다 — 미노출 가드
+                airRow("초미세먼지 PM2.5", value: air.pm25, unit: "㎍/㎥", digits: 0, grade: air.pm25Grade)
+                airRow("미세먼지 PM10", value: air.pm10, unit: "㎍/㎥", digits: 0, grade: air.pm10Grade)
+                airRow("오존 O₃", value: air.o3, unit: "ppm", digits: 3, grade: air.o3Grade)
+                airRow("통합대기환경지수", value: air.khai, unit: "CAI", digits: 0, grade: air.khaiGrade)
+            }
+            .padding(.top, 7)
+
+            Divider().overlay(RR.line)
+
+            // 측정 기준 표기 — 어느 측정소의 언제 값인지 밝힌다 (수치의 신뢰 근거)
+            Text(([air.stationName + " 측정소", air.dataTime.map { $0 + " 기준" }]
+                .compactMap { $0 }).joined(separator: " · "))
+                .font(.system(size: 10.5))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 10)
+        }
+        .padding(EdgeInsets(top: 18, leading: 18, bottom: 14, trailing: 18))
+        .rrCard()
+    }
+
+    @ViewBuilder
+    private func airRow(_ name: String, value: Double?, unit: String,
+                        digits: Int, grade: AirGrade?) -> some View {
+        if let value {
+            HStack(spacing: 8) {
+                Text(name)
+                    .font(.system(size: 12))
+                    .foregroundStyle(RR.text2)
+                Spacer(minLength: 8)
+                Text(String(format: "%.\(digits)f", value))
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundStyle(RR.text)
+                Text(unit)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+                    .frame(width: 38, alignment: .leading)   // 단위 폭 고정 — 수치 우측 정렬 유지
+                Text(grade?.label ?? "—")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(grade?.tone.color ?? RR.text3)
+                    .frame(width: 52, alignment: .trailing)
+            }
+            .padding(.vertical, 7)
+        }
     }
 
     // MARK: 조언 카드
@@ -304,13 +412,24 @@ struct TodayScreen: View {
         .rrCard()
     }
 
-    /// Open-Meteo 출처 표기 — CC BY 4.0 조건 (계획서 M6)
+    /// 출처 표기 — Open-Meteo는 CC BY 4.0 조건 (계획서 M6),
+    /// 대기질은 KOGL 제3유형의 출처표시 의무 (이슈 #8) — 카드가 보일 때만 함께 표기한다
     private var attribution: some View {
-        Link(destination: URL(string: "https://open-meteo.com")!) {
-            Text("Weather data by Open-Meteo.com (CC BY 4.0)")
-                .font(.system(size: 10.5))
-                .foregroundStyle(RR.text3)
-                .underline()
+        VStack(alignment: .leading, spacing: 4) {
+            Link(destination: URL(string: "https://open-meteo.com")!) {
+                Text("Weather data by Open-Meteo.com (CC BY 4.0)")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(RR.text3)
+                    .underline()
+            }
+            if case .loaded = airQuality.state {
+                Link(destination: URL(string: "https://www.airkorea.or.kr")!) {
+                    Text("대기질 자료: 한국환경공단 에어코리아 (공공누리 제3유형)")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(RR.text3)
+                        .underline()
+                }
+            }
         }
         .padding(.horizontal, 4)
         .padding(.top, 2)
@@ -319,24 +438,26 @@ struct TodayScreen: View {
 
 // MARK: - 날씨 상태 매핑
 
-/// WMO 날씨 코드 → SF 심볼·한국어 상태 (Open-Meteo weather_code, WMO 4677 기준).
-/// 홈 판단 카드의 날씨 타일과 '오늘' 시트가 같은 아이콘을 쓰도록 파일 밖으로 꺼내 뒀다
+/// WMO 날씨 코드 → SF 심볼·한국어 상태·팔레트 색 (Open-Meteo weather_code, WMO 4677 기준).
+/// 홈 판단 카드의 날씨 타일과 '오늘' 시트가 같은 아이콘을 쓰도록 파일 밖으로 꺼내 뒀다.
+/// 멀티컬러 렌더링은 구름 본체를 흰색으로 그려 밝은 배경에서 사라진다(피드백 2026-08-20) —
+/// palette 렌더링에 RR 토큰을 입힌다: tint가 본체(구름·해), tint2가 보조 레이어(해·강수·번개)
 enum WeatherCondition {
-    static func of(_ code: Int?) -> (symbol: String, label: String)? {
+    static func of(_ code: Int?) -> (symbol: String, label: String, tint: Color, tint2: Color)? {
         guard let code else { return nil }
         return switch code {
-        case 0: ("sun.max.fill", "맑음")
-        case 1: ("sun.max.fill", "대체로 맑음")
-        case 2: ("cloud.sun.fill", "구름 조금")
-        case 3: ("cloud.fill", "흐림")
-        case 45, 48: ("cloud.fog.fill", "안개")
-        case 51...57: ("cloud.drizzle.fill", "이슬비")
-        case 61...67: ("cloud.rain.fill", "비")
-        case 71...77: ("cloud.snow.fill", "눈")
-        case 80...82: ("cloud.heavyrain.fill", "소나기")
-        case 85, 86: ("cloud.snow.fill", "소낙눈")
-        case 95...99: ("cloud.bolt.rain.fill", "뇌우")
-        default: ("cloud.fill", "흐림")
+        case 0: ("sun.max.fill", "맑음", RR.warn, RR.warn)
+        case 1: ("sun.max.fill", "대체로 맑음", RR.warn, RR.warn)
+        case 2: ("cloud.sun.fill", "구름 조금", RR.text3, RR.warn)
+        case 3: ("cloud.fill", "흐림", RR.text3, RR.text3)
+        case 45, 48: ("cloud.fog.fill", "안개", RR.text3, RR.text3)
+        case 51...57: ("cloud.drizzle.fill", "이슬비", RR.text3, RR.sky)
+        case 61...67: ("cloud.rain.fill", "비", RR.text3, RR.sky)
+        case 71...77: ("cloud.snow.fill", "눈", RR.text3, RR.sky)
+        case 80...82: ("cloud.heavyrain.fill", "소나기", RR.text3, RR.sky)
+        case 85, 86: ("cloud.snow.fill", "소낙눈", RR.text3, RR.sky)
+        case 95...99: ("cloud.bolt.rain.fill", "뇌우", RR.text3, RR.warn)
+        default: ("cloud.fill", "흐림", RR.text3, RR.text3)
         }
     }
 }

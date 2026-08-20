@@ -18,6 +18,9 @@ final class WeatherStore: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+    /// 마지막으로 잡힌 좌표 — 홈이 대기질(AirQualityStore) 조회에 쓴다.
+    /// 날씨와 같은 위치 결론을 공유해 위치 조회를 두 번 하지 않는다
+    @Published private(set) var coordinate: CLLocationCoordinate2D?
 
     /// 결론이 났는가 — 스플래시 해제 조건. 성공뿐 아니라 거부·실패도 결론이다:
     /// 어차피 더 기다려도 값이 생기지 않으므로 홈을 열고 힌트 문구로 안내한다.
@@ -38,39 +41,53 @@ final class WeatherStore: ObservableObject {
     func load() async {
         guard case .idle = state else { return }
         state = .loading
+        state = await resolve()
+    }
+
+    /// 당겨서 새로고침 — 위치부터 다시 잡아 날씨를 갱신한다 (홈 pull-to-refresh).
+    /// 직전 값을 유지한 채 결론만 바꾼다 — .loading을 거치면 isSettled가 풀려
+    /// 스플래시(RootView.isBooting)가 되살아나고, 홈 날씨 타일도 값 대신 힌트로 튄다.
+    func refresh() async {
+        // 기동 로딩이 아직 결론 전이면 그 결과를 기다리면 된다 — 중복 조회하지 않는다
+        guard isSettled else { return }
+        let resolved = await resolve()
+        // 일시 실패(위치 미확정·네트워크)가 방금까지 보이던 값을 지우지 않는다 —
+        // 직전 값이 더 정확한 근사다. 권한 거부는 의미 있는 결론이라 그대로 반영한다
+        if case .unavailable = resolved, case .loaded = state { return }
+        state = resolved
+    }
+
+    /// 위치 요청부터 날씨 조회까지의 본체 — 결론(State)만 돌려주고 상태 전이는 호출부가 정한다
+    private func resolve() async -> State {
         location.request()
 
         // LocationProvider는 델리게이트 기반이라 @Published 스트림으로 결론만 소비한다
-        var coordinate: CLLocationCoordinate2D?
+        var located: CLLocationCoordinate2D?
         for await locationState in location.$state.values {
             switch locationState {
             case .idle, .loading:
                 continue
-            case .located(let located):
-                coordinate = located
+            case .located(let point):
+                located = point
             case .denied:
-                state = .denied
-                return
+                return .denied
             case .failed:
-                state = .unavailable
-                return
+                return .unavailable
             }
             break
         }
-        guard let coordinate else {
-            state = .unavailable
-            return
-        }
+        guard let located else { return .unavailable }
+        coordinate = located
 
         do {
-            let current = try await client.current(latitude: coordinate.latitude,
-                                                   longitude: coordinate.longitude)
-            state = .loaded(current)
+            let current = try await client.current(latitude: located.latitude,
+                                                   longitude: located.longitude)
             // 수분 알람 갱신 (계획서 M9) — 날씨를 받아온 이 시점이 당일분 예약 트리거다.
             // '오늘'이 시트가 된 뒤로 이 호출이 앱의 유일한 정기 트리거가 됐다
             await NotificationScheduler.rescheduleHydration(forecastMaxC: current.forecastMaxC)
+            return .loaded(current)
         } catch {
-            state = .unavailable
+            return .unavailable
         }
     }
 }

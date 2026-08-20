@@ -14,6 +14,9 @@ struct HomeScreen: View {
 
     @EnvironmentObject private var health: HealthStore
     @EnvironmentObject private var weather: WeatherStore
+    /// 홈 날씨 타일의 미세·초미세 등급 재료 — 좌표는 WeatherStore의 위치 결론을 같이 쓴다.
+    /// '오늘' 시트의 스토어와 별개 인스턴스지만 1시간 디스크 캐시를 공유해 중복 조회는 없다
+    @StateObject private var airQuality = AirQualityStore()
     @Environment(\.openURL) private var openURL
 
     @State private var showsToday = false
@@ -47,6 +50,14 @@ struct HomeScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showsToday) { todaySheet }
+        // 구독 시점의 현재 좌표부터 흘러온다 — 첫 노출과 늦은 위치 결론(스플래시 타임아웃 경로)을 한 줄로 처리
+        .onReceive(weather.$coordinate) { coordinate in
+            guard let coordinate else { return }
+            Task {
+                await airQuality.load(latitude: coordinate.latitude,
+                                      longitude: coordinate.longitude)
+            }
+        }
     }
 
     /// '오늘'은 탭에서 시트로 내려왔다 — 날씨 줄을 눌렀을 때만 펼친다 (기획서 v0.8 §6)
@@ -60,6 +71,11 @@ struct HomeScreen: View {
                     }
                 }
         }
+    }
+
+    /// 날씨 타일에 얹을 대기질 — 값이 있을 때만. 로딩·실패는 자리조차 만들지 않는다 (미노출 가드)
+    private var loadedAir: AirQuality? {
+        if case .loaded(let air) = airQuality.state { air } else { nil }
     }
 
     /// 스토어의 위치·네트워크 상태를 엔진이 아는 값으로 접는다 (엔진은 둘 다 모른다)
@@ -122,7 +138,7 @@ struct HomeScreen: View {
     // MARK: - 헤더
 
     private func header(showsCollection: Bool) -> some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("런미새")
                 .font(RR.display(18))
                 .foregroundStyle(RR.text)
@@ -145,6 +161,20 @@ struct HomeScreen: View {
                         .strokeBorder(RR.line))
                 }
             }
+            // 설정 진입 — 리포트 탭까지 가지 않아도 홈에서 바로 연다 (도감과 같은 필 스타일)
+            NavigationLink {
+                SettingsScreen()
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .background(RR.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(RR.line))
+            }
+            .accessibilityLabel("설정")
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -223,7 +253,8 @@ struct HomeScreen: View {
                 }
 
                 if let verdict {
-                    VerdictCard(verdict: verdict, battery: battery, weather: weatherInput) { kind in
+                    VerdictCard(verdict: verdict, battery: battery, weather: weatherInput,
+                                air: loadedAir) { kind in
                         tap(kind, runs: runs)
                     }
                     .padding(.top, 18)
@@ -236,7 +267,24 @@ struct HomeScreen: View {
             .padding(.top, 10)
             .padding(.bottom, 24)
         }
-        .refreshable { await health.load() }
+        .refreshable {
+            // 건강 데이터와, 위치부터 다시 잡은 날씨·대기질을 함께 갱신한다.
+            // 대기질은 새 위치 결론이 재료라 날씨 뒤에 순서대로, 건강 데이터만 병렬로.
+            //
+            // 비구조 Task로 감싸는 이유: 갱신이 publish하는 상태 변화가 재렌더를 부르고,
+            // SwiftUI는 그때 refreshable 액션 태스크를 취소해 버린다(수십 ms 만에) —
+            // 위치 결론 대기가 잘려 새 위치가 반영되지 않았다. Task는 취소를 상속하지
+            // 않으므로 작업이 끝까지 돌고, 스피너는 .value 대기가 풀릴 때 내려간다
+            await Task {
+                async let healthReload: Void = health.load()
+                await weather.refresh()
+                if let coordinate = weather.coordinate {
+                    await airQuality.refresh(latitude: coordinate.latitude,
+                                             longitude: coordinate.longitude)
+                }
+                await healthReload
+            }.value
+        }
         .navigationDestination(isPresented: $showsLastRun) {
             if let last = runs.max(by: { $0.start < $1.start }) {
                 SessionDetailScreen(run: last)
@@ -458,6 +506,8 @@ private struct VerdictCard: View {
     /// 타일 그림의 재료 — 문구는 전부 엔진이 낸 것을 쓰고, 여기서는 같은 값을 그림으로 한 번 더 보여준다
     let battery: BatteryReport?
     let weather: TodayVerdictEngine.WeatherInput
+    /// 날씨 타일에 얹는 미세·초미세 등급 요약 — 상세 수치는 '오늘' 시트 몫
+    let air: AirQuality?
     let onTap: (TodayVerdict.Line.Kind) -> Void
 
     var body: some View {
@@ -550,7 +600,8 @@ private struct VerdictCard: View {
                     if let condition = WeatherCondition.of(current.weatherCode) {
                         Image(systemName: condition.symbol)
                             .font(.system(size: 21))
-                            .symbolRenderingMode(.multicolor)  // 시스템 멀티컬러 팔레트 — 색상 리터럴 아님
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(condition.tint, condition.tint2)
                     }
                     Text("\(Int(current.apparentC.rounded()))")
                         .font(RR.numeral(25))
@@ -566,6 +617,15 @@ private struct VerdictCard: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                 }
+                // 미세·초미세는 등급 문구를 등급 색으로 — 값이 있는 항목만 (미노출 가드)
+                if let air, air.pm10Grade != nil || air.pm25Grade != nil {
+                    HStack(spacing: 8) {
+                        airBadge("미세", grade: air.pm10Grade)
+                        airBadge("초미세", grade: air.pm25Grade)
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                }
             }
         case .loading:
             hintArt(symbol: "arrow.triangle.2.circlepath", line: verdict.weather)
@@ -573,6 +633,21 @@ private struct VerdictCard: View {
             hintArt(symbol: "location.slash", line: verdict.weather)
         case .unavailable:
             hintArt(symbol: "cloud.slash", line: verdict.weather)
+        }
+    }
+
+    /// "미세 좋음" — 항목명은 보조색, 등급 문구는 등급 톤 색. 등급이 없으면 그리지 않는다
+    @ViewBuilder
+    private func airBadge(_ name: String, grade: AirGrade?) -> some View {
+        if let grade {
+            HStack(spacing: 3) {
+                Text(name)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(RR.text3)
+                Text(grade.label)
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(grade.tone.color)
+            }
         }
     }
 
