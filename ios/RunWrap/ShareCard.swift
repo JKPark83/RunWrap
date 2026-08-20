@@ -18,7 +18,7 @@ struct ShareCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Eyebrow(text: "RUNWRAP · " + dateLine)
+            Eyebrow(text: "런미새 · " + dateLine)
 
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(run.distanceKm.map(Format.km) ?? "—")
@@ -63,7 +63,7 @@ struct ShareCardView: View {
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(RR.text2)
                 Spacer()
-                Text("RunWrap")
+                Text("런미새")
                     .font(.system(size: 13, weight: .heavy))
                     .foregroundStyle(RR.brand)
             }
@@ -158,7 +158,7 @@ struct PhotoCardView: View {
             ], startPoint: .top, endPoint: .bottom)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("RUNWRAP · \(dateLine)".uppercased())
+                Text("런미새 · \(dateLine)")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .kerning(1.4)
                     .foregroundStyle(.white.opacity(0.85))
@@ -181,7 +181,7 @@ struct PhotoCardView: View {
                 }
                 .padding(.top, 18)
 
-                Text("RunWrap")
+                Text("런미새")
                     .font(.system(size: 13, weight: .heavy))
                     .foregroundStyle(.white.opacity(0.9))
                     .padding(.top, 22)

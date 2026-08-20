@@ -29,7 +29,7 @@ struct NotificationContentTests {
                                       headline: "안정적으로 리듬을 지킨 한 주였습니다.",
                                       suggestion: nil, weekKm: 21.4, runCount: 3)
         #expect(NotificationScheduler.weeklyBody(snapshot: snapshot)
-            == "이번 주 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
+            == "최근 7일 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
         #expect(NotificationScheduler.weeklyBody(snapshot: nil)
             == "이번 주 러닝을 정리했어요 — 리포트를 열어보세요")
     }
@@ -42,9 +42,9 @@ struct NotificationContentTests {
         #expect(components.minute == 0)
     }
 
-    @Test("스냅샷 생성 — 최근 7일 거리 합과 주간 횟수를 담는다")
+    @Test("스냅샷 생성 — 최근 7일 거리 합과 횟수를 담는다")
     func snapshotMake() {
-        let report = WeeklyReport(weekLabel: "2026년 8월 2째주", dateRange: "8.3 – 8.9",
+        let report = WeeklyReport(dateRange: "8.3 – 8.9",
                                   distance: nil, acwr: nil, efficiency: nil,
                                   streakWeeks: 2, weekRunCount: 3)
         // 2일 전 10km는 7일 창 안, 9일 전 10km는 창 밖 → weekKm 10

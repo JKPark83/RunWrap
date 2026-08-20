@@ -51,30 +51,26 @@ struct SettingsScreen: View {
                 section(title: "주간 러닝 목표") {
                     weeklyGoalRow
                 }
-                // 목표 레이스 — 훈련 가이드(계획서 M7)의 진단 대상. 없음이면 카드 자체가 꺼진다
-                section(title: "목표 레이스") {
-                    optionRow(label: "없음", caption: "훈련 가이드 카드를 끕니다",
-                              isSelected: raceGoalRaw.isEmpty) {
-                        raceGoalRaw = ""
-                        raceDateRaw = 0
-                    }
-                    ForEach(RaceDistance.allCases, id: \.self) { race in
-                        optionRow(label: race.label,
-                                  caption: String(format: "%.1f km", race.km),
-                                  isSelected: raceGoalRaw == race.rawValue) {
-                            raceGoalRaw = race.rawValue
+                // 대회 목표 묶음 (이슈 #21) — 레이스·기록·날짜를 한 토글 아래 모은다.
+                // 끄면 대회 날짜만 지운다 — 레이스·기록은 훈련 가이드·도감이 계속 쓴다
+                section(title: "대회 목표") {
+                    toggleRow(label: "대회 목표 설정",
+                              caption: "레이스·기록·날짜를 정하면 리포트에 D-day와 예상 완주 기록이 떠요",
+                              isOn: raceDateBinding)
+                }
+                if raceDateRaw > 0 {
+                    section(title: "목표 레이스") {
+                        ForEach(RaceDistance.allCases, id: \.self) { race in
+                            optionRow(label: race.label,
+                                      caption: String(format: "%.1f km", race.km),
+                                      isSelected: raceGoalRaw == race.rawValue) {
+                                raceGoalRaw = race.rawValue
+                            }
                         }
                     }
-                }
-                if !raceGoalRaw.isEmpty {
                     section(title: "목표 기록") { goalTimeRow }
-                    // 대회 날짜 — 있으면 훈련 가이드가 D-day 주기화로 처방을 조절한다 (§4.9)
-                    section(title: "대회 날짜") {
-                        toggleRow(label: "대회 날짜로 맞추기",
-                                  caption: "대회일까지 기초→강화→테이퍼 단계로 처방해요",
-                                  isOn: raceDateBinding)
-                        if raceDateRaw > 0 { raceDateRow }
-                    }
+                    // 대회 날짜 — 훈련 가이드의 D-day 주기화와 리포트 D-day의 기준 (§4.9)
+                    section(title: "대회 날짜") { raceDateRow }
                 }
                 // 알림 — 로컬 알림 2종 (계획서 M8). 토글을 켤 때 시스템 권한을 요청한다
                 section(title: "알림") {
@@ -292,7 +288,8 @@ struct SettingsScreen: View {
     /// UNCalendarNotificationTrigger의 weekday와 같은 순서 (1 = 일요일)
     private static let weekdayNames = ["일", "월", "화", "수", "목", "금", "토"]
 
-    /// 대회 날짜 토글 — 켜면 8주 뒤(일반적인 최소 준비 기간)를 기본값으로 넣는다
+    /// 대회 목표 토글 (이슈 #21) — 켜면 대회일 기본값으로 8주 뒤(일반적인 최소 준비 기간)를
+    /// 넣고, 끄면 대회 날짜만 지운다. 레이스·기록 값은 남겨 다음에 켤 때 그대로 복원된다
     private var raceDateBinding: Binding<Bool> {
         Binding(get: { raceDateRaw > 0 },
                 set: { isOn in

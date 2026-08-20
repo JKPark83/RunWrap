@@ -34,10 +34,11 @@ enum NotificationScheduler {
         return "\(lead) — 리포트에 반영됐어요"
     }
 
-    /// 주간 본문 — 캐시 스냅샷이 있으면 횟수·거리·헤드라인, 없으면 기본 문구
+    /// 주간 본문 — 캐시 스냅샷이 있으면 횟수·거리·헤드라인, 없으면 기본 문구.
+    /// 횟수·거리 모두 롤링 최근 7일 기준이라 문구도 "최근 7일"로 맞춘다 (이슈 #21)
     static func weeklyBody(snapshot: ReportSnapshot?) -> String {
         guard let snapshot else { return "이번 주 러닝을 정리했어요 — 리포트를 열어보세요" }
-        return String(format: "이번 주 %d회 · %.1f km — %@",
+        return String(format: "최근 7일 %d회 · %.1f km — %@",
                       snapshot.runCount, snapshot.weekKm, snapshot.headline)
     }
 
