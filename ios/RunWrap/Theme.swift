@@ -13,6 +13,8 @@ enum RR {
     static let text3 = adaptive(0x8F8F86, 0x73736C)
     static let brand = adaptive(0xFF4D2E, 0xFF5A3C)
     static let pos = adaptive(0x0E9146, 0x35E077)
+    /// 강수(비·눈) 심볼 전용 청색 — 웜 팔레트의 유일한 한랭 색. 날씨 아이콘 palette 렌더링에만 쓴다
+    static let sky = adaptive(0x2E8BD9, 0x5AAEFF)
     static let warn = adaptive(0xC77700, 0xFFAE00)
     static let dang = adaptive(0xD91F00, 0xFF3B30)
 

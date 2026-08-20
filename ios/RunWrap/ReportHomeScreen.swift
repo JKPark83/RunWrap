@@ -227,20 +227,6 @@ struct ReportHomeContent: View {
                 .padding(.vertical, 7)
                 .background(RR.surface, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(RR.line))
-
-            // 설정 진입점 — 샘플 시트에서는 프로필을 바꿀 이유가 없어 숨긴다 (계획서 M2)
-            if !isSample {
-                NavigationLink {
-                    SettingsScreen()
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(RR.text2)
-                        .frame(width: 38, height: 38)
-                        .background(RR.surface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(RR.line))
-                }
-            }
         }
         .padding(.bottom, 6)
     }
