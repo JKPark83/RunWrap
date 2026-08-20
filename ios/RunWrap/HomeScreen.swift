@@ -37,6 +37,9 @@ struct HomeScreen: View {
 
     @EnvironmentObject private var collection: CollectionStore
     @State private var showsCeremony = false
+    // PB 축하 (이슈 #21) — 홈 진입 때 베이스라인과 비교해 새 기록이면 한 번만 띄운다
+    @State private var showsPBCongrats = false
+    @State private var newPBs: [PersonalRecords.Entry] = []
 
     var body: some View {
         Group {
@@ -114,6 +117,7 @@ struct HomeScreen: View {
             // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
             // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다
             if CollectionEngine.hasReachedAdult(stage: growth.stage) { showsCeremony = true }
+            checkNewPBs(runs: runs)
         }
         .fullScreenCover(isPresented: $showsCeremony) {
             CeremonyScreen(species: pendingSpecies,
@@ -121,6 +125,9 @@ struct HomeScreen: View {
                             cycleStartedAt: cycleStartedAt) { newGoal, newSeconds in
                 startNewCycle(goal: newGoal, goalSeconds: newSeconds, now: Date())
             }
+        }
+        .sheet(isPresented: $showsPBCongrats) {
+            PBCongratsSheet(entries: newPBs)
         }
     }
 
@@ -493,9 +500,93 @@ struct HomeScreen: View {
         cycleStartedAtRaw = now.timeIntervalSince1970
         maxStage = GrowthStage.egg.rawValue
     }
+
+    /// PB 갱신 감지 (이슈 #21) — 베이스라인과 비교해 새 기록이 있으면 한 번 축하한다.
+    /// 첫 비교(베이스라인 없음)는 조용히 씨만 뿌린다 — 기존 기록 전부를 축하하면 소음이다.
+    /// 세러모니와 겹치면 이번에는 베이스라인을 남겨 두고 미룬다 — 다음 진입 때 다시 잡힌다.
+    private func checkNewPBs(runs: [RunSummary]) {
+        guard !DemoMode.isActive else { return }   // 합성 데이터 기록으로는 축하하지 않는다
+        let current = PersonalRecords.compute(runs: runs)
+        guard !current.isEmpty else { return }
+        let fresh = PBEngine.newRecords(current: current, baseline: PBBaselineCache.load())
+        guard fresh.isEmpty || !showsCeremony else { return }
+        PBBaselineCache.save(.make(from: current))
+        if !fresh.isEmpty {
+            newPBs = fresh
+            showsPBCongrats = true
+        }
+    }
 }
 
 // MARK: - 하위 뷰
+
+/// PB 축하 시트 (이슈 #21) — 새 기록이 잡힌 홈 진입에서 한 번만 뜬다.
+/// 메달 색은 성장기 PB 목록과 같은 매핑(RR.medalColor)을 쓴다.
+private struct PBCongratsSheet: View {
+    let entries: [PersonalRecords.Entry]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Image(systemName: "medal.fill")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(RR.medalColor(forPB: entries.first?.label ?? ""))
+                .padding(.top, 34)
+            Text("새 기록입니다!")
+                .font(RR.display(26))
+                .foregroundStyle(RR.text)
+                .padding(.top, 14)
+            Text("최고 기록을 갈아치우셨네요. 성장기에 바로 새겨 두었습니다.")
+                .font(.system(size: 13.5))
+                .foregroundStyle(RR.text2)
+                .padding(.top, 6)
+
+            VStack(spacing: 0) {
+                ForEach(Array(entries.enumerated()), id: \.element.label) { index, entry in
+                    HStack(spacing: 12) {
+                        Image(systemName: "medal.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(RR.medalColor(forPB: entry.label))
+                            .frame(width: 24)
+                        Text(entry.label)
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundStyle(RR.text)
+                        Spacer(minLength: 8)
+                        Text(Format.duration(entry.timeSec))
+                            .font(.system(size: 17, weight: .bold, design: .monospaced))
+                            .foregroundStyle(RR.brand)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    if index < entries.count - 1 {
+                        Divider().overlay(RR.line).padding(.leading, 52)
+                    }
+                }
+            }
+            .rrCard()
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+
+            Spacer(minLength: 12)
+
+            Button {
+                dismiss()
+            } label: {
+                Text("계속 달리기")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 18)
+        }
+        .presentationDetents([.medium])
+        .background(RR.bg)
+    }
+}
 
 /// 오늘의 판단 카드 (기획서 v0.8 §6) — 판정 한 줄 + 그 판정의 재료 네 줄.
 ///

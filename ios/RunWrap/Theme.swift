@@ -33,6 +33,21 @@ enum RR {
     static let warnSoft = soft(warn, 0.13, 0.16)
     static let dangSoft = soft(dang, 0.11, 0.16)
 
+    /// PB 메달 색 (이슈 #21) — 종목 격에 맞춰 풀=금·하프=은·10K=동, 5K는 브랜드색
+    static let medalGold = adaptive(0xC9A227, 0xE3C34E)
+    static let medalSilver = adaptive(0x8E9196, 0xB6BAC1)
+    static let medalBronze = adaptive(0xB0703C, 0xCE8B52)
+
+    /// PB 메달 색 매핑 — PersonalRecords.Entry.label 기준
+    static func medalColor(forPB label: String) -> Color {
+        switch label {
+        case "풀": medalGold
+        case "하프": medalSilver
+        case "10K": medalBronze
+        default: brand
+        }
+    }
+
     private static func adaptive(_ light: UInt32, _ dark: UInt32) -> Color {
         Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(rgb: dark) : UIColor(rgb: light) })
     }
