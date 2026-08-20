@@ -27,9 +27,12 @@
     <!-- 30일 초과 이력 — ACWR 4주·PR 8주 산출 재료 (계획서 §2.3) -->
     <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
 
+    <!-- allowBackup=false: 리포트 캐시 등 건강 파생 데이터를 기기 밖(클라우드 백업)에
+         두지 않는다 — iOS의 백업 제외 정책(심사 5.1.3(ii) 대응)과 동일. -->
     <application
         android:name=".RunWrapApp"
         android:label="런미새"
+        android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="false">
 
