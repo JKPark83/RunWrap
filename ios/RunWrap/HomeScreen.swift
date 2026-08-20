@@ -147,18 +147,19 @@ struct HomeScreen: View {
                 NavigationLink {
                     CollectionScreen()
                 } label: {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Image(systemName: "book.closed")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                         Text("도감")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 15, weight: .semibold))
                     }
                     .foregroundStyle(RR.text)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 7)
-                    .background(RR.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(RR.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(RR.line))
+                    .contentShape(Rectangle())
                 }
             }
             // 설정 진입 — 리포트 탭까지 가지 않아도 홈에서 바로 연다 (도감과 같은 필 스타일)
@@ -166,13 +167,13 @@ struct HomeScreen: View {
                 SettingsScreen()
             } label: {
                 Image(systemName: "gearshape.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(RR.text)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .background(RR.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .frame(width: 40, height: 40)
+                    .background(RR.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(RR.line))
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel("설정")
         }
