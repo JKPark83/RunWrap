@@ -17,3 +17,7 @@ internal fun weekStart(instant: Instant): LocalDate =
 /// iOS `Date.timeIntervalSince` 대응 — 초 단위 Double (ms 정밀도)
 internal fun secondsBetween(from: Instant, to: Instant): Double =
     (to.toEpochMilli() - from.toEpochMilli()) / 1000.0
+
+/// 달력 날짜(KST) — iOS `calendar.startOfDay(for:)` 기반 날짜 경계 판정 대응.
+/// 경과일은 `ChronoUnit.DAYS.between(dayOf(a), dayOf(b))`로 자정 경계 기준이 된다
+internal fun dayOf(instant: Instant): LocalDate = instant.atZone(SEOUL).toLocalDate()
