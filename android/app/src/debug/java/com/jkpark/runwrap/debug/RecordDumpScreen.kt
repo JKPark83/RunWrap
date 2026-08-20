@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
 /// 디버그 전용 레코드 덤프 — 최근 30일 HC 레코드를 타입별 건수·출처·최신 샘플로 보여 준다.
 /// 목적: 계획서 §2.2 ⚠️ 5항목(경로·케이던스·HRV·안정심박·호흡수/피부온)을 갤럭시
 /// 실기기에서 판정해 `docs/plan/android-m0-검증노트.md`에 기록하는 것.
-/// 릴리스 소스셋의 동명 스텁과 시그니처를 맞춘다.
+/// M5부터는 debug 소스셋의 DevActivity만 참조한다 — 릴리스 스텁 불필요.
 @Composable
 fun RecordDumpScreen(client: HealthConnectClient) {
     var rows by remember { mutableStateOf(listOf<DumpRow>()) }

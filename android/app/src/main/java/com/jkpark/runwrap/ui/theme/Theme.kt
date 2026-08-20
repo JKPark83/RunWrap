@@ -1,13 +1,35 @@
 package com.jkpark.runwrap.ui.theme
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.jkpark.runwrap.R
 
 /// 디자인 토큰 — iOS `Theme.swift`의 rr-theme 팔레트(claude.design "Runner Report" v0.4)를
 /// 수치 그대로 이식. 라이트/다크 팔레트를 CompositionLocal로 내려 화면은 `RR.bg`처럼
@@ -79,7 +101,18 @@ object RR {
     val posSoft: Color @Composable @ReadOnlyComposable get() = LocalRRPalette.current.posSoft
     val warnSoft: Color @Composable @ReadOnlyComposable get() = LocalRRPalette.current.warnSoft
     val dangSoft: Color @Composable @ReadOnlyComposable get() = LocalRRPalette.current.dangSoft
+
+    /// 디스플레이 서체 스타일 — iOS `RR.display(size:)` 대응 (한글 제목 전용)
+    fun display(size: TextUnit) = TextStyle(fontFamily = RRDisplayFamily, fontSize = size)
+
+    /// 큰 숫자 서체 스타일 — iOS `RR.numeral(size:)` 대응.
+    /// Anton은 라틴 숫자 전용이라 한글 자리에 쓰지 않는다 (iOS와 같은 규칙).
+    fun numeral(size: TextUnit) = TextStyle(fontFamily = RRNumeralFamily, fontSize = size)
 }
+
+/// 번들 서체 — iOS와 같은 .ttf(SIL OFL 1.1)를 res/font로 복사해 두었다
+val RRDisplayFamily = FontFamily(Font(R.font.black_han_sans))
+val RRNumeralFamily = FontFamily(Font(R.font.anton))
 
 /// 앱 루트 테마 — 시스템 모드에 따라 RR 팔레트를 내려보낸다.
 @Composable
@@ -127,4 +160,64 @@ enum class RRTone {
             STEADY -> RR.brandSoft
             IMPROVING -> RR.posSoft
         }
+}
+
+/// 기본 카드 — iOS `.rrCard(radius:)` 대응: surface 배경 + 1dp line 테두리 +
+/// 검정 4% 그림자, 모서리 r12.
+fun Modifier.rrCard(radius: Dp = 12.dp): Modifier = composed {
+    val shape = RoundedCornerShape(radius)
+    shadow(
+        elevation = 1.dp, shape = shape,
+        ambientColor = Color.Black.copy(alpha = 0.04f),
+        spotColor = Color.Black.copy(alpha = 0.04f),
+    )
+        .background(RR.surface, shape)
+        .border(1.dp, RR.line, shape)
+}
+
+/// 톤 배지 — 색 대시 + 라벨 + 코드 (iOS `ToneBadge` 대응).
+/// label/code를 넘기면 톤 기본 문안 대신 그 문안을 쓴다 (예: "BURNING"/"STREAK").
+@Composable
+fun ToneBadge(tone: RRTone, label: String? = null, code: String? = null) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(width = 16.dp, height = 4.dp).background(tone.color))
+        Text(
+            label ?: tone.label,
+            fontSize = 11.sp, fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 0.55.sp, color = tone.color,
+        )
+        Text(
+            code ?: tone.code,
+            fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+            fontFamily = FontFamily.Monospace, letterSpacing = 1.sp,
+            color = tone.color.copy(alpha = 0.7f),
+        )
+    }
+}
+
+/// 섹션 아이브로 라벨 — 소문자를 넣어도 대문자로 보인다 (iOS `Eyebrow` 대응)
+@Composable
+fun Eyebrow(text: String) {
+    Text(
+        text.uppercase(),
+        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+        fontFamily = FontFamily.Monospace, letterSpacing = 1.4.sp,
+        color = RR.text3,
+    )
+}
+
+/// 실내(트레드밀) 배지 — 목록·상세 공용 (iOS `IndoorBadge` 대응)
+@Composable
+fun IndoorBadge() {
+    Text(
+        "실내",
+        Modifier
+            .background(RR.brandSoft, RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.5.dp),
+        fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+        color = RR.brand,
+    )
 }

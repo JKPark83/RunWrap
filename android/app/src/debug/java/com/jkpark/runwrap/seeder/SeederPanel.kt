@@ -23,8 +23,7 @@ import androidx.health.connect.client.PermissionController
 import kotlinx.coroutines.launch
 
 /// 시더 조작 패널 (debug 전용) — 쓰기 권한 요청 → DemoData 주입/삭제.
-/// MainActivity(메인 소스셋)가 참조하므로 릴리스에는 같은 시그니처의 빈 스텁이 있다
-/// (src/release/.../SeederPanel.kt — RecordDumpScreen과 같은 패턴).
+/// M5부터는 debug 소스셋의 DevActivity만 참조한다 — 릴리스 스텁 불필요.
 @Composable
 fun SeederPanel(client: HealthConnectClient) {
     var writeGranted by remember { mutableStateOf(false) }

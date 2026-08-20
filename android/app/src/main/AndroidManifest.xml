@@ -10,6 +10,9 @@
     <!-- 외부 통신은 날씨(open-meteo)·대기질(에어코리아) 둘뿐 — 건강 데이터는 싣지 않는다 (기획서 §6) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 홈 날씨 브리핑용 대략 위치 — 좌표는 소수 2자리로 반올림해 보내므로 coarse면 충분 (iOS와 동일) -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
     <!-- 러닝 코어 (iOS HealthPermissions.core 대응) -->
     <uses-permission android:name="android.permission.health.READ_EXERCISE" />
     <uses-permission android:name="android.permission.health.READ_DISTANCE" />
@@ -38,6 +41,12 @@
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="false">
+
+        <!-- Google Maps 키 — local.properties의 MAPS_API_KEY를 빌드가 주입한다 (커밋 금지, 계획서 §1).
+             키가 없으면 빈 값이 들어가고 세션 상세가 지도 카드를 빈 상태로 가드한다. -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
 
         <activity
             android:name=".MainActivity"

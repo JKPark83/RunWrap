@@ -6,7 +6,7 @@ import java.time.Instant
 /// PR 판정 (가정 — 계획서 M3): 완주 거리 ∈ [D, D×1.10]인 세션 중 (페이스 × D)의 최소값.
 /// 워치 GPS는 공인 거리보다 조금 길게 찍히는 게 보통이라 10% 상단 여유를 둔다.
 /// 해당 거리 기록이 없으면 항목 자체를 내지 않는다.
-/// 발전상 통계(MonthlySeries 등)는 통계 화면과 함께 이식한다 (M5).
+/// 발전상 월별 추이는 `MonthlySeries.kt` 참조 (M5에서 통계 화면과 함께 이식).
 object PersonalRecords {
     /// 한 종목의 최고 기록 한 건
     data class Entry(

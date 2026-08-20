@@ -3,6 +3,7 @@ package com.jkpark.runwrap.seeder
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
@@ -29,7 +30,11 @@ import com.jkpark.runwrap.health.DemoData
 import com.jkpark.runwrap.health.SplitMix64
 import java.time.Instant
 import java.time.ZoneOffset
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.roundToLong
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /// 에뮬레이터 시더 — DemoData를 Health Connect에 실제 레코드로 insert한다 (계획서 M4).
 ///
@@ -53,6 +58,8 @@ object HealthConnectSeeder {
         HealthPermission.getWritePermission(RestingHeartRateRecord::class),
         HealthPermission.getWritePermission(RespiratoryRateRecord::class),
         HealthPermission.getWritePermission(SkinTemperatureRecord::class),
+        // 경로는 레코드 타입이 아니라 세션 내포 데이터 — 전용 상수로만 존재한다
+        HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE,
     )
 
     /// 세션 목록 검증(M4 완료 기준)에 필수인 최소 쓰기 권한 — 시더 버튼 노출 게이트.
@@ -71,8 +78,13 @@ object HealthConnectSeeder {
     /// DemoData 전 시나리오를 insert하고 넣은 레코드 수를 돌려준다.
     /// 중복 실행하면 데이터가 겹쳐 쌓인다 — 다시 넣기 전에 wipe()를 먼저 쓴다.
     suspend fun seed(client: HealthConnectClient, now: Instant = Instant.now()): Int {
+        // 쓰기 권한을 먼저 본다 — 경로는 세션 레코드에 내포돼 레코드 단위 필터로 못 거르고,
+        // 권한 없이 실으면 insert 전체가 SecurityException으로 죽는다
+        val granted = client.permissionController.getGrantedPermissions()
+        val routeAllowed = HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE in granted
+
         val records = mutableListOf<Record>()
-        DemoData.runs(now).forEach { records += runRecords(it) }
+        DemoData.runs(now).forEach { records += runRecords(it, withRoute = routeAllowed) }
         DemoData.vo2Max(now).forEach { (time, value) ->
             records += Vo2MaxRecord(
                 metadata = Metadata.manualEntry(),
@@ -86,7 +98,6 @@ object HealthConnectSeeder {
         DemoData.crossTrainings(now).forEach { records += crossRecords(it) }
 
         // 쓰기 권한이 부여된 타입만 넣는다 — 기기 HC가 모르는 타입은 건너뛴다
-        val granted = client.permissionController.getGrantedPermissions()
         val insertable = records.filter { HealthPermission.getWritePermission(it::class) in granted }
 
         // 한 번에 넣기엔 많다(러닝 시리즈 포함 수천 건) — 배치 상한을 넉넉히 피해 나눠 넣는다
@@ -111,9 +122,9 @@ object HealthConnectSeeder {
 
     // MARK: - 러닝 1회 → 세션 + 시리즈
 
-    /// RunSummary 하나를 세션·심박 시리즈·거리 구간·걸음·칼로리 레코드로 펼친다.
-    /// 시리즈는 상세 화면(존·스플릿·드리프트) 검증 재료라 요약값과 결이 맞게 합성한다.
-    private fun runRecords(run: RunSummary): List<Record> {
+    /// RunSummary 하나를 세션(+야외 경로)·심박 시리즈·거리 구간·걸음·칼로리 레코드로 펼친다.
+    /// 시리즈는 상세 화면(존·스플릿·드리프트·지도) 검증 재료라 요약값과 결이 맞게 합성한다.
+    private fun runRecords(run: RunSummary, withRoute: Boolean): List<Record> {
         val start = run.start
         val end = start.plusMillis((run.durationSec * 1_000).roundToLong())
         val rng = SplitMix64(run.id.hashCode().toLong().toULong())
@@ -126,6 +137,8 @@ object HealthConnectSeeder {
                     ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL
                 } else ExerciseSessionRecord.EXERCISE_TYPE_RUNNING,
                 title = "시드 러닝",
+                // 실내는 경로가 없다 — WorkoutDetailStore의 실내 생략 분기와 짝 (계획서 M1)
+                exerciseRoute = if (!run.isIndoor && withRoute) syntheticRoute(run, start) else null,
             ))
 
         // 심박 — 30초 간격, 평균을 사이에 두고 전반 낮고 후반 높은 완만한 램프.
@@ -193,6 +206,29 @@ object HealthConnectSeeder {
             )
         }
         return records
+    }
+
+    /// 야외 세션용 합성 경로 — WorkoutDetailStore.synthetic의 한강 순환 타원과 같은 모양.
+    /// 시드를 분리해 뒤에 오는 심박·거리 합성의 재현성을 깨지 않는다 (케이던스 시드 분리와 같은 이유)
+    private fun syntheticRoute(run: RunSummary, start: Instant): ExerciseRoute {
+        val rng = SplitMix64(run.id.hashCode().toLong().toULong() + 0x0407EuL)
+        val km = run.distanceKm ?: 8.0
+        val centerLat = 37.520 + rng.unit() * 0.02
+        val centerLon = 126.94 + rng.unit() * 0.03
+        val phase = rng.unit() * 2 * PI
+        val radius = 0.0016 * sqrt(km)
+        val points = 140
+        // 마지막 점이 세션 끝을 넘지 않게 1초 여유 — HC가 구간 밖 좌표를 거부한다
+        val spanSec = maxOf(run.durationSec - 1, 1.0)
+        return ExerciseRoute((0..points).map { i ->
+            val t = i.toDouble() / points * 2 * PI
+            val wobble = 1 + 0.10 * sin(t * 3 + phase) + 0.05 * sin(t * 7)
+            ExerciseRoute.Location(
+                time = start.plusMillis((spanSec * i / points * 1_000).roundToLong()),
+                latitude = centerLat + radius * wobble * sin(t) * 0.72,
+                longitude = centerLon + radius * wobble * cos(t),
+            )
+        })
     }
 
     // MARK: - 수면·활력징후·크로스 트레이닝

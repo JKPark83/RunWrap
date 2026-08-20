@@ -11,8 +11,17 @@ composeBom = "2026.06.01"
 activityCompose = "1.13.0"
 healthConnect = "1.1.0"
 datastore = "1.2.1"
+# 2.9 안정 라인 최신 — 요구 스택(stdlib 2.0, compose-ui 1.7)이 우리 버전보다 낮아 호환 (pom 확인)
+navigationCompose = "2.9.8"
+# material3 1.4+는 아이콘을 전이 의존성으로 안 준다. 아이콘 라이브러리는 1.7.8에서 동결·독립 배포 — 최종 버전 고정
+composeMaterialIcons = "1.7.8"
 # 1.10+는 Kotlin 2.3 스택을 요구 — Kotlin 2.2.21에는 1.9.0이 정합 (pom의 stdlib 의존성 확인)
 kotlinxSerializationJson = "1.9.0"
+# 최신 8.4.0은 kotlin-stdlib 2.4.10을 요구해 Kotlin 2.2.21(메타데이터 가독 한계 +1 마이너 = 2.3)과
+# 안 맞고, 8.3.1은 minCompileSdk 37이라 compileSdk 36과 안 맞다. 8.3.0이 stdlib 2.3.10 ·
+# compose-bom 2026.03.00 · minCompileSdk 36으로 우리 스택과 정합한 최신판
+# (repo1.maven.org pom + aar-metadata 2026-08-21 조회)
+mapsCompose = "8.3.0"
 junit = "4.13.2"
 
 [libraries]
@@ -23,7 +32,10 @@ androidx-compose-foundation = { module = "androidx.compose.foundation:foundation
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-health-connect-client = { module = "androidx.health.connect:connect-client", version.ref = "healthConnect" }
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+androidx-compose-material-icons-core = { module = "androidx.compose.material:material-icons-core", version.ref = "composeMaterialIcons" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]

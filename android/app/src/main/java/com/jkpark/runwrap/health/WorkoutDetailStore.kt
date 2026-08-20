@@ -81,6 +81,11 @@ class WorkoutDetailStore(private val context: Context) {
         }
     }
 
+    /// 세션별 경로 동의(ExerciseRouteRequestContract) 결과 반영 — 동의 배너를 지도로 바꾼다 (계획서 M5)
+    fun applyConsentRoute(points: List<GeoPoint>) {
+        _detail.value = _detail.value?.copy(route = thin(points), routeConsentRequired = false)
+    }
+
     // MARK: - 실기기: Health Connect 조회
 
     private suspend fun fetch(run: RunSummary, birthYear: Int?, now: Instant): WorkoutDetail {

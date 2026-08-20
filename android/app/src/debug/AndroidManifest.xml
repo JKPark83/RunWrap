@@ -15,4 +15,14 @@
     <uses-permission android:name="android.permission.health.WRITE_RESTING_HEART_RATE" />
     <uses-permission android:name="android.permission.health.WRITE_RESPIRATORY_RATE" />
     <uses-permission android:name="android.permission.health.WRITE_SKIN_TEMPERATURE" />
+    <!-- 세션에 내포된 경로(ExerciseRoute) 쓰기 — 세션 상세 지도 검증 재료 (계획서 M5) -->
+    <uses-permission android:name="android.permission.health.WRITE_EXERCISE_ROUTE" />
+
+    <!-- M4 검증 화면(시더·레코드 덤프) 진입점 — 런처에는 안 보이고 adb로만 연다:
+         adb shell am start -n com.jkpark.runwrap/.debug.DevActivity -->
+    <application>
+        <activity
+            android:name=".debug.DevActivity"
+            android:exported="true" />
+    </application>
 </manifest>
