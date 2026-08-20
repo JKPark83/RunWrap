@@ -158,6 +158,19 @@ enum DemoData {
         }
     }
 
+    /// 합성 대기질 — 시뮬레이터에는 위치·측정소 실데이터가 없다 (이슈 #8).
+    /// '보통' 시나리오: 배지·수치·등급·측정소 캡션이 모두 그려지는 구성을 확인하는 재료
+    static var airQuality: AirQuality {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:00"   // 에어코리아 dataTime 형식
+        return AirQuality(stationName: "중구",
+                          dataTime: formatter.string(from: Date()),
+                          pm10: 34, pm25: 19, o3: 0.031, khai: 68,
+                          pm10Grade: .moderate, pm25Grade: .moderate,
+                          o3Grade: .moderate, khaiGrade: .moderate)
+    }
+
     /// 합성 크로스 트레이닝 — 이번 주 자전거 90분 + 근력 45분 (계 2시간 15분).
     /// 걷기 25분 세션은 CrossTrainingEngine의 30분 미만 걷기 가드에 걸러지는 걸 확인하는 재료.
     static var crossTrainings: [CrossTraining] {

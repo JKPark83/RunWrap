@@ -46,6 +46,20 @@ jobs:
       - name: Xcode 버전 확인
         run: xcodebuild -version
 
+      # 에어코리아 인증키(선택, 이슈 #8) — 시크릿이 있으면 번들 리소스로 심는다.
+      # xcodegen보다 먼저 만들어야 파일이 프로젝트(리소스 목록)에 잡힌다.
+      # 없으면 파일이 안 생기고 대기질 기능만 조용히 숨는다 — 빌드는 그대로 성립한다.
+      - name: 에어코리아 인증키 주입 (선택)
+        env:
+          AIRKOREA_SERVICE_KEY: ${{ secrets.AIRKOREA_SERVICE_KEY }}
+        run: |
+          if [ -n "$AIRKOREA_SERVICE_KEY" ]; then
+            printf '{"serviceKey":"%s"}\n' "$AIRKOREA_SERVICE_KEY" > ios/RunWrap/AirQualityKey.json
+            echo "AirQualityKey.json 생성"
+          else
+            echo "AIRKOREA_SERVICE_KEY 시크릿 없음 — 대기질 기능 없이 빌드"
+          fi
+
       - name: xcodegen으로 프로젝트 생성
         run: |
           brew install --quiet xcodegen
