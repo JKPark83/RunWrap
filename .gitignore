@@ -13,3 +13,9 @@ ios/RunWrap/AirQualityKey.json
 # .claude/settings.json·hooks는 공유하고, 개인 설정과 워크트리는 제외한다
 .claude/settings.local.json
 .claude/worktrees/
+
+# Android — 로컬 SDK 경로(이후 Maps 키 포함)·Gradle/Kotlin 캐시는 커밋하지 않는다
+# (빌드 산출물 android/app/build는 위의 build/ 규칙이 이미 걸러 준다)
+android/local.properties
+android/.gradle/
+android/.kotlin/

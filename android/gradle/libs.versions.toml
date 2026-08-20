@@ -1,0 +1,25 @@
+# 버전 카탈로그 — 계획서 §1 결정 반영.
+# 버전 근거: dl.google.com/android/maven2 group-index + aar-metadata (2026-08-20 조회).
+# AGP 8.13.2(8.x 안정 라인), Kotlin 2.2.21(Gradle 8.14 호환 확인 범위), connect-client 1.1.0(안정).
+# compose-bom은 최신(2026.08.00)이 아니다: 그 BOM의 Compose 1.12는 AGP 9.1+/compileSdk 37을
+# 요구한다. AGP 8.13.2/compileSdk 36과 호환되는 최신 안정 BOM이 2026.06.01(Compose 1.11.4)이다.
+
+[versions]
+agp = "8.13.2"
+kotlin = "2.2.21"
+composeBom = "2026.06.01"
+activityCompose = "1.13.0"
+healthConnect = "1.1.0"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-health-connect-client = { module = "androidx.health.connect:connect-client", version.ref = "healthConnect" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
