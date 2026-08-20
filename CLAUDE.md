@@ -62,6 +62,10 @@ cd ios && xcodegen generate    # 이것만 셸에서 직접 실행한다
   빌드 번호는 App Store Connect의 최신 빌드 +1로 CI가 정해 주입하므로
   `project.yml`의 `CURRENT_PROJECT_VERSION`은 로컬 빌드용 기본값일 뿐 손대지 않아도 된다.
   (로컬에서 수동 업로드할 때만 직접 +1 한다.)
+- 마케팅 버전도 CI가 정한다: App Store 심사가 승인된 버전은 pre-release train이 닫히므로
+  (altool 에러 90186/90062), CI가 업로드 전에 승인된 최신 버전을 조회해 `MARKETING_VERSION`이
+  그 이하면 패치 버전을 자동 인상해 주입한다. `project.yml`의 `MARKETING_VERSION`은
+  "최소 희망 버전"일 뿐이며, 1.1 → 1.2 같은 의미 있는 버전 인상만 손으로 올리면 된다.
 
 ## 완료 기준
 
