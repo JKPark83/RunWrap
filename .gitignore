@@ -5,6 +5,11 @@ build/
 ios/RunWrap/Info.plist
 ios/RunWrap/RunWrap.entitlements
 
+# 에어코리아 data.go.kr 인증키 — 비밀값, 커밋 금지 (이슈 #8).
+# 형식: {"serviceKey": "<디코딩 인증키>"} — AirQualityStore가 번들에서 읽는다.
+# 파일을 만들거나 지운 뒤에는 xcodegen을 다시 돌려야 번들 목록에 반영된다.
+ios/RunWrap/AirQualityKey.json
+
 # .claude/settings.json·hooks는 공유하고, 개인 설정과 워크트리는 제외한다
 .claude/settings.local.json
 .claude/worktrees/
