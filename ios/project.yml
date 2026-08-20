@@ -27,7 +27,11 @@ targets:
     info:
       path: RunWrap/Info.plist
       properties:
-        UILaunchScreen: {}
+        # 런치 스크린 = 스플래시(SplashScreen.swift)와 같은 배경색 + 중앙 아이콘 —
+        # 프로세스 기동 중 흰 화면 대신 첫 프레임부터 브랜드 화면이 보이게 한다
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: LaunchIcon
         CFBundleDisplayName: 런미새
         UIAppFonts: [BlackHanSans-Regular.ttf, Anton-Regular.ttf]   # 시안 v0.4 디스플레이 서체 (RR.display / RR.numeral)
         # 버전은 아래 settings의 MARKETING_VERSION·CURRENT_PROJECT_VERSION에서 주입한다 —

@@ -8,11 +8,20 @@ import SwiftUI
 /// 수락률이 오른다. 그래서 분기 기준이 `health.state`가 아니라 레벨 저장값이다.
 struct RootView: View {
     @EnvironmentObject private var health: HealthStore
+    /// 날씨는 홈이 뜨기 전에 준비돼야 해서 루트가 쥔다 — 스플래시 해제 조건이자 홈의 재료
+    @StateObject private var weather = WeatherStore()
     @AppStorage("didConnectHealth") private var didConnectHealth = false
     /// 온보딩 설문 완료 여부 — 빈 문자열이면 아직 레벨이 없다 (= 설문 미완료)
     @AppStorage(ProfileKey.levelV2) private var levelRaw = ""
     /// v0.6 이하 사용자에게 재온보딩 사유를 한 번 알려준다
     @State private var isReturningUser = false
+    /// 스플래시 안전망 — 기동이 병적으로 늘어지면 홈부터 연다.
+    /// 이때 날씨 타일은 "불러오는 중" 힌트로 남고, 로딩이 끝나는 즉시 값으로 바뀐다
+    @State private var splashTimedOut = false
+    /// 안전망 상한 — 위치 권한이 있으면 날씨가 홈보다 먼저다(요구사항). 정상 실패 경로는
+    /// 위치 실패·네트워크 타임아웃(WeatherClient 10초)이 이보다 먼저 결론을 내므로,
+    /// 이 값은 그마저 안 오는 병적 상황(권한 다이얼로그 방치 등) 전용이다
+    private static let splashTimeout: Duration = .seconds(20)
 
     var body: some View {
         Group {
@@ -24,13 +33,12 @@ struct RootView: View {
                     .overlay(alignment: .bottom) {
                         if isReturningUser { migrationNotice }
                     }
+            } else if isBooting {
+                // 기동 로딩(건강 데이터 + 현재 위치 날씨)이 끝날 때까지 홈 노출을 미룬다
+                SplashScreen()
+                    .transition(.opacity)
             } else {
                 switch health.state {
-                case .idle, .loading:
-                    ZStack {
-                        RR.bg.ignoresSafeArea()
-                        ProgressView()
-                    }
                 case .unavailable:
                     ContentUnavailableView("이 기기에서는 쓸 수 없어요",
                                            systemImage: "heart.slash",
@@ -46,10 +54,16 @@ struct RootView: View {
                     }
                 case .loaded:
                     MainTabs()
+                case .idle, .loading:
+                    // isBooting이 이미 걸러서 오지 않는 가지 — switch 완전성용
+                    SplashScreen()
                 }
             }
         }
+        .environmentObject(weather)
         .tint(RR.brand)
+        // 스플래시 → 홈은 교차 페이드로 잇는다 — 런치 스크린류 화면의 관례
+        .animation(.easeOut(duration: 0.35), value: isBooting)
         .task {
             detectReturningUser()
             // 온보딩을 마친 사용자는 바로 조회 (권한 시트는 이미 설문 끝에서 지났다)
@@ -57,14 +71,36 @@ struct RootView: View {
                 await health.load()
             }
         }
+        .task {
+            // 건강 데이터와 별개 트랙 — 위치 권한이 남아 있으면 다이얼로그가 스플래시 위에 뜬다
+            if !levelRaw.isEmpty { await weather.load() }
+        }
+        .task(id: levelRaw.isEmpty) {
+            // 안전망 시계는 온보딩이 끝난 시점부터 잰다
+            guard !levelRaw.isEmpty else { return }
+            // 취소는 타임아웃이 아니다 — sleep이 끝까지 잤을 때만 안전망을 발동한다
+            guard (try? await Task.sleep(for: Self.splashTimeout)) != nil else { return }
+            splashTimedOut = true
+        }
         .onChange(of: levelRaw) { _, newValue in
             // 설문을 막 마친 직후 — 권한 시트가 끝났으니 데이터를 읽는다
             guard !newValue.isEmpty else { return }
             isReturningUser = false
             Task { await health.load() }
+            Task { await weather.load() }
         }
         .onChange(of: health.state) { _, newState in
             if case .loaded = newState { didConnectHealth = true }
+        }
+    }
+
+    /// 스플래시를 유지할 조건 — 건강 데이터가 로딩 중이거나, 날씨가 아직 결론이 없을 때.
+    /// 건강 쪽 실패·미지원은 스플래시가 아니라 전용 안내 화면으로 보낸다.
+    private var isBooting: Bool {
+        switch health.state {
+        case .idle, .loading: true
+        case .loaded: !(weather.isSettled || splashTimedOut)
+        case .unavailable, .failed: false
         }
     }
 

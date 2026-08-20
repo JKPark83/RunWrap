@@ -16,6 +16,11 @@ enum RR {
     static let warn = adaptive(0xC77700, 0xFFAE00)
     static let dang = adaptive(0xD91F00, 0xFF3B30)
 
+    /// 기동 스플래시 전용 — 앱 아이콘의 파랑 그라데이션 중간 톤 (light #16A5FB / dark #101426).
+    /// 런치 스크린(Info.plist UIColorName)이 같은 에셋을 참조하므로 hex가 아니라 에셋에서 온다 —
+    /// 색을 바꾸려면 LaunchBackground.colorset 한 곳만 고친다
+    static let launchBg = Color("LaunchBackground")
+
     /// 시안: light rgba(20,20,16,.13) / dark rgba(255,255,255,.11)
     static let line = alpha(black: 0.13, white: 0.11)
     /// 차트 막대 바탕 — light rgba(20,20,16,.09) / dark rgba(255,255,255,.10)
