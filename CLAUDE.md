@@ -62,6 +62,9 @@ cd ios && xcodegen generate    # 이것만 셸에서 직접 실행한다
   빌드 번호는 App Store Connect의 최신 빌드 +1로 CI가 정해 주입하므로
   `project.yml`의 `CURRENT_PROJECT_VERSION`은 로컬 빌드용 기본값일 뿐 손대지 않아도 된다.
   (로컬에서 수동 업로드할 때만 직접 +1 한다.)
+- **릴리스 절차**: App Store 심사가 승인(출시)되면 그 버전의 pre-release train이 닫혀,
+  같은 `MARKETING_VERSION`으로는 이후 TestFlight 업로드가 전부 거부된다(altool 에러 90186/90062).
+  출시 확정 시 다음 `main` 머지 전에 `project.yml`의 `MARKETING_VERSION`을 올리는 것까지가 릴리스다.
 
 ## 완료 기준
 
