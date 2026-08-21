@@ -123,6 +123,9 @@ struct ReportDetailScreen: View {
     // MARK: 훈련 가이드 섹션 (진단·처방·밸런스) — 계획서 M7
 
     private func predictionSection(_ prediction: TrainingGuide.Prediction) -> some View {
+        // 근거 표기 — 예전엔 "5K 25:00 기준"(공인 PR)이었지만 이제 실제 세션이라
+        // "최근 1주 7.4km 34:12 기준"처럼 표본 시점과 실제 거리를 함께 밝힌다 (이슈 #24)
+        let window = TrainingGuideEngine.sampleWindowLabel(days: prediction.baseWindowDays)
         let sentence: String
         if let goal = prediction.goalSec {
             sentence = switch prediction.tone {
@@ -137,13 +140,13 @@ struct ReportDetailScreen: View {
                        title: "목표 진단 · Riegel 예측",
                        sentence: sentence,
                        metrics: [("예상 \(Format.duration(prediction.predictedSec))", RR.text2),
-                                 ("\(prediction.baseLabel) \(Format.duration(prediction.baseTimeSec)) 기준",
+                                 ("\(window) \(prediction.baseLabel) \(Format.duration(prediction.baseTimeSec)) 기준",
                                   RR.text2)],
                        explainTitle: "Riegel 공식이란",
-                       explainBody: "T2 = T1 × (D2/D1)^1.06 — 기록 하나로 다른 거리의 완주 시간을 추정하는 경험식입니다 (Riegel 1981). 최근 8주 안의 최고 기록을 기준으로 씁니다.")
+                       explainBody: "T2 = T1 × (D2/D1)^1.06 — 기록 하나로 다른 거리의 완주 시간을 추정하는 경험식입니다 (Riegel 1981). 최근 1주 안의 러닝을 우선 기준으로 삼고, 없으면 4주·8주로 범위를 넓힙니다. 5km 이상 세션만 쓰고, 세션 거리의 3배가 넘는 종목은 오차가 커 예측하지 않습니다.")
     }
 
-    /// 훈련 페이스 존 — 목표가 아니라 "현재 실력"(최근 PR의 VDOT)에서 산출한다는 것이 핵심
+    /// 훈련 페이스 존 — 목표가 아니라 "현재 실력"(선택된 실제 세션의 VDOT)에서 산출한다는 것이 핵심
     private func zonesSection(_ zones: TrainingGuide.PaceZones) -> some View {
         section(color: RR.brand,
                 title: "훈련 페이스 · Daniels VDOT",
@@ -153,7 +156,7 @@ struct ReportDetailScreen: View {
                 metrics: [("이지 \(Format.pace(zones.easySecPerKm.lowerBound))~\(Format.pace(zones.easySecPerKm.upperBound))", RR.text2),
                           ("템포 \(Format.pace(zones.tempoSecPerKm))", RR.text2)],
                 explainTitle: "VDOT이란",
-                explainBody: "최근 8주 최고 기록에서 역산한 유효 최대산소섭취량입니다 (Daniels & Gilbert 1979). 이지런은 그 62~74%, 템포런은 88%, 인터벌은 97.5% 강도에 해당하는 페이스예요. 목표가 더 빨라도 훈련 페이스를 앞당기면 부상 위험만 커집니다 — 기록이 좋아지면 페이스가 따라 올라갑니다.")
+                explainBody: "예측과 같은 세션에서 역산한 유효 최대산소섭취량입니다 (Daniels & Gilbert 1979). 이지런은 그 62~74%, 템포런은 88%, 인터벌은 97.5% 강도에 해당하는 페이스예요. 목표가 더 빨라도 훈련 페이스를 앞당기면 부상 위험만 커집니다 — 기록이 좋아지면 페이스가 따라 올라갑니다.")
     }
 
     private func prescriptionSection(_ prescription: TrainingGuide.Prescription) -> some View {

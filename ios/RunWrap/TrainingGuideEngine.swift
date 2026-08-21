@@ -5,9 +5,11 @@ import Foundation
 ///
 /// 산식 출처:
 /// - 완주 예측: Riegel 공식 T2 = T1 × (D2/D1)^1.06 (Riegel 1981).
-///   T1은 최근 8주 안의 PR 중 예측이 가장 좋게 나오는 기록.
+///   T1은 유효 표본 중 예측이 가장 좋게 나오는 세션이다. 표본은 공인 거리 PR이 아니라
+///   **실제 러닝 세션**에서 뽑는다 — 6~9km처럼 공인 거리 사이에 걸린 세션만 뛰는 러너가
+///   예측을 통째로 못 받던 문제 때문이다 (이슈 #24). 창은 1주 우선·없을 때만 4주→8주.
 /// - 현재 기력·훈련 페이스: Daniels & Gilbert(1979) "Oxygen Power"의 VDOT 공식.
-///   같은 PR에서 VDOT를 역산하고 %VDOT 구간으로 페이스 존을 정한다
+///   같은 세션에서 VDOT를 역산하고 %VDOT 구간으로 페이스 존을 정한다
 ///   (이지 62~74% / 템포 88% / 인터벌 97.5% — Daniels' Running Formula의 존 정의).
 ///   훈련 페이스는 목표 기록이 아니라 **현재 실력** 기준이다 — 목표가 현재보다 빨라도
 ///   페이스 존은 올라가지 않고, 갭은 진단(예상 vs 목표)으로만 보여준다 (부상 방지).
@@ -20,21 +22,23 @@ import Foundation
 /// - 강도 밸런스: (easy+LSD) : 스피드 세션 수를 80/20 원칙과 비교 (Seiler 80/20).
 ///
 /// 가드는 ReportEngine.acwr와 동일 — 기록이 3주 미만이거나 만성 부하가 주 3km 미만이면
-/// 진단·처방 전체를 내지 않는다(nil). 페이스 존은 최근 8주 안의 PR(5K 이상)이 없으면
-/// 따로 내지 않는다 — 틀린 페이스는 없느니만 못하다.
+/// 진단·처방 전체를 내지 않는다(nil). 예측·페이스 존은 유효 표본(5km 이상, 외삽 3배 이내)이
+/// 8주 안에 하나도 없으면 따로 내지 않는다 — 틀린 페이스는 없느니만 못하다.
 
 struct TrainingGuide: Equatable {
-    /// 목표 레이스 완주 예측 — 최근 8주 안의 PR이 없으면 nil (처방만 노출)
+    /// 목표 레이스 완주 예측 — 유효 표본이 없으면 nil (처방만 노출)
     struct Prediction: Equatable {
         let race: RaceDistance
         let predictedSec: Double
-        let baseLabel: String        // 근거 PR 종목 ("5K")
-        let baseTimeSec: Double      // 근거 PR 기록(초)
+        let baseLabel: String        // 근거 세션 거리 ("7.4km")
+        let baseTimeSec: Double      // 근거 세션 기록(초)
+        /// 표본을 찾은 창(일) — 7·28·56. 1주(7)가 아니면 화면이 "최근 4주 기준"처럼 밝힌다
+        let baseWindowDays: Int
         let goalSec: Double?         // 목표 기록 미입력이면 nil
         let tone: RRTone             // 목표 대비: 달성권 improving / 5% 이내 steady / 그 밖 caution
     }
 
-    /// 훈련 페이스 존 — 예측과 같은 PR에서 역산한 VDOT 기준 (Daniels & Gilbert 1979).
+    /// 훈련 페이스 존 — 예측과 같은 세션에서 역산한 VDOT 기준 (Daniels & Gilbert 1979).
     /// 페이스는 모두 초/km. 존 상수는 VDOT 50(5K 19:57)에서 Daniels 표와 대조해 검증했다
     /// (이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″).
     struct PaceZones: Equatable {
@@ -137,7 +141,7 @@ struct TodayWorkout: Equatable {
     let kind: Kind
     let reason: Reason
     let distanceKm: Double?                    // rest·done이면 nil. 인터벌은 본훈련 합계
-    let paceSecPerKm: ClosedRange<Double>?     // 페이스 존이 없으면(최근 PR 없음) nil
+    let paceSecPerKm: ClosedRange<Double>?     // 페이스 존이 없으면(유효 예측 표본 없음) nil
 }
 
 struct TrainingGuideEngine {
@@ -148,18 +152,69 @@ struct TrainingGuideEngine {
 
     // MARK: - 진단 (Riegel)
 
-    /// Riegel 예측 — 최근 8주(56일) 안의 PR마다 T1×(D2/D1)^1.06을 계산해 최솟값을 고른다
-    static func predictedTime(for goal: RaceDistance, records: [PersonalRecords.Entry],
-                              now: Date) -> Double? {
-        bestPrediction(for: goal, records: records, now: now)?.sec
+    /// 예측 입력 한 건 — Riegel·VDOT의 재료는 거리와 시간뿐이라 공인 거리일 필요가 없다.
+    /// PersonalRecords.Entry가 아니라 실제 세션에서 직접 뽑는 이유는 `predictionSamples` 참고.
+    struct PredictionSample: Equatable {
+        let distanceKm: Double
+        let timeSec: Double
+        let date: Date
+        /// 근거 표기용 라벨 — 공인 거리가 아니므로 "7.4km"처럼 실제 거리로 적는다.
+        /// 예전에는 "5K" 같은 공인 종목명이었다 (이슈 #24로 입력이 임의 거리가 되며 바뀜)
+        var label: String { Format.km(distanceKm) + "km" }
     }
 
-    private static func bestPrediction(for goal: RaceDistance, records: [PersonalRecords.Entry],
-                                       now: Date) -> (entry: PersonalRecords.Entry, sec: Double)? {
-        let cutoff = now.addingTimeInterval(-56 * 86_400)
-        return records.filter { $0.date >= cutoff }
-            .map { (entry: $0, sec: $0.timeSec * pow(goal.km / $0.distanceKm, 1.06)) }
-            .min { $0.sec < $1.sec }
+    /// 예측 입력의 최소 거리(km). 이보다 짧은 세션은 페이스 변동성이 커 외삽 기반이 못 된다
+    /// (이슈 #24 — 정확도 우선으로 보수적으로 잡았다: "틀린 인사이트는 없느니만 못하다").
+    static let minSampleKm = 5.0
+
+    /// Riegel 외삽 배율 상한. 원 논문(Riegel 1981)의 신뢰 구간이 약 1/3~3배이고
+    /// 그 밖은 오차가 급격히 커진다 — 5km 세션으로 풀코스(8.4배)를 추정하지 않는다.
+    static let maxExtrapolationRatio = 3.0
+
+    /// 표본 창 — 최근 1주를 우선하고, 없을 때만 4주 → 8주로 넓힌다 (이슈 #24).
+    /// 창을 넘나들며 비교하지 않는 것이 핵심이다: 1주 안에 세션이 있으면 8주 전 레이스급
+    /// 기록이 더 빨라도 쓰지 않는다. "최근 실력"이 "최고 기록"을 이긴다는 뜻이고,
+    /// 이지런만 한 주에 예측이 느려지는 것은 버그가 아니라 의도된 동작이다.
+    static let sampleWindowDays: [Int] = [7, 28, 56]
+
+    /// 표본 창 라벨 — "최근 1주"·"최근 4주"·"최근 8주". 화면이 예측 근거 시점을 밝히는 데 쓴다.
+    /// 엔진이 문자열을 내는 예외인 이유는 창 상수(sampleWindowDays)와 한 곳에 두기 위해서다
+    static func sampleWindowLabel(days: Int) -> String {
+        "최근 \(max(1, days / 7))주"
+    }
+
+    /// Riegel 예측 — 유효 표본마다 T1×(D2/D1)^1.06을 계산해 최솟값을 고른다
+    static func predictedTime(for goal: RaceDistance, runs: [RunSummary],
+                              now: Date) -> Double? {
+        bestPrediction(for: goal, runs: runs, now: now)?.sec
+    }
+
+    /// 세션에서 예측 후보를 뽑는다 — 거리·페이스가 있고 최소 거리·외삽 배율 가드를 통과한 것만.
+    /// 실내(트레드밀)도 거리·시간이 있으면 쓴다: 워치 추정 거리라 오차가 있지만
+    /// 배제하면 겨울철 사용자가 예측을 통째로 잃는다.
+    static func predictionSamples(for goal: RaceDistance,
+                                  runs: [RunSummary]) -> [PredictionSample] {
+        runs.compactMap { run -> PredictionSample? in
+            guard let km = run.distanceKm, run.paceSecPerKm != nil,
+                  km >= minSampleKm,
+                  goal.km / km <= maxExtrapolationRatio else { return nil }
+            return PredictionSample(distanceKm: km, timeSec: run.durationSec, date: run.start)
+        }
+    }
+
+    /// 가장 좁은 창부터 훑어 후보가 있는 첫 창에서 고른다 — 창 간 비교는 하지 않는다.
+    /// 반환값의 window는 화면이 "최근 1주 기준"처럼 표본 시점을 밝히는 데 쓴다.
+    static func bestPrediction(for goal: RaceDistance, runs: [RunSummary], now: Date)
+        -> (sample: PredictionSample, sec: Double, windowDays: Int)? {
+        let samples = predictionSamples(for: goal, runs: runs)
+        for days in sampleWindowDays {
+            let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+            let best = samples.filter { $0.date >= cutoff }
+                .map { (sample: $0, sec: $0.timeSec * pow(goal.km / $0.distanceKm, 1.06)) }
+                .min { $0.sec < $1.sec }
+            if let best { return (best.sample, best.sec, days) }
+        }
+        return nil
     }
 
     // MARK: - 현재 기력 (Daniels VDOT)
@@ -198,9 +253,9 @@ struct TrainingGuideEngine {
 
     /// 존 상수 (Daniels' Running Formula): 이지 62~74% / 템포 88% / 인터벌 97.5%.
     /// VDOT 50에서 Daniels 표와 대조: 이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″ 일치.
-    private static func zones(entry: PersonalRecords.Entry, goalSec: Double?,
+    private static func zones(sample: PredictionSample, goalSec: Double?,
                               raceKm: Double) -> TrainingGuide.PaceZones? {
-        guard let vdot = vdot(distanceKm: entry.distanceKm, timeSec: entry.timeSec) else {
+        guard let vdot = vdot(distanceKm: sample.distanceKm, timeSec: sample.timeSec) else {
             return nil
         }
         let easy = pace(atFraction: 0.74, vdot: vdot)...pace(atFraction: 0.62, vdot: vdot)
@@ -276,7 +331,7 @@ struct TrainingGuideEngine {
 
     // MARK: - 가이드 전체
 
-    func guide(runs: [RunSummary], records: [PersonalRecords.Entry],
+    func guide(runs: [RunSummary],
                race: RaceDistance, goalSec: Double?, raceDate: Date? = nil,
                batteryTone: RRTone?) -> TrainingGuide? {
         // 가드: ReportEngine.acwr와 동일 기준
@@ -317,19 +372,20 @@ struct TrainingGuideEngine {
             peakWeeklyKm: peak,
             batteryLimited: limited)
 
-        let best = Self.bestPrediction(for: race, records: records, now: now)
+        let best = Self.bestPrediction(for: race, runs: runs, now: now)
         let prediction = best.map { best in
             TrainingGuide.Prediction(race: race,
                                      predictedSec: best.sec,
-                                     baseLabel: best.entry.label,
-                                     baseTimeSec: best.entry.timeSec,
+                                     baseLabel: best.sample.label,
+                                     baseTimeSec: best.sample.timeSec,
+                                     baseWindowDays: best.windowDays,
                                      goalSec: goalSec,
                                      tone: Self.predictionTone(predicted: best.sec, goal: goalSec))
         }
 
         return TrainingGuide(prediction: prediction,
                              zones: best.flatMap {
-                                 Self.zones(entry: $0.entry, goalSec: goalSec, raceKm: race.km)
+                                 Self.zones(sample: $0.sample, goalSec: goalSec, raceKm: race.km)
                              },
                              prescription: prescription,
                              balance: balance(runs: runs))

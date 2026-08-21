@@ -528,10 +528,11 @@
 
     <h3 class="metric-title">7.1 완주 예측 (Riegel 공식)</h3>
     <table class="spec">
-      <tr><th>입력</th><td><code>PersonalRecords.Entry</code>(8절 참고) 중 <b>최근 8주(56일) 이내</b> 달성분만 후보</td></tr>
+      <tr><th>입력</th><td>실제 러닝 세션(<code>RunSummary</code>) 중 거리가 <b>5km 이상</b>이고 <code>목표 거리/세션 거리 ≤ 3.0</code>인 표본</td></tr>
+      <tr><th>표본 창</th><td><b>최근 1주 우선</b> → 유효 표본이 없을 때만 4주 → 8주로 확대. 첫 유효 창을 정하면 다른 창과 비교하지 않음</td></tr>
       <tr><th>계산식</th><td><code>predictedSec = T1 × (D2/D1)^1.06</code><br>
-        각 후보 PR마다 계산한 뒤, 예측이 가장 빠른(최솟값) 것을 채택</td></tr>
-      <tr><th>미노출 가드</th><td>최근 8주 내 PR이 하나도 없으면 예측·페이스 존(7.2절)이 nil (처방은 그대로 노출됨)</td></tr>
+        선택한 창의 각 후보 세션마다 계산한 뒤, 예측이 가장 빠른(최솟값) 것을 채택</td></tr>
+      <tr><th>미노출 가드</th><td>가장 넓은 8주 창에도 최소 거리·3배 외삽 가드를 통과한 세션이 없으면 예측·페이스 존(7.2절)이 nil (처방은 그대로 노출됨)</td></tr>
       <tr><th>톤 판정 (목표 대비)</th><td>
         <span class="tone tone-steady"><span class="dot"></span>steady</span> 목표 기록 미입력<br>
         <span class="tone tone-improving"><span class="dot"></span>improving</span> predicted ≤ goal (달성권)<br>
@@ -543,7 +544,7 @@
 
     <h3 class="metric-title">7.2 훈련 페이스 존 (PaceZones — Daniels VDOT)</h3>
     <table class="spec">
-      <tr><th>입력</th><td>7.1절과 <b>같은 PR</b> (최근 8주 내 예측이 가장 좋은 기록) 하나</td></tr>
+      <tr><th>입력</th><td>7.1절이 선택한 <b>같은 실제 러닝 세션</b>의 거리와 시간</td></tr>
       <tr><th>VDOT 역산</th><td><code>v = D×1000 / t</code> (m/분, t는 분)<br>
         <code>vo2(v) = −4.60 + 0.182258·v + 0.000104·v²</code><br>
         <code>f(t) = 0.8 + 0.1894393·e^(−0.012778t) + 0.2989558·e^(−0.1932605t)</code> (t분 동안 유지 가능한 %VO₂max)<br>
