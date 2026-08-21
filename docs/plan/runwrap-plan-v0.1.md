@@ -369,8 +369,9 @@ GET https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}
 #### 핵심 작업
 ```swift
 /// 진단: Riegel 공식 T2 = T1 × (D2/D1)^1.06 (Riegel 1981)
-/// T1 = PersonalRecords(M3 재활용) 중 최근 8주 내 최적 기록
-static func predictedTime(for goal: RaceDistance, records: [PersonalRecords.Entry], now: Date) -> Double?
+/// T1 = 실제 RunSummary 중 5km 이상·목표 거리/세션 거리 ≤ 3배인 세션.
+/// 최근 1주를 우선하고, 유효 표본이 없을 때만 4주→8주로 넓혀 첫 창의 최적 기록을 쓴다.
+static func predictedTime(for goal: RaceDistance, runs: [RunSummary], now: Date) -> Double?
 
 /// 처방 (매주 갱신):
 /// - 권장 주간 km = chronic(4주 평균) × 1.0~1.1 — 10% 룰 상한 (ReportEngine.acwr의 chronic 재활용)

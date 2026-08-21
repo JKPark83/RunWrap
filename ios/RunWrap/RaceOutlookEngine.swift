@@ -5,7 +5,8 @@ import Foundation
 /// 평균 페이스가 재료다. 순수 로직: now를 주입받아 결정론적이다.
 ///
 /// 산식:
-/// - 완주 예측: Riegel 공식 (TrainingGuideEngine.predictedTime) — 최근 8주 PR 기준.
+/// - 완주 예측: Riegel 공식 (TrainingGuideEngine.predictedTime) — 실제 러닝 세션 기준.
+///   표본 창은 최근 1주 우선, 없을 때만 4주→8주로 넓힌다 (이슈 #24).
 /// - 열 보정: 대회 월의 평년기온·습도(기상청 서울 1991–2020 평년값 상수표)를
 ///   HeatEngine에 넣어 보정량(초/km)을 구하고 예상 페이스에 **더한다**.
 ///   HeatEngine.adjustment는 더운 날 기록을 시원한 날 기준으로 환산(빼기)하지만,
@@ -21,7 +22,7 @@ enum RaceOutlookEngine {
         case notConfigured
         /// 대회 날짜가 이미 지났다 → 다음 목표 설정 안내
         case raceFinished(race: RaceDistance)
-        /// 최근 8주 PR이 없어 예측 불가 → D-day만 보여준다
+        /// 최소 거리·목표별 3배 외삽 가드를 통과한 표본이 없어 예측 불가 → D-day만 보여준다
         case awaitingRecords(race: RaceDistance, daysToRace: Int)
         /// 예측 가능 → D-day + 예상 완주 기록·페이스
         case ready(Outlook)
@@ -36,6 +37,8 @@ enum RaceOutlookEngine {
         let raceMonth: Int                // 1~12 — 열 보정 근거 문구용
         let goalSec: Double
         let tone: RRTone                  // 목표 대비: 달성권 improving / 5% 이내 steady / 그 밖 caution
+        /// 표본을 찾은 창(일) — 7·28·56. 1주가 아니면 화면이 근거 시점을 밝힌다 (이슈 #24)
+        let sampleWindowDays: Int
     }
 
     /// 서울 월별 평년값 (기상청 1991–2020, 평균기온 °C · 상대습도 %).
@@ -46,15 +49,15 @@ enum RaceOutlookEngine {
     ]
 
     static func status(race: RaceDistance?, goalSec: Double, raceDate: Date?,
-                       records: [PersonalRecords.Entry], now: Date) -> Status {
+                       runs: [RunSummary], now: Date) -> Status {
         guard let race, goalSec > 0, let raceDate else { return .notConfigured }
         guard let days = days(from: now, to: raceDate), days >= 0 else {
             return .raceFinished(race: race)
         }
-        guard let baseSec = TrainingGuideEngine.predictedTime(for: race, records: records,
-                                                              now: now) else {
+        guard let best = TrainingGuideEngine.bestPrediction(for: race, runs: runs, now: now) else {
             return .awaitingRecords(race: race, daysToRace: days)
         }
+        let baseSec = best.sec
 
         let basePace = baseSec / race.km
         let month = Calendar.current.component(.month, from: raceDate)
@@ -72,7 +75,8 @@ enum RaceOutlookEngine {
         return .ready(Outlook(race: race, daysToRace: days,
                               predictedSec: predicted, predictedPaceSecPerKm: pace,
                               heatDeltaSecPerKm: delta, raceMonth: month,
-                              goalSec: goalSec, tone: tone))
+                              goalSec: goalSec, tone: tone,
+                              sampleWindowDays: best.windowDays))
     }
 
     /// 날짜 차이(일) — 자정 경계 기준이라 시각과 무관하다 (TrainingGuideEngine.days와 동일 정의)

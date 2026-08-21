@@ -62,7 +62,7 @@ struct ReportHomeScreen: View {
                                               goalSec: Double(raceGoalSec),
                                               raceDate: raceDateRaw > 0
                                                   ? Date(timeIntervalSince1970: raceDateRaw) : nil,
-                                              records: PersonalRecords.compute(runs: runs),
+                                              runs: runs,
                                               now: Date()),
                                           segment: segment)
                             .refreshable { await health.load() }
@@ -105,7 +105,7 @@ struct ReportHomeScreen: View {
                                batteryTone: RRTone?) -> TrainingGuide? {
         guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
         return TrainingGuideEngine(now: Date(), level: level)
-            .guide(runs: runs, records: PersonalRecords.compute(runs: runs), race: race,
+            .guide(runs: runs, race: race,
                    goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil,
                    raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                    batteryTone: batteryTone)
@@ -503,7 +503,7 @@ struct ReportHomeContent: View {
         case .awaitingRecords(let race, let days):
             VStack(alignment: .leading, spacing: 9) {
                 dDayChip(days: days, race: race)
-                Text("최근 8주 기록이 쌓이면 예상 완주 기록도 보여드려요")
+                Text("최근 8주 안에 목표 종목을 예측할 만큼 긴 러닝이 있으면 예상 완주 기록도 보여드려요")
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
@@ -537,10 +537,13 @@ struct ReportHomeContent: View {
             .background(RR.brandSoft, in: Capsule())
     }
 
-    /// "목표 4:00:00 · 최근 8주 기록 기준 Riegel 예측 · 8월 평년 더위 보정 +12초/km".
+    /// "목표 4:00:00 · 최근 1주 기록 기준 Riegel 예측 · 8월 평년 더위 보정 +12초/km".
+    /// 표본 창은 고정이 아니라 엔진이 고른 값이다 — 1주에 러닝이 없으면 4주·8주로 넓어지고,
+    /// 그 사실을 문구에 그대로 드러낸다 (이슈 #24).
     /// 더위 보정은 대회 장소를 모르는 채 쓰는 서울 평년값 근사라 "평년"을 밝힌다
     private func outlookCaption(_ outlook: RaceOutlookEngine.Outlook) -> String {
-        var caption = "목표 \(Format.duration(outlook.goalSec)) · 최근 8주 기록 기준 Riegel 예측"
+        let window = TrainingGuideEngine.sampleWindowLabel(days: outlook.sampleWindowDays)
+        var caption = "목표 \(Format.duration(outlook.goalSec)) · \(window) 기록 기준 Riegel 예측"
         if outlook.heatDeltaSecPerKm > 0 {
             caption += String(format: " · %d월 평년 더위 보정 +%.0f초/km",
                               outlook.raceMonth, outlook.heatDeltaSecPerKm)
