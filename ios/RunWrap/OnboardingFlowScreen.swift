@@ -15,6 +15,7 @@ struct OnboardingFlowScreen: View {
     var onFinish: () -> Void = {}
 
     @EnvironmentObject private var health: HealthStore
+    @EnvironmentObject private var backup: ProgressBackupStore
     @StateObject private var model = OnboardingFlowModel()
 
     var body: some View {
@@ -180,6 +181,8 @@ struct OnboardingFlowScreen: View {
                     await health.connect()
                     onFinish()
                 }
+                // 온보딩(첫 사이클) 확정 즉시 스냅샷을 올린다 — 다음 재설치부터 복원 가능 (이슈 #29)
+                Task { await backup.backupIfChanged() }
             }
 
             Text("리포트를 만들려면 러닝 기록이 필요해서, 다음 화면에서 Apple 건강 읽기 권한을 물어봐요. 허용 여부는 직접 정하시면 됩니다.")
@@ -385,6 +388,8 @@ final class OnboardingFlowModel: ObservableObject {
         if !isRediagnosis {
             defaults.set(now.timeIntervalSince1970, forKey: GrowthKey.cycleStartedAt)
             defaults.set(GrowthStage.egg.rawValue, forKey: GrowthKey.maxStage)
+            // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
+            defaults.set(UUID().uuidString, forKey: GrowthKey.cycleID)
         }
 
         OnboardingAnswersStore.save(answers)

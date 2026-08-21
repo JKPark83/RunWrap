@@ -36,6 +36,8 @@ struct HomeScreen: View {
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
 
     @EnvironmentObject private var collection: CollectionStore
+    /// 성장 상태가 바뀌는 지점(단계 상승·사이클 전환·승급)에서 CloudKit 스냅샷을 갱신한다 (이슈 #29)
+    @EnvironmentObject private var backup: ProgressBackupStore
     @State private var showsCeremony = false
     // PB 축하 (이슈 #21) — 홈 진입 때 베이스라인과 비교해 새 기록이면 한 번만 띄운다
     @State private var showsPBCongrats = false
@@ -462,6 +464,7 @@ struct HomeScreen: View {
         levelRaw = level.rawValue
         // 수락했으면 거절 기록은 의미가 없다 — 지워 둔다
         promotionDeclinedAtRaw = 0
+        scheduleBackup()
     }
 
     private func decline(now: Date) {
@@ -481,7 +484,10 @@ struct HomeScreen: View {
 
     /// 이번 사이클 최고 단계를 올려 둔다 — 다음 실행에서 표시 단계가 내려가지 않게 하는 하한.
     private func syncMaxStage(_ stage: GrowthStage) {
-        if stage.rawValue > maxStage { maxStage = stage.rawValue }
+        if stage.rawValue > maxStage {
+            maxStage = stage.rawValue
+            scheduleBackup()
+        }
     }
 
     /// 수집 확정 — 도감에 넣고 새 사이클을 시작한다 (기획서 §5).
@@ -499,6 +505,14 @@ struct HomeScreen: View {
         raceGoalSec = goalSeconds
         cycleStartedAtRaw = now.timeIntervalSince1970
         maxStage = GrowthStage.egg.rawValue
+        // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
+        UserDefaults.standard.set(UUID().uuidString, forKey: GrowthKey.cycleID)
+        scheduleBackup()
+    }
+
+    /// 성장 상태 변경 직후의 스냅샷 백업 — 실패해도 다음 트리거에서 다시 올라간다
+    private func scheduleBackup() {
+        Task { await backup.backupIfChanged() }
     }
 
     /// PB 갱신 감지 (이슈 #21) — 베이스라인과 비교해 새 기록이 있으면 한 번 축하한다.

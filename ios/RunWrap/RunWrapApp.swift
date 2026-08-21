@@ -8,6 +8,9 @@ struct RunWrapApp: App {
     @StateObject private var health = HealthStore()
     /// 도감 — 파일에서 한 번 읽어 앱 수명 동안 들고 간다 (기획서 §5)
     @StateObject private var collection = CollectionStore()
+    /// 진행도 CloudKit 백업·복원 (이슈 #29) — 신규 설치 복원은 RootView가,
+    /// 주기적 백업은 백그라운드 진입 훅이 굴린다
+    @StateObject private var backup = ProgressBackupStore()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -15,6 +18,7 @@ struct RunWrapApp: App {
             RootView()
                 .environmentObject(health)
                 .environmentObject(collection)
+                .environmentObject(backup)
                 .task {
                     // 기동 시 옵저버 재등록 — 워치 러닝이 끝나면 백그라운드에서 깨워준다
                     let health = health
@@ -25,8 +29,13 @@ struct RunWrapApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await refreshCacheAndReschedule() }
+            if phase == .active {
+                Task { await refreshCacheAndReschedule() }
+            } else if phase == .background {
+                // 설정 변경(주간 목표·대회 목표 등)까지 훑어 담는 안전망 백업 —
+                // 내용이 마지막 업로드와 같으면 아무것도 하지 않는다 (이슈 #29)
+                Task { await backup.backupIfChanged() }
+            }
         }
     }
 
