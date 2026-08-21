@@ -80,6 +80,13 @@ final class CollectionStore: ObservableObject {
         persist()
     }
 
+    /// CloudKit 복원 경로 전용 (이슈 #29) — 스냅샷의 도감으로 메모리와 파일을 교체한다.
+    /// 신규 설치(로컬 도감 없음)에서만 불리므로 기존 이력을 덮어쓸 일은 없다.
+    func replace(with birds: [CollectedBird]) {
+        self.birds = birds
+        persist()
+    }
+
     private func persist() {
         do {
             try CollectionCache.save(birds, in: directory)
