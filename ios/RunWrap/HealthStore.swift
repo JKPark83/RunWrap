@@ -74,7 +74,9 @@ final class HealthStore: ObservableObject {
         do {
             // 업데이트로 읽기 항목이 늘 수 있어 매번 요청 — 이미 응답한 항목은 시트가 뜨지 않는다
             try? await store.requestAuthorization(toShare: [], read: HealthPermissions.standard)
-            let workouts = try await fetchRunningWorkouts(limit: 100)
+            // 개수 제한 없이 전부 — 최근 N개로 자르면 장기 사용자의 사이클 초반 러닝이
+            // 성장 XP 재계산에서 빠진다 (이슈 #29). 요약 변환은 통계 재사용이라 수천 건도 가볍다
+            let workouts = try await fetchRunningWorkouts(limit: HKObjectQueryNoLimit)
             var summaries = workouts.map(Self.summary(of:))
             // 케이던스 백필 — 주법 추이(계획서 M4) 재료. 걸음 수는 워크아웃 통계에 없어
             // 워크아웃마다 쿼리해야 한다 — 추이 창인 최근 28일만 채워 쿼리 수를 줄인다.

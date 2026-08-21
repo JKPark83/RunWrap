@@ -24,6 +24,11 @@ targets:
       properties:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.background-delivery: true   # 러닝 종료 감지 (계획서 M8)
+        # 성장 진행도 백업·복원 — 개인 CloudKit DB에 스냅샷 1건만 저장한다 (이슈 #29)
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.jkpark.runwrap
     info:
       path: RunWrap/Info.plist
       properties:

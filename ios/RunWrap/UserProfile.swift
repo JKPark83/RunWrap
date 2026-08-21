@@ -127,4 +127,7 @@ enum GrowthKey {
     static let cycleStartedAt = "growth.cycleStartedAt"
     /// 이번 사이클에서 도달한 최고 단계 — "성장은 되돌리지 않는다"의 구현 장치
     static let maxStage = "growth.maxStage"
+    /// 사이클 식별자 (UUID 문자열) — CloudKit 스냅샷 병합에서 같은 사이클인지 판정한다 (이슈 #29).
+    /// 온보딩·사이클 전환 때 새로 발급하고, 없으면 백업 시점에 최초 1회 만든다
+    static let cycleID = "growth.cycleID"
 }
