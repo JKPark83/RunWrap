@@ -323,7 +323,7 @@ struct HomeScreen: View {
                                batteryTone: RRTone?, now: Date) -> TrainingGuide? {
         guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
         return TrainingGuideEngine(now: now, level: level)
-            .guide(runs: runs, records: PersonalRecords.compute(runs: runs), race: race,
+            .guide(runs: runs, race: race,
                    goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil,
                    raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                    batteryTone: batteryTone)
