@@ -7,6 +7,8 @@ import SwiftUI
 /// 목적은 문장의 강조점만 바꾸고, 어떤 카드를 보여줄지는 레벨 게이트(`ReportGate`, §4)가 정한다.
 struct ReportHomeScreen: View {
     @EnvironmentObject private var health: HealthStore
+    /// 직접 입력한 대회 기록 (이슈 #35) — 대회 예측의 표본으로 경쟁한다
+    @EnvironmentObject private var raceRecords: RaceRecordStore
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
@@ -65,7 +67,8 @@ struct ReportHomeScreen: View {
                                               runs: runs,
                                               now: Date(),
                                               hrMaxBpm: health.hrMaxBpm,
-                                              vo2MaxSamples: health.vo2Max),
+                                              vo2MaxSamples: health.vo2Max,
+                                              raceRecords: raceRecords.records),
                                           segment: segment)
                             .refreshable { await health.load() }
                     case .month:
@@ -505,7 +508,7 @@ struct ReportHomeContent: View {
         case .awaitingRecords(let race, let days):
             VStack(alignment: .leading, spacing: 9) {
                 dDayChip(days: days, race: race)
-                Text("최근 12주 안에 목표 종목을 예측할 만큼 긴 러닝이 있으면 예상 완주 기록도 보여드려요")
+                Text("최근 12주 안에 목표 종목을 예측할 만큼 긴 러닝이 있으면 예상 완주 기록도 보여드려요 — 설정에서 지난 대회 기록을 입력해도 돼요")
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
@@ -554,8 +557,11 @@ struct ReportHomeContent: View {
     /// 표본 세션의 더위를 제거했으면 그 사실도 밝힌다 (이슈 #33) — 보정이 겹칠수록
     /// 근거를 숨기면 숫자에 대한 불신만 커진다
     private func outlookCaption(_ outlook: RaceOutlookEngine.Outlook) -> String {
-        let window = TrainingGuideEngine.sampleWindowLabel(days: outlook.sampleWindowDays)
-        var caption = "목표 \(Format.duration(outlook.goalSec)) · \(window) 기록 기준 Riegel 예측"
+        // 직접 입력한 대회 기록이 근거면 표본 창 대신 그 사실을 밝힌다 (이슈 #35)
+        let basis = outlook.isRaceRecord
+            ? "입력한 대회"
+            : TrainingGuideEngine.sampleWindowLabel(days: outlook.sampleWindowDays)
+        var caption = "목표 \(Format.duration(outlook.goalSec)) · \(basis) 기록 기준 Riegel 예측"
         if outlook.predictedFastSec != nil {
             caption += " · 빠른 끝은 대회 노력도(EF) 환산"
         }

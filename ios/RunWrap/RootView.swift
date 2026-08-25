@@ -14,6 +14,8 @@ struct RootView: View {
     @EnvironmentObject private var collection: CollectionStore
     /// 날씨는 홈이 뜨기 전에 준비돼야 해서 루트가 쥔다 — 스플래시 해제 조건이자 홈의 재료
     @StateObject private var weather = WeatherStore()
+    /// 직접 입력한 대회 기록 (이슈 #35) — 설정이 입력하고 리포트가 소비해서 루트가 쥔다
+    @StateObject private var raceRecords = RaceRecordStore()
     @AppStorage("didConnectHealth") private var didConnectHealth = false
     /// 온보딩 설문 완료 여부 — 빈 문자열이면 아직 레벨이 없다 (= 설문 미완료)
     @AppStorage(ProfileKey.levelV2) private var levelRaw = ""
@@ -78,6 +80,7 @@ struct RootView: View {
             }
         }
         .environmentObject(weather)
+        .environmentObject(raceRecords)
         .tint(RR.brand)
         // 스플래시 → 홈은 교차 페이드로 잇는다 — 런치 스크린류 화면의 관례
         .animation(.easeOut(duration: 0.35), value: isBooting)

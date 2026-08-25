@@ -9,6 +9,7 @@ import Foundation
 ///   **구간**으로 낸다. 느린 끝은 Riegel("훈련 페이스 그대로"), 빠른 끝은 대회 노력도(EF)
 ///   환산("대회 강도로 뛴다면"). 표본 창은 대회 예측 전용(4주 우선 → 12주,
 ///   테이퍼 중엔 12주만)이고, 오래된 표본은 VO₂max 추세 비율로 현재 체력에 맞춘다.
+///   설정에서 직접 입력한 지난 대회 기록도 표본으로 경쟁한다 (이슈 #35).
 /// - 열 보정은 **양방향**이다 (이슈 #33): ① 표본은 세션 당시 더위를 제거해 중립 조건으로
 ///   환산하고(racePrediction 안의 neutralTimeSec), ② 중립 기준 예상 페이스에 대회 월의
 ///   평년 더위(기상청 서울 1991–2020 평년값 상수표)를 **더한다**. ①이 없으면 한여름 훈련의
@@ -49,6 +50,9 @@ enum RaceOutlookEngine {
         let tone: RRTone                  // 목표 대비: 달성권 improving / 5% 이내 steady / 그 밖 caution
         /// 표본을 찾은 창(일) — 28·84. 화면이 근거 시점을 밝힌다 (이슈 #24·#34)
         let sampleWindowDays: Int
+        /// 직접 입력한 대회 기록이 근거인지 — true면 sampleWindowDays 대신
+        /// "입력한 대회 기록 기준"을 밝힌다 (이슈 #35)
+        let isRaceRecord: Bool
     }
 
     /// 서울 월별 평년값 (기상청 1991–2020, 평균기온 °C · 상대습도 %).
@@ -61,14 +65,16 @@ enum RaceOutlookEngine {
     static func status(race: RaceDistance?, goalSec: Double, raceDate: Date?,
                        runs: [RunSummary], now: Date,
                        hrMaxBpm: Double? = nil,
-                       vo2MaxSamples: [(date: Date, value: Double)] = []) -> Status {
+                       vo2MaxSamples: [(date: Date, value: Double)] = [],
+                       raceRecords: [RaceRecord] = []) -> Status {
         guard let race, goalSec > 0, let raceDate else { return .notConfigured }
         guard let days = days(from: now, to: raceDate), days >= 0 else {
             return .raceFinished(race: race)
         }
         guard let best = TrainingGuideEngine.racePrediction(
             for: race, runs: runs, now: now, daysToRace: days,
-            hrMaxBpm: hrMaxBpm, vo2MaxSamples: vo2MaxSamples) else {
+            hrMaxBpm: hrMaxBpm, vo2MaxSamples: vo2MaxSamples,
+            raceRecords: raceRecords) else {
             return .awaitingRecords(race: race, daysToRace: days)
         }
         // riegelSec·effortSec는 이미 열 중립 환산 기준이다 (이슈 #33) — 여기서는 대회일 더위만 더한다
@@ -100,7 +106,8 @@ enum RaceOutlookEngine {
                               fitnessRatio: best.fitnessRatio,
                               raceMonth: month,
                               goalSec: goalSec, tone: tone,
-                              sampleWindowDays: best.windowDays))
+                              sampleWindowDays: best.windowDays,
+                              isRaceRecord: best.isRaceRecord))
     }
 
     /// 날짜 차이(일) — 자정 경계 기준이라 시각과 무관하다 (TrainingGuideEngine.days와 동일 정의)
