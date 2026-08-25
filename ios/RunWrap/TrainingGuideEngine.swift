@@ -158,9 +158,26 @@ struct TrainingGuideEngine {
         let distanceKm: Double
         let timeSec: Double
         let date: Date
+        /// 세션 당시 기온·습도 — 열 중립 환산(neutralTimeSec)의 재료. 실내·미기록이면 nil (이슈 #33)
+        var weatherTempC: Double? = nil
+        var weatherHumidityPct: Double? = nil
         /// 근거 표기용 라벨 — 공인 거리가 아니므로 "7.4km"처럼 실제 거리로 적는다.
         /// 예전에는 "5K" 같은 공인 종목명이었다 (이슈 #24로 입력이 임의 거리가 되며 바뀜)
         var label: String { Format.km(distanceKm) + "km" }
+
+        /// 열 중립 환산 기록(초) — 세션 당시 더위를 제거해 "선선한 날이었다면"의 기록으로 바꾼다.
+        /// 한여름 세션의 더위 페널티가 예측·VDOT에 그대로 실리던 문제의 수정이다 (이슈 #33).
+        /// 날씨가 없거나(실내) 보정량이 노이즈 바닥(3초/km) 미만이면 원본 기록 그대로.
+        var neutralTimeSec: Double {
+            guard let adjusted = HeatEngine.adjustment(paceSecPerKm: timeSec / distanceKm,
+                                                       tempC: weatherTempC,
+                                                       humidityPct: weatherHumidityPct)
+            else { return timeSec }
+            return adjusted.adjustedPaceSecPerKm * distanceKm
+        }
+
+        /// 중립 환산으로 빠진 보정량(초/km, 양수) — 화면이 "훈련 더위 −N초/km 반영"을 밝히는 근거
+        var heatDeltaSecPerKm: Double { (timeSec - neutralTimeSec) / distanceKm }
     }
 
     /// 예측 입력의 최소 거리(km). 이보다 짧은 세션은 페이스 변동성이 커 외삽 기반이 못 된다
@@ -198,19 +215,23 @@ struct TrainingGuideEngine {
             guard let km = run.distanceKm, run.paceSecPerKm != nil,
                   km >= minSampleKm,
                   goal.km / km <= maxExtrapolationRatio else { return nil }
-            return PredictionSample(distanceKm: km, timeSec: run.durationSec, date: run.start)
+            return PredictionSample(distanceKm: km, timeSec: run.durationSec, date: run.start,
+                                    weatherTempC: run.weatherTempC,
+                                    weatherHumidityPct: run.weatherHumidityPct)
         }
     }
 
     /// 가장 좁은 창부터 훑어 후보가 있는 첫 창에서 고른다 — 창 간 비교는 하지 않는다.
     /// 반환값의 window는 화면이 "최근 1주 기준"처럼 표본 시점을 밝히는 데 쓴다.
+    /// 외삽 재료는 원본이 아니라 **열 중립 환산 기록**이다 (이슈 #33) — 반환 sec도
+    /// "선선한 조건 기준" 예상 기록이고, 대회일 더위는 RaceOutlookEngine이 따로 더한다.
     static func bestPrediction(for goal: RaceDistance, runs: [RunSummary], now: Date)
         -> (sample: PredictionSample, sec: Double, windowDays: Int)? {
         let samples = predictionSamples(for: goal, runs: runs)
         for days in sampleWindowDays {
             let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
             let best = samples.filter { $0.date >= cutoff }
-                .map { (sample: $0, sec: $0.timeSec * pow(goal.km / $0.distanceKm, 1.06)) }
+                .map { (sample: $0, sec: $0.neutralTimeSec * pow(goal.km / $0.distanceKm, 1.06)) }
                 .min { $0.sec < $1.sec }
             if let best { return (best.sample, best.sec, days) }
         }
@@ -255,7 +276,9 @@ struct TrainingGuideEngine {
     /// VDOT 50에서 Daniels 표와 대조: 이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″ 일치.
     private static func zones(sample: PredictionSample, goalSec: Double?,
                               raceKm: Double) -> TrainingGuide.PaceZones? {
-        guard let vdot = vdot(distanceKm: sample.distanceKm, timeSec: sample.timeSec) else {
+        // 열 중립 환산 기록으로 VDOT를 역산한다 (이슈 #33) — 한여름 세션의 원본 기록으로
+        // 계산하면 VDOT가 실제보다 낮게 나와 이지·템포·인터벌 존이 전부 느리게 처방된다
+        guard let vdot = vdot(distanceKm: sample.distanceKm, timeSec: sample.neutralTimeSec) else {
             return nil
         }
         let easy = pace(atFraction: 0.74, vdot: vdot)...pace(atFraction: 0.62, vdot: vdot)

@@ -130,4 +130,70 @@ struct RaceOutlookEngineTests {
             runs: [run5K(daysAgo: 20)], now: now)))
         #expect(outlook.sampleWindowDays == 28)
     }
+
+    // MARK: - 열 중립 환산 (이슈 #33)
+
+    /// 세션 당시 날씨를 지정한 세션 — 열 중립 환산 검증용
+    private func run(km: Double, timeSec: Double, daysAgo: Double,
+                     tempC: Double, humidityPct: Double) -> RunSummary {
+        RunSummary(id: UUID(), start: now.addingTimeInterval(-daysAgo * 86_400),
+                   durationSec: timeSec, distanceMeters: km * 1_000, avgHeartRate: 165,
+                   weatherTempC: tempC, weatherHumidityPct: humidityPct)
+    }
+
+    @Test("한여름 세션의 더위를 제거한 뒤 가을 대회로 환산한다")
+    func neutralizesSampleHeatForCoolRace() throws {
+        // 7월 평년(25.3°C·76%) 날씨의 10km 50:00(300초/km) 세션.
+        // 이슬점 20.8 → 열 점수 46.1 → 세션 보정량 8×1.5 + 0.06×3.0 ≈ 12.2초/km.
+        // 중립 페이스 287.8초/km → 10월 대회(15.0°C·63%, 열 점수 23)는 보정 0 → 예상 2,878.1초.
+        // 중립 환산이 없으면 3,000초가 그대로 나온다 — 그 회귀를 막는 테스트다.
+        let raceDate = ISO8601DateFormatter().date(from: "2026-10-15T09:00:00Z")!
+        let outlook = try #require(ready(RaceOutlookEngine.status(
+            race: .tenK, goalSec: 3_000, raceDate: raceDate,
+            runs: [run(km: 10, timeSec: 3_000, daysAgo: 3, tempC: 25.3, humidityPct: 76)],
+            now: now)))
+        #expect(abs(outlook.sampleHeatDeltaSecPerKm - 12.2) < 0.1)
+        #expect(outlook.heatDeltaSecPerKm == 0)
+        #expect(abs(outlook.predictedSec - 2_878.1) < 1)
+    }
+
+    @Test("선선한 날 세션은 보정량이 노이즈 바닥 미만이라 중립 환산 없이 그대로 쓴다")
+    func skipsNeutralizationBelowNoiseFloor() throws {
+        // 22°C·70% → 이슬점 16.3, 열 점수 38.3 → 보정량 0.4초/km는 노이즈 바닥(3초/km) 미만
+        // → HeatEngine이 nil을 반환해 원본 기록을 그대로 쓴다. 1월 대회 Riegel 2,752.1초
+        let raceDate = ISO8601DateFormatter().date(from: "2027-01-15T09:00:00Z")!
+        let outlook = try #require(ready(RaceOutlookEngine.status(
+            race: .tenK, goalSec: 2_700, raceDate: raceDate,
+            runs: [run(km: 5, timeSec: 1_320, daysAgo: 7, tempC: 22, humidityPct: 70)],
+            now: now)))
+        #expect(outlook.sampleHeatDeltaSecPerKm == 0)
+        #expect(abs(outlook.predictedSec - 2_752.1) < 1)
+    }
+
+    @Test("실내 세션은 날씨가 없어 중립 환산을 건너뛴다")
+    func indoorSampleHasNoWeather() throws {
+        // run5K는 날씨 필드가 nil(실내·미기록과 동일) — HeatEngine 가드에 걸려
+        // timeSec가 그대로 쓰인다. readyCoolMonth와 같은 2,752.1초가 나와야 한다
+        let raceDate = ISO8601DateFormatter().date(from: "2027-01-15T09:00:00Z")!
+        let outlook = try #require(ready(RaceOutlookEngine.status(
+            race: .tenK, goalSec: 2_700, raceDate: raceDate,
+            runs: [run5K(daysAgo: 7)], now: now)))
+        #expect(outlook.sampleHeatDeltaSecPerKm == 0)
+        #expect(abs(outlook.predictedSec - 2_752.1) < 1)
+    }
+
+    @Test("한여름 세션 → 한여름 대회 — 중립 환산 뒤 대회일 더위를 다시 더한다")
+    func neutralizesThenReappliesRaceHeat() throws {
+        // 세션 보정 −12.2초/km(7월 날씨) 뒤 8월 평년 보정 +15.6초/km(열 점수 47.2).
+        // 예상 페이스 300 − 12.19 + 15.60 = 303.4초/km → 완주 3,034.1초.
+        // 예전 동작(중립 환산 없음)은 315.6초/km·3,156초 — 더위가 이중으로 실렸다
+        let outlook = try #require(ready(RaceOutlookEngine.status(
+            race: .tenK, goalSec: 3_000, raceDate: now.addingTimeInterval(20 * 86_400),
+            runs: [run(km: 10, timeSec: 3_000, daysAgo: 3, tempC: 25.3, humidityPct: 76)],
+            now: now)))
+        #expect(outlook.raceMonth == 8)
+        #expect(abs(outlook.sampleHeatDeltaSecPerKm - 12.2) < 0.1)
+        #expect(abs(outlook.heatDeltaSecPerKm - 15.6) < 0.1)
+        #expect(abs(outlook.predictedSec - 3_034.1) < 1)
+    }
 }

@@ -540,10 +540,16 @@ struct ReportHomeContent: View {
     /// "목표 4:00:00 · 최근 1주 기록 기준 Riegel 예측 · 8월 평년 더위 보정 +12초/km".
     /// 표본 창은 고정이 아니라 엔진이 고른 값이다 — 1주에 러닝이 없으면 4주·8주로 넓어지고,
     /// 그 사실을 문구에 그대로 드러낸다 (이슈 #24).
-    /// 더위 보정은 대회 장소를 모르는 채 쓰는 서울 평년값 근사라 "평년"을 밝힌다
+    /// 더위 보정은 대회 장소를 모르는 채 쓰는 서울 평년값 근사라 "평년"을 밝힌다.
+    /// 표본 세션의 더위를 제거했으면 그 사실도 밝힌다 (이슈 #33) — 보정이 겹칠수록
+    /// 근거를 숨기면 숫자에 대한 불신만 커진다
     private func outlookCaption(_ outlook: RaceOutlookEngine.Outlook) -> String {
         let window = TrainingGuideEngine.sampleWindowLabel(days: outlook.sampleWindowDays)
         var caption = "목표 \(Format.duration(outlook.goalSec)) · \(window) 기록 기준 Riegel 예측"
+        if outlook.sampleHeatDeltaSecPerKm > 0 {
+            caption += String(format: " · 훈련 더위 −%.0f초/km 반영",
+                              outlook.sampleHeatDeltaSecPerKm)
+        }
         if outlook.heatDeltaSecPerKm > 0 {
             caption += String(format: " · %d월 평년 더위 보정 +%.0f초/km",
                               outlook.raceMonth, outlook.heatDeltaSecPerKm)
