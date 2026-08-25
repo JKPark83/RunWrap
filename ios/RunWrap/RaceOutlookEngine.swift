@@ -5,12 +5,12 @@ import Foundation
 /// 평균 페이스가 재료다. 순수 로직: now를 주입받아 결정론적이다.
 ///
 /// 산식:
-/// - 완주 예측: Riegel 공식 (TrainingGuideEngine.predictedTime) — 실제 러닝 세션 기준.
+/// - 완주 예측: Riegel 공식 (TrainingGuideEngine.bestPrediction) — 실제 러닝 세션 기준.
 ///   표본 창은 최근 1주 우선, 없을 때만 4주→8주로 넓힌다 (이슈 #24).
-/// - 열 보정: 대회 월의 평년기온·습도(기상청 서울 1991–2020 평년값 상수표)를
-///   HeatEngine에 넣어 보정량(초/km)을 구하고 예상 페이스에 **더한다**.
-///   HeatEngine.adjustment는 더운 날 기록을 시원한 날 기준으로 환산(빼기)하지만,
-///   여기는 반대로 현재 실력을 더운 대회일 기준으로 환산해야 하기 때문이다.
+/// - 열 보정은 **양방향**이다 (이슈 #33): ① 표본은 세션 당시 더위를 제거해 중립 조건으로
+///   환산하고(bestPrediction 안의 neutralTimeSec), ② 중립 기준 예상 페이스에 대회 월의
+///   평년 더위(기상청 서울 1991–2020 평년값 상수표)를 **더한다**. ①이 없으면 한여름 훈련의
+///   더위 페널티가 선선한 가을 대회 예측에 그대로 실린다.
 ///
 /// 미노출 가드는 nil 대신 Status 케이스로 표현한다 — 화면이 각 상태에 맞는
 /// 안내 문구를 보여줘야 하기 때문이다("틀린 인사이트는 없느니만 못하다"는 그대로:
@@ -34,6 +34,8 @@ enum RaceOutlookEngine {
         let predictedSec: Double          // 열 보정 포함 예상 완주 기록
         let predictedPaceSecPerKm: Double
         let heatDeltaSecPerKm: Double     // 0이면 열 보정 없음 (평년 기준 선선한 달)
+        /// 표본 세션의 더위를 제거하며 빠진 보정량(초/km) — 0이면 선선한 날·실내 세션 (이슈 #33)
+        let sampleHeatDeltaSecPerKm: Double
         let raceMonth: Int                // 1~12 — 열 보정 근거 문구용
         let goalSec: Double
         let tone: RRTone                  // 목표 대비: 달성권 improving / 5% 이내 steady / 그 밖 caution
@@ -57,16 +59,17 @@ enum RaceOutlookEngine {
         guard let best = TrainingGuideEngine.bestPrediction(for: race, runs: runs, now: now) else {
             return .awaitingRecords(race: race, daysToRace: days)
         }
-        let baseSec = best.sec
-
-        let basePace = baseSec / race.km
+        // best.sec는 이미 열 중립 환산 기준이다 (이슈 #33) — 여기서는 대회일 더위만 더한다
+        let neutralPace = best.sec / race.km
         let month = Calendar.current.component(.month, from: raceDate)
         let normal = monthlyNormals[month - 1]
+        // 보정량은 중립 기준 목표 페이스로 계산한다 — 훈련 더위가 섞인 페이스를 넣으면
+        // 보정량 자체가 잘못된 기준으로 계산된다 (이슈 #33).
         // 열 점수가 낮거나 보정량이 노이즈 바닥(3초/km) 미만이면 nil → 보정 0
-        let delta = HeatEngine.adjustment(paceSecPerKm: basePace,
+        let delta = HeatEngine.adjustment(paceSecPerKm: neutralPace,
                                           tempC: normal.tempC,
                                           humidityPct: normal.humidityPct)?.deltaSecPerKm ?? 0
-        let pace = basePace + delta
+        let pace = neutralPace + delta
         let predicted = pace * race.km
 
         let tone: RRTone = predicted <= goalSec ? .improving
@@ -74,7 +77,9 @@ enum RaceOutlookEngine {
             : .caution
         return .ready(Outlook(race: race, daysToRace: days,
                               predictedSec: predicted, predictedPaceSecPerKm: pace,
-                              heatDeltaSecPerKm: delta, raceMonth: month,
+                              heatDeltaSecPerKm: delta,
+                              sampleHeatDeltaSecPerKm: best.sample.heatDeltaSecPerKm,
+                              raceMonth: month,
                               goalSec: goalSec, tone: tone,
                               sampleWindowDays: best.windowDays))
     }
