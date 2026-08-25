@@ -261,6 +261,11 @@ struct TrainingGuideEngine {
         }
     }
 
+    /// 직접 입력한 대회 기록의 최대 나이(일) — 약 2년. 그보다 오래된 기록은
+    /// 현재 체력을 반영한다고 보기 어렵고, VO₂max 추세 창(±14일)이 닿을 가능성도
+    /// 낮아 보정 없이 그대로 실린다 — 내지 않는 쪽이 안전하다 (이슈 #35)
+    static let maxRaceRecordAgeDays = 730
+
     /// 대회 예상 기록 — 구간의 두 끝과 근거 (이슈 #34).
     /// 값은 모두 **열 중립 기준**이다 — 대회일 더위는 RaceOutlookEngine이 따로 더한다.
     struct RacePrediction {
@@ -273,6 +278,9 @@ struct TrainingGuideEngine {
         let effortSec: Double?
         /// VO₂max 추세 보정 배율 — 1.0이면 보정 없음. 화면이 근거 문구를 밝히는 데 쓴다
         let fitnessRatio: Double
+        /// 직접 입력한 대회 기록이 근거인지 — 화면이 "대회 기록 기준"을 밝히는 데 쓴다.
+        /// true면 표본 창을 거치지 않았으므로 windowDays는 0이다 (이슈 #35)
+        let isRaceRecord: Bool
     }
 
     /// 대회 예상 기록 계산 — 느린 끝은 Riegel, 빠른 끝은 대회 노력도(EF) 환산.
@@ -283,9 +291,11 @@ struct TrainingGuideEngine {
     /// "전력이면 이 정도"의 상한을 주는 것이 목적이라 방향이 맞다.
     /// 훈련은 이지런만 하는 러너의 Riegel 예측이 실제 대회 기록보다 크게 느리다는
     /// 피드백의 수정이다 — 훈련 페이스는 대회 노력도가 아니다.
+    /// 직접 입력한 지난 대회 기록(raceRecords)도 표본으로 경쟁한다 (이슈 #35).
     static func racePrediction(for goal: RaceDistance, runs: [RunSummary], now: Date,
                                daysToRace: Int? = nil, hrMaxBpm: Double? = nil,
-                               vo2MaxSamples: [(date: Date, value: Double)] = [])
+                               vo2MaxSamples: [(date: Date, value: Double)] = [],
+                               raceRecords: [RaceRecord] = [])
         -> RacePrediction? {
         // 테이퍼·대회 주간이면 4주 창 건너뜀 — 12주 창에서 가장 강했던 세션을 쓴다
         var windows = raceSampleWindowDays
@@ -296,22 +306,61 @@ struct TrainingGuideEngine {
         }
 
         let samples = predictionSamples(for: goal, runs: runs)
+        var windowBest: (sample: PredictionSample, sec: Double, days: Int)?
         for days in windows {
             let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
-            guard let best = samples.filter({ $0.date >= cutoff })
+            if let best = samples.filter({ $0.date >= cutoff })
                 .map({ (sample: $0, sec: $0.neutralTimeSec * pow(goal.km / $0.distanceKm, 1.06)) })
-                .min(by: { $0.sec < $1.sec }) else { continue }
-
+                .min(by: { $0.sec < $1.sec }) {
+                windowBest = (best.sample, best.sec, days)
+                break
+            }
+        }
+        let training: RacePrediction? = windowBest.map { best in
             let ratio = fitnessRatio(sampleDate: best.sample.date, now: now,
                                      vo2MaxSamples: vo2MaxSamples)
             let effort = effortSec(for: goal, sample: best.sample, hrMaxBpm: hrMaxBpm)
                 .flatMap { $0 < best.sec ? $0 * ratio : nil }  // Riegel보다 느리면 환산 무의미
-            return RacePrediction(sample: best.sample, windowDays: days,
+            return RacePrediction(sample: best.sample, windowDays: best.days,
                                   riegelSec: best.sec * ratio,
                                   effortSec: effort,
-                                  fitnessRatio: ratio)
+                                  fitnessRatio: ratio,
+                                  isRaceRecord: false)
         }
-        return nil
+
+        // 직접 입력한 대회 기록 후보 (이슈 #35) — 표본 창을 적용하지 않는다: 몇 달 전
+        // 대회 기록이라도 훈련 표본에는 없는 "전력 노력"의 증거다. 시점 차이는 VO₂max
+        // 추세 배율이 보정한다. 최소 거리·3배 외삽·최대 나이 가드는 훈련 표본과 동일하다.
+        // 대회 기록엔 세션 날씨가 없어 열 중립 환산은 자연히 원본 그대로다.
+        let recordCutoff = now.addingTimeInterval(-Double(maxRaceRecordAgeDays) * 86_400)
+        let record: RacePrediction? = raceRecords
+            .filter { $0.timeSec > 0 && $0.date <= now && $0.date >= recordCutoff
+                && $0.race.km >= minSampleKm
+                && goal.km / $0.race.km <= maxExtrapolationRatio }
+            .map { record -> RacePrediction in
+                let sample = PredictionSample(distanceKm: record.race.km,
+                                              timeSec: record.timeSec, date: record.date)
+                let ratio = fitnessRatio(sampleDate: record.date, now: now,
+                                         vo2MaxSamples: vo2MaxSamples)
+                // 대회 기록은 정의상 전력 노력 — EF 환산(빠른 끝)을 만들지 않는다
+                return RacePrediction(sample: sample, windowDays: 0,
+                                      riegelSec: record.timeSec
+                                          * pow(goal.km / record.race.km, 1.06) * ratio,
+                                      effortSec: nil,
+                                      fitnessRatio: ratio,
+                                      isRaceRecord: true)
+            }
+            .min { $0.riegelSec < $1.riegelSec }
+
+        // 훈련 표본과 대회 기록이 모두 있으면 느린 끝(Riegel)이 빠른 쪽 — 표본끼리
+        // 최솟값을 고르는 기존 규칙과 같은 뜻이다. 대회 기록이 이기면 EF 환산 구간은
+        // 버린다: 실제 대회의 증거가 심박 선형 가정의 추정보다 우선이다.
+        switch (training, record) {
+        case let (t?, r?): return r.riegelSec < t.riegelSec ? r : t
+        case let (t?, nil): return t
+        case let (nil, r?): return r
+        default: return nil
+        }
     }
 
     /// 빠른 끝 — 대회 노력도(EF) 환산 (열 중립 기준). 재료가 없으면 nil
