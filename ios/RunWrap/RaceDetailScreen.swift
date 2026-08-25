@@ -16,6 +16,9 @@ struct RaceDetailScreen: View {
                 if let categories = race.categories, !categories.isEmpty {
                     categoryChips(categories)
                 }
+                if let imageURL = race.imageUrl.flatMap(URL.init(string:)) {
+                    posterCard(imageURL)
+                }
                 infoCard
                 if let lat = race.lat, let lon = race.lon {
                     mapCard(lat: lat, lon: lon)
@@ -71,6 +74,28 @@ struct RaceDetailScreen: View {
                         .background(RR.brandSoft,
                                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
+            }
+        }
+    }
+
+    /// 대회 포스터 — 크롤러가 홈페이지에서 뽑은 대표 이미지(imageUrl)를 원본 비율로 보여준다.
+    /// 목록의 소형 썸네일과 같은 원본이고, 로딩 실패면 자리를 차지하지 않는다 (#32)
+    private func posterCard(_ url: URL) -> some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(RR.line))
+            case .empty:
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 170)
+            case .failure:
+                EmptyView()
+            @unknown default:
+                EmptyView()
             }
         }
     }
