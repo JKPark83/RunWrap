@@ -32,23 +32,93 @@ def fetch(url: str) -> str:
         return res.read().decode("cp949", errors="replace")
 
 
-def fetch_image_url(homepage: str) -> str | None:
-    """대회 홈페이지의 대표 이미지(og:image·twitter:image 메타태그) URL — 없거나 실패하면 None.
+# 대회 사이트가 로드런과 달리 봇 UA를 403으로 막는 곳이 있어 브라우저 UA로 받는다 (#32)
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15")
+# og:image가 사이트 로고인 범용 서비스 — 대회 썸네일로는 오해를 부르니 제외
+IMAGE_SKIP_HOSTS = ("forms.gle", "docs.google.com")
+# 본문 <img> 폴백에서 거를 파일명 — 콘텐츠가 아니라 UI 장식일 확률이 높다
+IMG_NAME_SKIP = re.compile(r"logo|icon|favicon|btn|button|bullet|blank|spacer|arrow|sns",
+                           re.I)
+OG_IMAGE_RE = [re.compile(
+    r"<meta[^>]+(?:property|name)=[\"'](?:og:image|twitter:image)[\"'][^>]*"
+    r"content=[\"']([^\"']+)[\"']", re.I), re.compile(
+    r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]*"
+    r"(?:property|name)=[\"'](?:og:image|twitter:image)[\"']", re.I)]
 
-    홈페이지는 인코딩이 제각각이라 utf-8 대체 디코드로 메타태그만 찾는다 (#32).
-    상대 경로는 홈페이지 기준 절대 URL로 바꾼다.
+
+def fetch_image_url(homepage: str) -> str | None:
+    """대회 홈페이지의 대표 이미지 URL — 없거나 실패하면 None (#32).
+
+    ① og:image·twitter:image 메타태그(운영자가 지정한 공유용 대표 이미지)를 먼저 찾고,
+    ② 없으면 본문 <img> 중 첫 콘텐츠 이미지로 폴백한다 — 파일명이 UI 장식(logo 등)이거나
+       실제 크기가 30KB 미만이면 거른다 (로고·아이콘은 대개 20KB 이하, 포스터는 수십 KB 이상.
+       마땅한 이미지가 없으면 잘못된 이미지보다 기본 그림이 낫다).
+    홈페이지는 인코딩이 제각각이라 utf-8 대체 디코드로 태그만 찾고,
+    상대 경로는 홈페이지 기준 절대 URL로 바꾼다. http가 거부되면 https로 한 번 더 시도.
+    앱(iOS ATS)은 http 이미지를 차단하므로 https로 승격되는 URL만 담는다 —
+    쓸 수 없는 URL은 없느니만 못하다.
     """
-    req = urllib.request.Request(homepage, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=15) as res:
-        head = res.read(131072).decode("utf-8", errors="replace")
-    m = re.search(
-        r"<meta[^>]+(?:property|name)=[\"'](?:og:image|twitter:image)[\"'][^>]*"
-        r"content=[\"']([^\"']+)[\"']", head, re.I) or re.search(
-        r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]*"
-        r"(?:property|name)=[\"'](?:og:image|twitter:image)[\"']", head, re.I)
-    if not m:
+    host = urllib.parse.urlsplit(homepage).hostname or ""
+    if host.endswith(IMAGE_SKIP_HOSTS):
         return None
-    url = urllib.parse.urljoin(homepage, m.group(1).strip().replace("&amp;", "&"))
+    try:
+        html = fetch_page(homepage)
+    except Exception:
+        if not homepage.startswith("http://"):
+            return None
+        homepage = "https://" + homepage.removeprefix("http://")
+        html = fetch_page(homepage)
+
+    for pattern in OG_IMAGE_RE:
+        if m := pattern.search(html):
+            if url := absolute_image(homepage, m.group(1)):
+                if https := https_image(url):
+                    return https
+    # 폴백 — 후보를 앞에서부터 실제로 받아 보고 30KB 이상인 첫 이미지를 쓴다 (최대 5개)
+    candidates = [
+        src for src in re.findall(r"<img[^>]+src=[\"']([^\"']+)[\"']", html, re.I)
+        if re.search(r"\.(?:jpe?g|png|webp)(?:\?|$)", src, re.I)
+        and not IMG_NAME_SKIP.search(src.rsplit("/", 1)[-1])
+    ]
+    # 팝업 이미지는 대회와 무관한 공지일 때가 많아 후순위로 미룬다 (경로 기준)
+    candidates.sort(key=lambda s: "popup" in s.lower())
+    for src in candidates[:5]:
+        url = absolute_image(homepage, src)
+        if not (url := url and https_image(url)):
+            continue
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+            with urllib.request.urlopen(req, timeout=15) as res:
+                if len(res.read(30_720)) >= 30_720:
+                    return url
+        except Exception:
+            continue
+    return None
+
+
+def https_image(url: str) -> str | None:
+    """이미지 URL의 https 판 — http는 https로 승격해 실제로 열리는지 확인, 안 되면 None."""
+    if url.startswith("https://"):
+        return url
+    https = "https://" + url.removeprefix("http://")
+    try:
+        req = urllib.request.Request(https, headers={"User-Agent": BROWSER_UA})
+        with urllib.request.urlopen(req, timeout=15) as res:
+            res.read(1)
+        return https
+    except Exception:
+        return None
+
+
+def fetch_page(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+    with urllib.request.urlopen(req, timeout=15) as res:
+        return res.read(262144).decode("utf-8", errors="replace")
+
+
+def absolute_image(base: str, src: str) -> str | None:
+    url = urllib.parse.urljoin(base, src.strip().replace("&amp;", "&"))
     return url if url.startswith(("http://", "https://")) else None
 
 
