@@ -132,6 +132,7 @@ struct RaceListScreen: View {
 
     private func row(_ entry: RaceEngine.Entry) -> some View {
         HStack(alignment: .top, spacing: 12) {
+            // "10/10"처럼 월·일이 모두 두 자리면 46pt에 안 들어가 밀렸다 — 최대 폭 기준으로 고정 (#32)
             VStack(spacing: 2) {
                 Text(RaceFormat.monthDay.string(from: entry.raceDate))
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
@@ -140,8 +141,10 @@ struct RaceListScreen: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(RR.text3)
             }
-            .frame(width: 46)
+            .frame(width: 54)
             .padding(.top, 1)
+
+            RaceThumbnail(urlString: entry.race.imageUrl)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.race.name)
@@ -186,6 +189,39 @@ struct RaceListScreen: View {
     }
 
     // MARK: 빈 목록·실패
+
+    /// 카드 소형 썸네일 — 크롤러가 홈페이지에서 뽑은 대표 이미지(imageUrl)를 보여주고,
+    /// 없거나 로딩 전·실패면 코드로 그린 기본 그림으로 대신한다 (#32)
+    private struct RaceThumbnail: View {
+        let urlString: String?
+
+        var body: some View {
+            Group {
+                if let urlString, let url = URL(string: urlString) {
+                    AsyncImage(url: url) { phase in
+                        if let image = phase.image {
+                            image.resizable().scaledToFill()
+                        } else {
+                            placeholder
+                        }
+                    }
+                } else {
+                    placeholder
+                }
+            }
+            .frame(width: 44, height: 44)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+
+        private var placeholder: some View {
+            ZStack {
+                RR.surface2
+                Image(systemName: "figure.run")
+                    .font(.system(size: 18))
+                    .foregroundStyle(RR.text3)
+            }
+        }
+    }
 
     private func emptyCard(searching: Bool, filtered: Bool) -> some View {
         let (title, subtitle): (String, String) = if searching {

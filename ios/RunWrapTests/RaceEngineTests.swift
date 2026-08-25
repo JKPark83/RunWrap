@@ -104,7 +104,8 @@ struct RaceEngineTests {
           {"id":41504,"name":"2026 인사이더런 S","date":"2026-08-01","startTime":"09:30",
            "region":"서울","place":"일산 킨텍스","host":"러너블","categories":["10km"],
            "registerStart":"2026-03-26","registerEnd":"2026-07-30",
-           "homepage":"http://insiderun.me","lat":37.6646954,"lon":126.7420642,"note":"10Km 레이스"},
+           "homepage":"http://insiderun.me","imageUrl":"http://insiderun.me/og.png",
+           "lat":37.6646954,"lon":126.7420642,"note":"10Km 레이스"},
           {"id":1,"name":"최소 대회","date":"2026-09-01"}
         ]}
         """.utf8)
@@ -114,7 +115,9 @@ struct RaceEngineTests {
         let full = try #require(file.races.first)
         #expect(full.categories == ["10km"])
         #expect(full.registerEnd == "2026-07-30")
+        #expect(full.imageUrl == "http://insiderun.me/og.png")
         let minimal = file.races[1]
         #expect(minimal.startTime == nil && minimal.homepage == nil)
+        #expect(minimal.imageUrl == nil)
     }
 }

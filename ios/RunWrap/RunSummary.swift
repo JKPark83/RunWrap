@@ -7,6 +7,9 @@ struct RunSummary: Identifiable, Equatable {
     let durationSec: Double
     let distanceMeters: Double?
     let avgHeartRate: Double?
+    /// 세션 최고 심박(bpm) — HRmax 관찰 추정(TrainingGuideEngine.hrMax)의 재료.
+    /// 워크아웃 통계에서 바로 읽어 추가 쿼리 비용이 없다 (이슈 #34)
+    let maxHeartRate: Double?
     /// 세션 소모 칼로리(kcal) — 다이어트 카드의 주간 합계 재료 (기획서 §4.5)
     let calories: Double?
     /// 실내(트레드밀) 여부 — 세션 표시(배지·지도 미노출)에만 쓰고 집계는 통합한다 (기획서 §4.6)
@@ -22,6 +25,7 @@ struct RunSummary: Identifiable, Equatable {
     /// 뒤에 붙은 필드들의 기본값을 위한 명시적 init — 기존 호출부(테스트 포함)를 깨지 않는다
     init(id: UUID, start: Date, durationSec: Double,
          distanceMeters: Double?, avgHeartRate: Double?,
+         maxHeartRate: Double? = nil,
          calories: Double? = nil, isIndoor: Bool = false,
          cadenceSpm: Double? = nil,
          weatherTempC: Double? = nil, weatherHumidityPct: Double? = nil) {
@@ -30,6 +34,7 @@ struct RunSummary: Identifiable, Equatable {
         self.durationSec = durationSec
         self.distanceMeters = distanceMeters
         self.avgHeartRate = avgHeartRate
+        self.maxHeartRate = maxHeartRate
         self.calories = calories
         self.isIndoor = isIndoor
         self.cadenceSpm = cadenceSpm
