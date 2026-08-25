@@ -73,7 +73,9 @@ def fetch_image_url(homepage: str) -> str | None:
     for pattern in OG_IMAGE_RE:
         if m := pattern.search(html):
             if url := absolute_image(homepage, m.group(1)):
-                if https := https_image(url):
+                # og:image가 죽은 링크(404)거나 HTML을 돌려주는 사이트가 실제로 있다 —
+                # 메타태그를 믿지 말고 진짜 이미지인지 받아서 확인한다
+                if (https := https_image(url)) and verify_image(https):
                     return https
     # 폴백 — 후보를 앞에서부터 실제로 받아 보고 30KB 이상인 첫 이미지를 쓴다 (최대 5개)
     candidates = [
@@ -87,14 +89,24 @@ def fetch_image_url(homepage: str) -> str | None:
         url = absolute_image(homepage, src)
         if not (url := url and https_image(url)):
             continue
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
-            with urllib.request.urlopen(req, timeout=15) as res:
-                if len(res.read(30_720)) >= 30_720:
-                    return url
-        except Exception:
-            continue
+        if verify_image(url, min_bytes=30_720):
+            return url
     return None
+
+
+# 이미지 파일 시그니처 — JPEG / PNG / WebP(RIFF) / GIF
+IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"RIFF", b"GIF8")
+
+
+def verify_image(url: str, min_bytes: int = 0) -> bool:
+    """URL이 진짜 이미지인지 — 받아서 파일 시그니처(와 최소 크기)를 확인한다 (#32)."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+        with urllib.request.urlopen(req, timeout=15) as res:
+            head = res.read(max(min_bytes, 16))
+        return head.startswith(IMAGE_MAGIC) and len(head) >= min_bytes
+    except Exception:
+        return False
 
 
 def https_image(url: str) -> str | None:
