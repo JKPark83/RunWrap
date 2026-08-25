@@ -88,6 +88,7 @@ enum DemoData {
                    durationSec: km * minPerKm * 60,
                    distanceMeters: km * 1000,
                    avgHeartRate: hr,
+                   maxHeartRate: hr + 26,   // 평균 대비 +26bpm 근사 — HRmax 관찰 추정(이슈 #34)용
                    calories: km * 62,  // 체중 70kg 언저리 러닝 소모 근사 (≈1.036 kcal/kg/km)
                    isIndoor: indoor,
                    cadenceSpm: cadence,

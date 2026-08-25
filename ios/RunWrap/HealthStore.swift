@@ -24,6 +24,9 @@ final class HealthStore: ObservableObject {
     @Published private(set) var crossTrainings: [CrossTraining] = []
     /// 심폐 체력 카드 보조 지표용 최근 12주 심박 회복(HRR) 표본 (bpm)
     @Published private(set) var hrrTrend: [(date: Date, value: Double)] = []
+    /// 최대 심박(bpm) 추정 — 대회 노력도(EF) 환산의 재료 (이슈 #34).
+    /// 관찰 최대(최근 12주 세션 최고 심박) 우선, 없으면 Tanaka 공식 (TrainingGuideEngine.hrMax)
+    @Published private(set) var hrMaxBpm: Double?
 
     private let store = HKHealthStore()
 
@@ -39,6 +42,7 @@ final class HealthStore: ObservableObject {
         vo2Max = DemoData.vo2Max
         crossTrainings = DemoData.crossTrainings
         hrrTrend = DemoData.hrrTrend
+        hrMaxBpm = TrainingGuideEngine.hrMax(runs: DemoData.runs, now: Date(), birthYear: nil)
     }
 
     /// 최초 연결: 권한 요청 → 바로 조회
@@ -85,6 +89,10 @@ final class HealthStore: ObservableObject {
                 summaries[index].cadenceSpm = await cadenceSpm(of: workout)
             }
             state = .loaded(summaries)
+            // HRmax — 관찰 최대 우선, 폴백은 생년 기반 Tanaka (읽기 권한은 core에 이미 있다)
+            hrMaxBpm = TrainingGuideEngine.hrMax(
+                runs: summaries, now: Date(),
+                birthYear: (try? store.dateOfBirthComponents())?.year)
             vitals = await fetchVitals()
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
@@ -446,6 +454,10 @@ final class HealthStore: ObservableObject {
         let bpm = workout.statistics(for: HKQuantityType(.heartRate))?
             .averageQuantity()?
             .doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+        // 세션 최고 심박 — HRmax 관찰 추정(이슈 #34) 재료. 통계 재사용이라 쿼리 비용 없음
+        let maxBpm = workout.statistics(for: HKQuantityType(.heartRate))?
+            .maximumQuantity()?
+            .doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
         let kcal = workout.statistics(for: HKQuantityType(.activeEnergyBurned))?
             .sumQuantity()?
             .doubleValue(for: .kilocalorie())
@@ -461,6 +473,7 @@ final class HealthStore: ObservableObject {
                           durationSec: workout.duration,
                           distanceMeters: distance,
                           avgHeartRate: bpm,
+                          maxHeartRate: maxBpm,
                           calories: kcal,
                           isIndoor: isIndoor,
                           weatherTempC: tempC,

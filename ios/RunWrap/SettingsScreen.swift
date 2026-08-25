@@ -13,6 +13,9 @@ struct SettingsScreen: View {
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
     /// 다시 진단받기 — 온보딩 설문을 시트로 다시 띄운다 (기획서 §7)
     @State private var isRediagnosing = false
+    /// 직접 입력한 대회 기록 (이슈 #35) — 예측 표본. 루트가 쥐고 여기서 추가·삭제한다
+    @EnvironmentObject private var raceRecords: RaceRecordStore
+    @State private var isAddingRecord = false
     // 알림 (계획서 M8) — 기본값은 NotificationScheduler.rescheduleWeekly의 폴백과 같아야 한다
     @AppStorage(NotifyKey.workoutEnabled) private var workoutNotify = false
     @AppStorage(NotifyKey.weeklyEnabled) private var weeklyNotify = false
@@ -71,6 +74,13 @@ struct SettingsScreen: View {
                     section(title: "목표 기록") { goalTimeRow }
                     // 대회 날짜 — 훈련 가이드의 D-day 주기화와 리포트 D-day의 기준 (§4.9)
                     section(title: "대회 날짜") { raceDateRow }
+                    // 지난 대회 기록 (이슈 #35) — 다른 워치·기록증에만 있어 HealthKit에 없는
+                    // 대회 기록을 예측 표본으로 쓴다. 훈련 표본에 없는 "전력 노력"의 증거라
+                    // 예측이 실제보다 느리게 나오는 문제의 핵심 재료다. 최근 2년까지만 받는다
+                    section(title: "지난 대회 기록") {
+                        ForEach(raceRecords.records) { recordRow($0) }
+                        addRecordRow
+                    }
                 }
                 // 알림 — 로컬 알림 2종 (계획서 M8). 토글을 켤 때 시스템 권한을 요청한다
                 section(title: "알림") {
@@ -121,6 +131,10 @@ struct SettingsScreen: View {
         .sheet(isPresented: $isRediagnosing) {
             OnboardingFlowScreen(onFinish: { isRediagnosing = false })
                 .environmentObject(health)
+        }
+        // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
+        .sheet(isPresented: $isAddingRecord) {
+            RaceRecordInputSheet { raceRecords.add($0) }
         }
         // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다
         .onChange(of: demoMode) { _, _ in
@@ -288,6 +302,59 @@ struct SettingsScreen: View {
     /// UNCalendarNotificationTrigger의 weekday와 같은 순서 (1 = 일요일)
     private static let weekdayNames = ["일", "월", "화", "수", "목", "금", "토"]
 
+    /// 대회 기록 한 건 — "하프 1:45:30 · 2025년 10월 12일" + 삭제 버튼 (이슈 #35)
+    private func recordRow(_ record: RaceRecord) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(record.race.label) \(Format.duration(record.timeSec))")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(Self.dateLabel(record.date))
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Button { raceRecords.remove(record) } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(RR.text3.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    /// 기록 추가 버튼 행 — 예측 표본이 되는 이유를 캡션으로 밝힌다
+    private var addRecordRow: some View {
+        Button { isAddingRecord = true } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("대회 기록 추가")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.brand)
+                    Text("다른 워치·기록증의 지난 대회 기록이 예상 완주 기록의 재료가 돼요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// "2025년 10월 12일" — 기기 로케일과 무관하게 한국어 고정 (사용자 문자열 규칙)
+    fileprivate static func dateLabel(_ date: Date) -> String {
+        let comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        return "\(comps.year ?? 0)년 \(comps.month ?? 0)월 \(comps.day ?? 0)일"
+    }
+
     /// 대회 목표 토글 (이슈 #21) — 켜면 대회일 기본값으로 8주 뒤(일반적인 최소 준비 기간)를
     /// 넣고, 끄면 대회 날짜만 지운다. 레이스·기록 값은 남겨 다음에 켤 때 그대로 복원된다
     private var raceDateBinding: Binding<Bool> {
@@ -375,5 +442,169 @@ struct SettingsScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - 대회 기록 입력 시트 (이슈 #35)
+
+/// 종목·기록·날짜 수동 입력이 기본이고, Apple Intelligence를 쓸 수 있는 기기에서는
+/// 자연어 한 줄로 폼을 채우는 지름길을 얹는다. 자연어 결과는 폼을 채울 뿐 바로 저장하지
+/// 않는다 — 3B 온디바이스 모델의 오독은 사용자가 저장 전에 잡는다. 못 쓰는 환경이면
+/// 자유 입력 UI 자체를 노출하지 않는다 (이슈 #35 폴백 규칙).
+private struct RaceRecordInputSheet: View {
+    let onSave: (RaceRecord) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var race: RaceDistance = .half
+    @State private var timeSec = 0
+    @State private var date = Date()
+    @State private var freeText = ""
+    @State private var isParsing = false
+    @State private var parseFailed = false
+
+    /// 입력 가능한 날짜 범위 — 엔진의 최대 나이 가드(2년)와 같은 하한
+    private var dateRange: ClosedRange<Date> {
+        let floor = Date().addingTimeInterval(
+            -Double(TrainingGuideEngine.maxRaceRecordAgeDays) * 86_400)
+        return floor...Date()
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if RaceResultParser.isAvailable {
+                        freeTextSection
+                    }
+                    field(title: "종목") {
+                        Picker("종목", selection: $race) {
+                            ForEach(RaceDistance.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(12)
+                    }
+                    field(title: "완주 기록") { timeWheels }
+                    field(title: "대회 날짜") {
+                        DatePicker("대회 날짜",
+                                   selection: $date, in: dateRange,
+                                   displayedComponents: .date)
+                            .datePickerStyle(.graphical)
+                            .tint(RR.brand)
+                            .padding(.horizontal, 8)
+                    }
+                    Text("최근 2년 안의 기록만 예측에 쓸 수 있어요. 대회 기록은 전력 기준이라 훈련 기록보다 정확한 예측 재료가 됩니다.")
+                        .font(.system(size: 11.5))
+                        .lineSpacing(3)
+                        .foregroundStyle(RR.text3)
+                        .padding(.horizontal, 4)
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 26)
+            }
+            .background(RR.bg.ignoresSafeArea())
+            .navigationTitle("대회 기록 추가")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        onSave(RaceRecord(id: UUID(), race: race,
+                                          timeSec: Double(timeSec), date: date))
+                        dismiss()
+                    }
+                    .disabled(timeSec == 0)   // 0:00:00은 기록이 아니다
+                }
+            }
+        }
+    }
+
+    /// 자연어 지름길 — 파싱 성공 시 아래 폼을 채우고, 실패는 조용히 안내만 한다
+    private var freeTextSection: some View {
+        field(title: "말로 입력 (Apple Intelligence)") {
+            VStack(alignment: .leading, spacing: 10) {
+                TextField("예: 작년 10월 하프 1시간 45분 30초", text: $freeText, axis: .vertical)
+                    .font(.system(size: 15))
+                    .textFieldStyle(.plain)
+                HStack(spacing: 10) {
+                    Button {
+                        fillFromFreeText()
+                    } label: {
+                        if isParsing {
+                            ProgressView()
+                        } else {
+                            Text("폼 채우기")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(RR.brand)
+                    .disabled(isParsing || freeText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if parseFailed {
+                        Text("읽지 못했어요 — 아래에서 직접 입력해 주세요")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(RR.text2)
+                    }
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    /// 파싱은 폼 프리필까지만 — 저장은 사용자가 값을 확인하고 눌러야 한다 (이슈 #35)
+    private func fillFromFreeText() {
+        isParsing = true
+        parseFailed = false
+        Task {
+            let parsed = await RaceResultParser.parse(freeText)
+            isParsing = false
+            guard let parsed else {
+                parseFailed = true
+                return
+            }
+            if let parsedRace = parsed.race { race = parsedRace }
+            if let sec = parsed.timeSec { timeSec = Int(sec) }
+            if let parsedDate = parsed.date {
+                date = min(max(parsedDate, dateRange.lowerBound), dateRange.upperBound)
+            }
+        }
+    }
+
+    /// 시:분:초 휠 — SettingsScreen 목표 기록 입력과 같은 모양 (시트라 접근 못 해 따로 둔다)
+    private var timeWheels: some View {
+        HStack(spacing: 0) {
+            wheel(unit: "시간", range: 0..<8,
+                  value: Binding(get: { timeSec / 3_600 },
+                                 set: { timeSec = $0 * 3_600 + timeSec % 3_600 }))
+            wheel(unit: "분", range: 0..<60,
+                  value: Binding(get: { timeSec % 3_600 / 60 },
+                                 set: { timeSec = timeSec / 3_600 * 3_600 + $0 * 60 + timeSec % 60 }))
+            wheel(unit: "초", range: 0..<60,
+                  value: Binding(get: { timeSec % 60 },
+                                 set: { timeSec = timeSec / 60 * 60 + $0 }))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+
+    private func wheel(unit: String, range: Range<Int>, value: Binding<Int>) -> some View {
+        Picker(unit, selection: value) {
+            ForEach(range, id: \.self) { Text("\($0)\(unit)").tag($0) }
+        }
+        .pickerStyle(.wheel)
+        .frame(height: 108)
+        .clipped()
+    }
+
+    private func field(title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(RR.text2)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) { content() }
+                .rrCard()
+        }
     }
 }

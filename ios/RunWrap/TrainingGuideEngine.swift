@@ -161,6 +161,8 @@ struct TrainingGuideEngine {
         /// 세션 당시 기온·습도 — 열 중립 환산(neutralTimeSec)의 재료. 실내·미기록이면 nil (이슈 #33)
         var weatherTempC: Double? = nil
         var weatherHumidityPct: Double? = nil
+        /// 세션 평균 심박 — 대회 노력도(EF) 환산의 재료. 미기록이면 환산을 건너뛴다 (이슈 #34)
+        var avgHeartRate: Double? = nil
         /// 근거 표기용 라벨 — 공인 거리가 아니므로 "7.4km"처럼 실제 거리로 적는다.
         /// 예전에는 "5K" 같은 공인 종목명이었다 (이슈 #24로 입력이 임의 거리가 되며 바뀜)
         var label: String { Format.km(distanceKm) + "km" }
@@ -217,7 +219,8 @@ struct TrainingGuideEngine {
                   goal.km / km <= maxExtrapolationRatio else { return nil }
             return PredictionSample(distanceKm: km, timeSec: run.durationSec, date: run.start,
                                     weatherTempC: run.weatherTempC,
-                                    weatherHumidityPct: run.weatherHumidityPct)
+                                    weatherHumidityPct: run.weatherHumidityPct,
+                                    avgHeartRate: run.avgHeartRate)
         }
     }
 
@@ -236,6 +239,186 @@ struct TrainingGuideEngine {
             if let best { return (best.sample, best.sec, days) }
         }
         return nil
+    }
+
+    // MARK: - 대회 예상 기록 (이슈 #34)
+
+    /// 대회 예측 전용 표본 창 — 폼 읽기(sampleWindowDays)와 목적이 다르다.
+    /// 폼 읽기는 "지금 이 순간의 실력"이라 최근 1주를 우선하지만, 대회 예측은
+    /// "대회 당일 낼 수 있는 최대치"라 창을 넓게 잡는다: 최근 4주 우선, 없으면 12주.
+    /// 테이퍼·대회 주간에는 4주 창을 건너뛴다 — 감량 주간의 이지런이 표본을
+    /// 독식해 예측이 급락하는 것을 막는다 (테이퍼 중 실력은 떨어지지 않는다).
+    static let raceSampleWindowDays: [Int] = [28, 84]
+
+    /// 대회 목표 심박 비율(%HRmax) — 일반적인 레이스 노력도 관례 (가정):
+    /// 5K 96% / 10K 93% / 하프 90% / 풀 84% (Friel 존 구분 등 훈련서 관례 수준)
+    static func raceEffortFraction(_ race: RaceDistance) -> Double {
+        switch race {
+        case .fiveK: 0.96
+        case .tenK: 0.93
+        case .half: 0.90
+        case .full: 0.84
+        }
+    }
+
+    /// 직접 입력한 대회 기록의 최대 나이(일) — 약 2년. 그보다 오래된 기록은
+    /// 현재 체력을 반영한다고 보기 어렵고, VO₂max 추세 창(±14일)이 닿을 가능성도
+    /// 낮아 보정 없이 그대로 실린다 — 내지 않는 쪽이 안전하다 (이슈 #35)
+    static let maxRaceRecordAgeDays = 730
+
+    /// 대회 예상 기록 — 구간의 두 끝과 근거 (이슈 #34).
+    /// 값은 모두 **열 중립 기준**이다 — 대회일 더위는 RaceOutlookEngine이 따로 더한다.
+    struct RacePrediction {
+        let sample: PredictionSample
+        let windowDays: Int
+        /// 느린 끝 — "훈련 페이스 그대로 뛴다면"의 Riegel 외삽 (VO₂max 추세 보정 포함)
+        let riegelSec: Double
+        /// 빠른 끝 — "대회 노력도로 뛴다면"의 EF 환산 (VO₂max 추세 보정 포함).
+        /// 심박·HRmax가 없거나 표본이 이미 대회 노력도 이상이면 nil → 단일 값 표시
+        let effortSec: Double?
+        /// VO₂max 추세 보정 배율 — 1.0이면 보정 없음. 화면이 근거 문구를 밝히는 데 쓴다
+        let fitnessRatio: Double
+        /// 직접 입력한 대회 기록이 근거인지 — 화면이 "대회 기록 기준"을 밝히는 데 쓴다.
+        /// true면 표본 창을 거치지 않았으므로 windowDays는 0이다 (이슈 #35)
+        let isRaceRecord: Bool
+    }
+
+    /// 대회 예상 기록 계산 — 느린 끝은 Riegel, 빠른 끝은 대회 노력도(EF) 환산.
+    ///
+    /// 빠른 끝 산식: EF(효율 지수) = 속도(m/분) / 평균 심박 (ReportEngine.efficiency와 동일 정의).
+    /// 대회 페이스 = 60,000 / (EF × HRmax × 종목별 %HRmax). 심박-속도 선형 가정은
+    /// 고강도에서 오차가 커지는 근사지만, 이지런 표본밖에 없는 러너에게
+    /// "전력이면 이 정도"의 상한을 주는 것이 목적이라 방향이 맞다.
+    /// 훈련은 이지런만 하는 러너의 Riegel 예측이 실제 대회 기록보다 크게 느리다는
+    /// 피드백의 수정이다 — 훈련 페이스는 대회 노력도가 아니다.
+    /// 직접 입력한 지난 대회 기록(raceRecords)도 표본으로 경쟁한다 (이슈 #35).
+    static func racePrediction(for goal: RaceDistance, runs: [RunSummary], now: Date,
+                               daysToRace: Int? = nil, hrMaxBpm: Double? = nil,
+                               vo2MaxSamples: [(date: Date, value: Double)] = [],
+                               raceRecords: [RaceRecord] = [])
+        -> RacePrediction? {
+        // 테이퍼·대회 주간이면 4주 창 건너뜀 — 12주 창에서 가장 강했던 세션을 쓴다
+        var windows = raceSampleWindowDays
+        if let days = daysToRace,
+           let phase = phase(daysToRace: days, race: goal),
+           phase == .taper || phase == .raceWeek {
+            windows = Array(windows.dropFirst())
+        }
+
+        let samples = predictionSamples(for: goal, runs: runs)
+        var windowBest: (sample: PredictionSample, sec: Double, days: Int)?
+        for days in windows {
+            let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+            if let best = samples.filter({ $0.date >= cutoff })
+                .map({ (sample: $0, sec: $0.neutralTimeSec * pow(goal.km / $0.distanceKm, 1.06)) })
+                .min(by: { $0.sec < $1.sec }) {
+                windowBest = (best.sample, best.sec, days)
+                break
+            }
+        }
+        let training: RacePrediction? = windowBest.map { best in
+            let ratio = fitnessRatio(sampleDate: best.sample.date, now: now,
+                                     vo2MaxSamples: vo2MaxSamples)
+            let effort = effortSec(for: goal, sample: best.sample, hrMaxBpm: hrMaxBpm)
+                .flatMap { $0 < best.sec ? $0 * ratio : nil }  // Riegel보다 느리면 환산 무의미
+            return RacePrediction(sample: best.sample, windowDays: best.days,
+                                  riegelSec: best.sec * ratio,
+                                  effortSec: effort,
+                                  fitnessRatio: ratio,
+                                  isRaceRecord: false)
+        }
+
+        // 직접 입력한 대회 기록 후보 (이슈 #35) — 표본 창을 적용하지 않는다: 몇 달 전
+        // 대회 기록이라도 훈련 표본에는 없는 "전력 노력"의 증거다. 시점 차이는 VO₂max
+        // 추세 배율이 보정한다. 최소 거리·3배 외삽·최대 나이 가드는 훈련 표본과 동일하다.
+        // 대회 기록엔 세션 날씨가 없어 열 중립 환산은 자연히 원본 그대로다.
+        let recordCutoff = now.addingTimeInterval(-Double(maxRaceRecordAgeDays) * 86_400)
+        let record: RacePrediction? = raceRecords
+            .filter { $0.timeSec > 0 && $0.date <= now && $0.date >= recordCutoff
+                && $0.race.km >= minSampleKm
+                && goal.km / $0.race.km <= maxExtrapolationRatio }
+            .map { record -> RacePrediction in
+                let sample = PredictionSample(distanceKm: record.race.km,
+                                              timeSec: record.timeSec, date: record.date)
+                let ratio = fitnessRatio(sampleDate: record.date, now: now,
+                                         vo2MaxSamples: vo2MaxSamples)
+                // 대회 기록은 정의상 전력 노력 — EF 환산(빠른 끝)을 만들지 않는다
+                return RacePrediction(sample: sample, windowDays: 0,
+                                      riegelSec: record.timeSec
+                                          * pow(goal.km / record.race.km, 1.06) * ratio,
+                                      effortSec: nil,
+                                      fitnessRatio: ratio,
+                                      isRaceRecord: true)
+            }
+            .min { $0.riegelSec < $1.riegelSec }
+
+        // 훈련 표본과 대회 기록이 모두 있으면 느린 끝(Riegel)이 빠른 쪽 — 표본끼리
+        // 최솟값을 고르는 기존 규칙과 같은 뜻이다. 대회 기록이 이기면 EF 환산 구간은
+        // 버린다: 실제 대회의 증거가 심박 선형 가정의 추정보다 우선이다.
+        switch (training, record) {
+        case let (t?, r?): return r.riegelSec < t.riegelSec ? r : t
+        case let (t?, nil): return t
+        case let (nil, r?): return r
+        default: return nil
+        }
+    }
+
+    /// 빠른 끝 — 대회 노력도(EF) 환산 (열 중립 기준). 재료가 없으면 nil
+    private static func effortSec(for goal: RaceDistance, sample: PredictionSample,
+                                  hrMaxBpm: Double?) -> Double? {
+        guard let avgHR = sample.avgHeartRate, (80...220).contains(avgHR),
+              let hrMax = hrMaxBpm, hrMax > avgHR else { return nil }
+        let neutralPace = sample.neutralTimeSec / sample.distanceKm
+        let ef = (60_000 / neutralPace) / avgHR              // 속도(m/분) / 심박
+        let targetHR = hrMax * raceEffortFraction(goal)
+        let racePace = 60_000 / (ef * targetHR)
+        // 세계기록보다 빠른 환산은 입력 이상(심박 미착용 등의 저심박) — 내지 않는다
+        guard racePace >= minGoalPaceSecPerKm else { return nil }
+        return racePace * goal.km
+    }
+
+    /// VO₂max 추세 보정 배율 — 오래된 표본을 현재 체력 기준으로 앞당긴다(또는 되돌린다).
+    /// 애플워치 VO₂max는 절대값이 과소평가되는 경향이 있어(러닝 추정 한계) 절대값은
+    /// 쓰지 않고 **비율만** 쓴다. 표본 시점 ±14일과 현재(최근 14일)의 평균을 비교하고,
+    /// 각 창에 표본 2개 미만이거나 차이가 ±1.0 mL/kg/min 미만이면 보정하지 않는다(1.0)
+    /// — 워치 추정 노이즈 수준의 변화로 예측을 흔들지 않는다. 배율은 ±15%로 제한한다.
+    static func fitnessRatio(sampleDate: Date, now: Date,
+                             vo2MaxSamples: [(date: Date, value: Double)]) -> Double {
+        let halfWindow = 14.0 * 86_400
+        let atSample = vo2MaxSamples.filter { abs($0.date.timeIntervalSince(sampleDate)) <= halfWindow }
+            .map(\.value)
+        let current = vo2MaxSamples.filter {
+            $0.date <= now && $0.date >= now.addingTimeInterval(-halfWindow)
+        }.map(\.value)
+        guard atSample.count >= 2, current.count >= 2 else { return 1 }
+        let vo2AtSample = atSample.reduce(0, +) / Double(atSample.count)
+        let vo2Now = current.reduce(0, +) / Double(current.count)
+        guard vo2AtSample > 0, vo2Now > 0, abs(vo2Now - vo2AtSample) >= 1.0 else { return 1 }
+        return min(max(vo2AtSample / vo2Now, 0.85), 1.15)
+    }
+
+    /// HRmax 추정 — ① 관찰 최대: 최근 12주 세션별 최고 심박 중 2번째 값
+    /// (1건뿐인 이상 스파이크 방어), 표본 3개 이상일 때만.
+    /// ② Tanaka(2001) 208 − 0.7×나이 — WorkoutDetailStore.heartRateMax와 같은 공식.
+    /// 관찰 최대는 "HRmax가 이보다 낮을 수는 없다"는 하한 증거라 Tanaka와 **큰 쪽**을 쓴다
+    /// — 이지런만 한 러너의 관찰 최대는 HRmax를 크게 밑돈다. 둘 다 없으면 nil
+    static func hrMax(runs: [RunSummary], now: Date, birthYear: Int?) -> Double? {
+        let cutoff = now.addingTimeInterval(-84 * 86_400)
+        let peaks = runs.filter { $0.start >= cutoff && $0.start <= now }
+            .compactMap(\.maxHeartRate)
+            .filter { (120...230).contains($0) }   // 밖은 착용 불량·이상치
+            .sorted(by: >)
+        let observed: Double? = peaks.count >= 3 ? peaks[1] : nil
+        let tanaka: Double? = birthYear.flatMap { year in
+            let age = Calendar.current.component(.year, from: now) - year
+            return (10...100).contains(age) ? 208 - 0.7 * Double(age) : nil
+        }
+        switch (observed, tanaka) {
+        case let (o?, t?): return max(o, t)
+        case let (o?, nil): return o
+        case let (nil, t?): return t
+        default: return nil
+        }
     }
 
     // MARK: - 현재 기력 (Daniels VDOT)

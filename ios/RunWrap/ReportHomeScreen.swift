@@ -7,6 +7,8 @@ import SwiftUI
 /// 목적은 문장의 강조점만 바꾸고, 어떤 카드를 보여줄지는 레벨 게이트(`ReportGate`, §4)가 정한다.
 struct ReportHomeScreen: View {
     @EnvironmentObject private var health: HealthStore
+    /// 직접 입력한 대회 기록 (이슈 #35) — 대회 예측의 표본으로 경쟁한다
+    @EnvironmentObject private var raceRecords: RaceRecordStore
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
@@ -63,7 +65,10 @@ struct ReportHomeScreen: View {
                                               raceDate: raceDateRaw > 0
                                                   ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                                               runs: runs,
-                                              now: Date()),
+                                              now: Date(),
+                                              hrMaxBpm: health.hrMaxBpm,
+                                              vo2MaxSamples: health.vo2Max,
+                                              raceRecords: raceRecords.records),
                                           segment: segment)
                             .refreshable { await health.load() }
                     case .month:
@@ -503,7 +508,7 @@ struct ReportHomeContent: View {
         case .awaitingRecords(let race, let days):
             VStack(alignment: .leading, spacing: 9) {
                 dDayChip(days: days, race: race)
-                Text("최근 8주 안에 목표 종목을 예측할 만큼 긴 러닝이 있으면 예상 완주 기록도 보여드려요")
+                Text("최근 12주 안에 목표 종목을 예측할 만큼 긴 러닝이 있으면 예상 완주 기록도 보여드려요 — 설정에서 지난 대회 기록을 입력해도 돼요")
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
@@ -512,12 +517,20 @@ struct ReportHomeContent: View {
         case .ready(let outlook):
             VStack(alignment: .leading, spacing: 9) {
                 dDayChip(days: outlook.daysToRace, race: outlook.race)
-                (Text("예상 완주 ").foregroundStyle(RR.text)
-                    + Text(Format.duration(outlook.predictedSec))
-                        .foregroundStyle(outlook.tone.color)
-                    + Text(" · " + Format.paceKm(outlook.predictedPaceSecPerKm))
-                        .foregroundStyle(RR.text2))
-                    .font(.system(size: 16, weight: .bold))
+                // 심박 재료가 있으면 구간(빠른 끝~느린 끝), 없으면 단일 값 + 페이스 (이슈 #34)
+                if let fast = outlook.predictedFastSec {
+                    (Text("예상 완주 ").foregroundStyle(RR.text)
+                        + Text("\(Format.duration(fast))~\(Format.duration(outlook.predictedSec))")
+                            .foregroundStyle(outlook.tone.color))
+                        .font(.system(size: 16, weight: .bold))
+                } else {
+                    (Text("예상 완주 ").foregroundStyle(RR.text)
+                        + Text(Format.duration(outlook.predictedSec))
+                            .foregroundStyle(outlook.tone.color)
+                        + Text(" · " + Format.paceKm(outlook.predictedPaceSecPerKm))
+                            .foregroundStyle(RR.text2))
+                        .font(.system(size: 16, weight: .bold))
+                }
                 Text(outlookCaption(outlook))
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
@@ -537,15 +550,26 @@ struct ReportHomeContent: View {
             .background(RR.brandSoft, in: Capsule())
     }
 
-    /// "목표 4:00:00 · 최근 1주 기록 기준 Riegel 예측 · 8월 평년 더위 보정 +12초/km".
-    /// 표본 창은 고정이 아니라 엔진이 고른 값이다 — 1주에 러닝이 없으면 4주·8주로 넓어지고,
-    /// 그 사실을 문구에 그대로 드러낸다 (이슈 #24).
+    /// "목표 4:00:00 · 최근 4주 기록 기준 Riegel 예측 · 8월 평년 더위 보정 +12초/km".
+    /// 표본 창은 고정이 아니라 엔진이 고른 값이다 — 4주에 러닝이 없으면 12주로 넓어지고,
+    /// 그 사실을 문구에 그대로 드러낸다 (이슈 #24·#34).
     /// 더위 보정은 대회 장소를 모르는 채 쓰는 서울 평년값 근사라 "평년"을 밝힌다.
     /// 표본 세션의 더위를 제거했으면 그 사실도 밝힌다 (이슈 #33) — 보정이 겹칠수록
     /// 근거를 숨기면 숫자에 대한 불신만 커진다
     private func outlookCaption(_ outlook: RaceOutlookEngine.Outlook) -> String {
-        let window = TrainingGuideEngine.sampleWindowLabel(days: outlook.sampleWindowDays)
-        var caption = "목표 \(Format.duration(outlook.goalSec)) · \(window) 기록 기준 Riegel 예측"
+        // 직접 입력한 대회 기록이 근거면 표본 창 대신 그 사실을 밝힌다 (이슈 #35)
+        let basis = outlook.isRaceRecord
+            ? "입력한 대회"
+            : TrainingGuideEngine.sampleWindowLabel(days: outlook.sampleWindowDays)
+        var caption = "목표 \(Format.duration(outlook.goalSec)) · \(basis) 기록 기준 Riegel 예측"
+        if outlook.predictedFastSec != nil {
+            caption += " · 빠른 끝은 대회 노력도(EF) 환산"
+        }
+        // 배율 → 기록 변화율(%): 배율 0.97 = 기록 3% 단축 = 체력 상승 (이슈 #34)
+        let fitnessPct = (1 - outlook.fitnessRatio) * 100
+        if abs(fitnessPct) >= 0.5 {
+            caption += String(format: " · 심폐 추세 %+.0f%% 반영", fitnessPct)
+        }
         if outlook.sampleHeatDeltaSecPerKm > 0 {
             caption += String(format: " · 훈련 더위 −%.0f초/km 반영",
                               outlook.sampleHeatDeltaSecPerKm)
