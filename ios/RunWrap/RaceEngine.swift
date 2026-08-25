@@ -15,6 +15,7 @@ struct Race: Decodable, Identifiable, Equatable {
     var registerStart: String? = nil  // 접수 시작일 "yyyy-MM-dd"
     var registerEnd: String? = nil    // 접수 마감일 "yyyy-MM-dd"
     var homepage: String? = nil       // 대회 홈페이지 — 참가하기 버튼 링크
+    var imageUrl: String? = nil       // 홈페이지 대표 이미지(og:image) — 카드 썸네일 (#32)
     var lat: Double? = nil            // 대회장 좌표 (로드런 지도 스크립트에서 추출)
     var lon: Double? = nil
     var note: String? = nil           // 기타소개 자유 텍스트

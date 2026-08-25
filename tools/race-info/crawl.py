@@ -17,6 +17,7 @@ import json
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
@@ -29,6 +30,26 @@ def fetch(url: str) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=30) as res:
         return res.read().decode("cp949", errors="replace")
+
+
+def fetch_image_url(homepage: str) -> str | None:
+    """대회 홈페이지의 대표 이미지(og:image·twitter:image 메타태그) URL — 없거나 실패하면 None.
+
+    홈페이지는 인코딩이 제각각이라 utf-8 대체 디코드로 메타태그만 찾는다 (#32).
+    상대 경로는 홈페이지 기준 절대 URL로 바꾼다.
+    """
+    req = urllib.request.Request(homepage, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=15) as res:
+        head = res.read(131072).decode("utf-8", errors="replace")
+    m = re.search(
+        r"<meta[^>]+(?:property|name)=[\"'](?:og:image|twitter:image)[\"'][^>]*"
+        r"content=[\"']([^\"']+)[\"']", head, re.I) or re.search(
+        r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]*"
+        r"(?:property|name)=[\"'](?:og:image|twitter:image)[\"']", head, re.I)
+    if not m:
+        return None
+    url = urllib.parse.urljoin(homepage, m.group(1).strip().replace("&amp;", "&"))
+    return url if url.startswith(("http://", "https://")) else None
 
 
 def strip_tags(html: str) -> str:
@@ -147,9 +168,17 @@ def main() -> int:
             print(f"no={no} 오류: {e}", file=sys.stderr)
             race = None
         if race:
+            # 카드 썸네일용 대표 이미지 — 홈페이지가 있을 때만 시도, 실패해도 건은 유지 (#32)
+            if homepage := race.get("homepage"):
+                try:
+                    if image_url := fetch_image_url(homepage):
+                        race["imageUrl"] = image_url
+                except Exception:
+                    pass
             races.append(race)
             for key in ("startTime", "region", "place", "host", "categories",
-                        "registerStart", "registerEnd", "homepage", "note"):
+                        "registerStart", "registerEnd", "homepage", "note",
+                        "imageUrl"):
                 if key not in race:
                     missing[key] = missing.get(key, 0) + 1
         else:
