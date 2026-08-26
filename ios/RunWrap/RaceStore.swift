@@ -31,9 +31,12 @@ final class RaceStore: ObservableObject {
         state = .loaded(file)
     }
 
-    /// GitHub Actions가 매일 크롤해 커밋하는 원본 파일의 raw URL (계획서 M13-4)
+    /// GitHub Actions가 매일 크롤해 커밋하는 원본 파일의 raw URL (계획서 M13-4).
+    /// main이 아니라 dev를 읽는다 — main은 보호 규칙(PR 필수) 때문에 크롤 봇이 직접
+    /// 커밋할 수 없어서, 새벽 크롤이 실제로 쌓이는 브랜치는 dev다. 스키마가 앱보다
+    /// 앞서가 디코드에 실패하면 fetchRemote가 nil을 돌려줘 로컬 데이터로 안전하게 남는다.
     private nonisolated static let remoteURL =
-        URL(string: "https://raw.githubusercontent.com/JKPark83/RunWrap/main/ios/RunWrap/Races.json")!
+        URL(string: "https://raw.githubusercontent.com/JKPark83/RunWrap/dev/ios/RunWrap/Races.json")!
 
     private nonisolated static var cacheURL: URL? {
         try? FileManager.default
