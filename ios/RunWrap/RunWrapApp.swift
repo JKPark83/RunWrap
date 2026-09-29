@@ -42,7 +42,9 @@ struct RunWrapApp: App {
     /// 포그라운드 진입: 이미 로딩된 목록이 있으면 새로 고침 → 캐시 갱신 → 주간 알림 재예약.
     /// 최초 기동은 RootView의 connect/load가 담당하므로 여기서는 건드리지 않는다.
     /// 첫 로드가 실패(.failed)로 끝났으면 포그라운드 복귀 때 다시 시도한다 (이슈 #58).
+    /// 설정 앱에서 알림을 꺼 두고 돌아왔으면 켜진 알림 토글부터 끈다 (이슈 #94)
     private func refreshCacheAndReschedule() async {
+        await NotificationScheduler.disableTogglesIfDenied()
         switch health.state {
         case .loaded, .failed: await health.load()
         default: break

@@ -25,6 +25,7 @@ struct CourseScreen: View {
     /// 보급 지점은 100m 단위가 의미를 가져 날씨(km)보다 정밀한 위치를 요청한다
     @StateObject private var location = LocationProvider(accuracy: kCLLocationAccuracyNearestTenMeters)
     @State private var course: [GeoPoint] = []
+    @Environment(\.openURL) private var openURL
     @State private var courseName = ""
     @State private var result: CourseSupplyEngine.Result?
     @State private var nearby: NearbySupplyEngine.Result?
@@ -139,9 +140,7 @@ struct CourseScreen: View {
         case .idle, .loading:
             locatingCard
         case .denied:
-            noticeCard("위치를 쓸 수 없어요",
-                       message: "설정 앱 → 개인정보 보호 및 보안 → 위치 서비스에서 런미새를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
-                       symbol: "location.slash")
+            deniedCard
         case .failed:
             noticeCard("위치를 못 받았어요",
                        message: "실내나 지하에서는 위치를 잡기 어려울 수 있어요. 잠시 뒤 다시 들어와 주세요.",
@@ -172,6 +171,31 @@ struct CourseScreen: View {
                 location.requestFullAccuracy()
             } label: {
                 Label("이번만 정확한 위치 쓰기", systemImage: "location")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    /// 위치 거부 안내 + 설정 바로가기 (이슈 #94) — 버튼 스타일은 coarseLocationCard와 같다.
+    /// 아이폰 전체 위치 서비스가 꺼진 경우도 .denied로 오므로 문구를 시스템 스위치 쪽으로 바꾼다
+    private var deniedCard: some View {
+        VStack(spacing: 10) {
+            if location.servicesDisabled {
+                noticeCard("아이폰의 위치 서비스가 꺼져 있어요",
+                           message: "설정 > 개인정보 보호 및 보안 > 위치 서비스를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
+                           symbol: "location.slash")
+            } else {
+                noticeCard("위치를 쓸 수 없어요",
+                           message: "설정 앱 → 개인정보 보호 및 보안 → 위치 서비스에서 런미새를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
+                           symbol: "location.slash")
+            }
+            Button {
+                openURL(URL(string: UIApplication.openSettingsURLString)!)
+            } label: {
+                Label("설정 열기", systemImage: "gearshape")
                     .font(.system(size: 13.5, weight: .semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)

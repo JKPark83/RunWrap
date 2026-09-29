@@ -31,6 +31,9 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
     /// 받은 좌표가 흐린지(대략적 위치) — 설정의 '정확한 위치'가 꺼졌거나 오차가 큰 경우 true.
     /// 날씨는 km 단위라 이 값을 보지 않는다. 주변 보급처럼 100m가 의미를 갖는 쪽만 가드로 쓴다 (이슈 #74)
     @Published private(set) var isCoarse = false
+    /// 아이폰 전체 위치 서비스가 꺼졌는지 (이슈 #94) — 이때도 권한은 .denied로 와서,
+    /// 안내 카드가 앱 권한이 아니라 시스템 스위치를 가리키도록 구분한다
+    @Published private(set) var servicesDisabled = false
 
     private let manager = CLLocationManager()
 
@@ -47,6 +50,7 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
         switch manager.authorizationStatus {
         case .denied, .restricted:
             state = .denied
+            refreshServicesDisabled()
         case .notDetermined:
             state = .loading
             manager.requestWhenInUseAuthorization()  // 응답은 didChangeAuthorization으로
@@ -69,6 +73,14 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
         }
     }
 
+    /// 시스템 위치 서비스 스위치 확인 — 메인 스레드에서 부르면 UI 멈춤 경고가 나므로 밖에서 읽는다
+    private func refreshServicesDisabled() {
+        Task {
+            let enabled = await Task.detached { CLLocationManager.locationServicesEnabled() }.value
+            servicesDisabled = !enabled
+        }
+    }
+
     /// 좌표가 흐린지 판정 — 순수 함수라 테스트한다.
     /// 대략적 위치(reducedAccuracy)는 1~20km 단위로 뭉개져 온다. 주변 보급 반경이 1km라
     /// 오차가 수백 m만 넘어도 가까운 순서가 뒤집히므로 500m를 넘으면 흐리다고 본다.
@@ -87,6 +99,7 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
                 if case .loading = state { self.manager.requestLocation() }
             case .denied, .restricted:
                 state = .denied
+                refreshServicesDisabled()
             default:
                 break
             }

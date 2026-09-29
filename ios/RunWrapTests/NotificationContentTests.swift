@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import RunWrap
 
 /// 알림 본문 빌더(순수 함수)와 리포트 캐시 왕복 검증 (계획서 M8).
@@ -57,12 +58,54 @@ struct NotificationContentTests {
         #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: fresh) == fallback)
     }
 
-    @Test("주간 트리거 — 요일·시가 정각 DateComponents로 옮겨진다")
-    func weeklyTrigger() {
-        let components = NotificationScheduler.weeklyTrigger(weekday: 1, hour: 18)
-        #expect(components.weekday == 1)
-        #expect(components.hour == 18)
-        #expect(components.minute == 0)
+    /// 주간 발송 시각 테스트용 — 시간대를 서울로 고정해 실행 환경과 무관하게 한다
+    private var seoul: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+        return calendar
+    }
+
+    @Test("주간 발송 시각 — 다음 (요일, 시) 정각부터 7일 간격으로 정확한 날짜 4건 (이슈 #94)")
+    func weeklyFireDates() {
+        // now = 2026-08-10T09:00Z = 8/10(월) 18:00 KST. 일요일(1) 18시 → 다음 회차는 8/16(일)
+        let dates = NotificationScheduler.weeklyFireDates(from: now, weekday: 1, hour: 18,
+                                                          count: 4, calendar: seoul)
+        #expect(dates.map(\.day) == [16, 23, 30, 6])      // 8/16·8/23·8/30·9/6
+        #expect(dates.map(\.month) == [8, 8, 8, 9])
+        #expect(dates.allSatisfy { $0.year == 2026 && $0.hour == 18 && $0.minute == 0 })
+        // 요일 반복 트리거가 아니라 날짜 고정이어야 첫 회와 백업이 겹치지 않는다
+        #expect(dates.allSatisfy { $0.weekday == nil })
+    }
+
+    @Test("주간 발송 시각 — 같은 요일 이전 시각이면 오늘, 정각이면 다음 주부터 센다 (이슈 #94)")
+    func weeklyFireDatesSameDay() {
+        // now = 8/10(월) 18:00 KST. 월요일(2) 19시 → 오늘 19시가 첫 회
+        let later = NotificationScheduler.weeklyFireDates(from: now, weekday: 2, hour: 19,
+                                                          count: 2, calendar: seoul)
+        #expect(later.map(\.day) == [10, 17])
+        // 월요일 18시 정각 = now → 이미 지난 것으로 보고 8/17부터
+        let exact = NotificationScheduler.weeklyFireDates(from: now, weekday: 2, hour: 18,
+                                                          count: 1, calendar: seoul)
+        #expect(exact.map(\.day) == [17])
+        // count 0 → 빈 목록
+        #expect(NotificationScheduler.weeklyFireDates(from: now, weekday: 2, hour: 18,
+                                                      count: 0, calendar: seoul).isEmpty)
+    }
+
+    @Test("주간 백업 id — 첫 회 id와 겹치지 않는 3건 (이슈 #94)")
+    func weeklyBackupIds() {
+        #expect(NotificationScheduler.weeklyBackupIds
+            == ["runwrap.weekly.2", "runwrap.weekly.3", "runwrap.weekly.4"])
+        #expect(!NotificationScheduler.weeklyBackupIds.contains(NotificationScheduler.weeklyId))
+    }
+
+    @Test("알림 권한 판정 — 허용·임시·앱 클립만 발송 가능, 거부·미결정은 불가 (이슈 #94)")
+    func authorizationGranted() {
+        #expect(NotificationScheduler.isGranted(.authorized))
+        #expect(NotificationScheduler.isGranted(.provisional))
+        #expect(NotificationScheduler.isGranted(.ephemeral))
+        #expect(!NotificationScheduler.isGranted(.denied))
+        #expect(!NotificationScheduler.isGranted(.notDetermined))
     }
 
     @Test("스냅샷 생성 — 최근 7일 거리 합과 횟수를 담는다")
