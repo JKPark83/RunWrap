@@ -147,7 +147,9 @@ struct CourseScreen: View {
                        message: "실내나 지하에서는 위치를 잡기 어려울 수 있어요. 잠시 뒤 다시 들어와 주세요.",
                        symbol: "location.slash")
         case .located:
-            if let nearby {
+            if location.isCoarse {
+                coarseLocationCard
+            } else if let nearby {
                 nearbyMapCard(nearby)
                 nearbyListCard(nearby)
                 if !nearby.matches.contains(where: { $0.poi.kind == .water }) {
@@ -157,6 +159,24 @@ struct CourseScreen: View {
                 // 위치는 받았는데 POI가 아직 안 올라온 찰나 — 로딩과 같은 카드로 덮는다
                 locatingCard
             }
+        }
+    }
+
+    /// '정확한 위치'가 꺼져 좌표가 km 단위로 흐린 경우 — 틀린 거리를 보여주느니 목록을 내지 않는다 (이슈 #74)
+    private var coarseLocationCard: some View {
+        VStack(spacing: 10) {
+            noticeCard("정확한 위치가 꺼져 있어요",
+                       message: "지금은 대략적인 위치만 받고 있어서 보급 지점까지의 거리가 km 단위로 어긋날 수 있어요. 이번만 정확한 위치를 허락해 주시면 제대로 짚어 드릴게요.",
+                       symbol: "location.viewfinder")
+            Button {
+                location.requestFullAccuracy()
+            } label: {
+                Label("이번만 정확한 위치 쓰기", systemImage: "location")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -282,6 +302,11 @@ struct CourseScreen: View {
         guard result == nil,
               case .located(let coordinate) = location.state,
               case .loaded(let file) = store.state else { return }
+        // 흐린 좌표로는 검색하지 않는다 — km 오차면 가까운 순서가 뒤집혀 틀린 답이 된다 (이슈 #74)
+        guard !location.isCoarse else {
+            nearby = nil
+            return
+        }
         nearby = NearbySupplyEngine.search(
             center: GeoPoint(lat: coordinate.latitude, lon: coordinate.longitude),
             pois: file.pois,
