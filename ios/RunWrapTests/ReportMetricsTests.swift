@@ -167,6 +167,31 @@ struct ReportMetricsTests {
         #expect(stats.deltaPct != nil && abs(stats.deltaPct! - 25) < 0.01)  // 16→20km
     }
 
+    @Test("월 목록 — 모든 기록이 다음 달이어도 이번 달 하나는 돌려준다 (이슈 #68)")
+    func availableMonthsAllFutureRuns() {
+        // now = 8.10. 9.9·9.14 기록뿐 → 가장 오래된 달(9월)이 이번 달보다 뒤라 예전엔 빈 배열
+        let runs = [run(daysAgo: -30, km: 5), run(daysAgo: -35, km: 5)]
+        let august = Calendar.current.dateInterval(of: .month, for: now)!.start
+        #expect(MonthlyStats.availableMonths(in: runs, now: now) == [august])
+    }
+
+    @Test("월 목록 — 3개월에 걸친 기록이면 이번 달부터 3개, 최신 먼저")
+    func availableMonthsSpansThreeMonths() {
+        // now = 8.10. 8.9·7.8·6.16 → [8월, 7월, 6월]
+        let runs = [run(daysAgo: 1, km: 5), run(daysAgo: 33, km: 5), run(daysAgo: 55, km: 5)]
+        let calendar = Calendar.current
+        let august = calendar.dateInterval(of: .month, for: now)!.start
+        let july = calendar.date(byAdding: .month, value: -1, to: august)!
+        let june = calendar.date(byAdding: .month, value: -2, to: august)!
+        #expect(MonthlyStats.availableMonths(in: runs, now: now) == [august, july, june])
+    }
+
+    @Test("월 목록 — 기록이 없으면 이번 달 하나만 돌려준다 (기존 동작 유지)")
+    func availableMonthsNoRuns() {
+        let august = Calendar.current.dateInterval(of: .month, for: now)!.start
+        #expect(MonthlyStats.availableMonths(in: [], now: now) == [august])
+    }
+
     // MARK: - streak · 추이 지표
     // now = 8.10(월) 18:00 KST — 이번 ISO 주는 [8.10, 8.17).
     // daysAgo 0.1~0.3 = 이번 주, 1~6 = 지난주(8.3–8.9), 9 = 2주 전(8.1), 25 = 4주 전 주(7.16).

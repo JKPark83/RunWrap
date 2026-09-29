@@ -13,8 +13,9 @@ struct StatsScreen: View {
 
     var body: some View {
         Group {
-            if case .loaded(let runs) = health.state {
-                let months = MonthlyStats.availableMonths(in: runs)
+            // availableMonths는 이번 달을 항상 담지만, 빈 배열이면 months[-1]로 크래시하므로 한 번 더 막는다 (이슈 #68)
+            if case .loaded(let runs) = health.state,
+               case let months = MonthlyStats.availableMonths(in: runs), !months.isEmpty {
                 let index = min(monthIndex, months.count - 1)
                 let stats = MonthlyStats.compute(runs: runs, month: months[index])
 

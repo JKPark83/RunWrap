@@ -355,7 +355,9 @@ struct MonthlyStats {
         return "지난달 1–\(comparisonDays)일 대비"
     }
 
-    /// runs 전체에서 기록이 있는 월 목록 (최신 먼저)
+    /// runs 전체에서 기록이 있는 월 목록 (최신 먼저).
+    /// 이번 달은 항상 포함한다 — 기록이 없거나 모든 기록이 미래 달이어도(기기 시계 오차 등)
+    /// 빈 배열을 돌려주면 화면이 months[-1]로 크래시한다 (이슈 #68).
     static func availableMonths(in runs: [RunSummary], now: Date = Date()) -> [Date] {
         let calendar = Calendar.current
         guard let oldest = runs.map(\.start).min() else {
@@ -363,7 +365,7 @@ struct MonthlyStats {
         }
         var months: [Date] = []
         var cursor = calendar.dateInterval(of: .month, for: now)!.start
-        let first = calendar.dateInterval(of: .month, for: oldest)!.start
+        let first = min(calendar.dateInterval(of: .month, for: oldest)!.start, cursor)
         while cursor >= first {
             months.append(cursor)
             cursor = calendar.date(byAdding: .month, value: -1, to: cursor)!
