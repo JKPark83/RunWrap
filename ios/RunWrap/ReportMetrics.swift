@@ -55,7 +55,18 @@ struct WeeklyReport {
     let streakWeeks: Int           // 주 1회 이상 달린 ISO 주 연속 개수
     let weekRunCount: Int          // 최근 7일(헤더와 같은 달력 창) 러닝 횟수 (streak 카드 캡션·알림 본문용)
 
-    var isEmpty: Bool { distance == nil && acwr == nil && efficiency == nil }
+    /// 이 레벨에서 실제로 그려지는 판정 카드 — 미노출 가드(엔진 nil) AND 레벨 게이트 (이슈 #119).
+    /// 비어 있으면 홈은 표본 부족 안내를 띄우고 "리포트 자세히 보기"를 감춘다.
+    /// 예전 `isEmpty`(셋 다 nil)는 게이트를 몰라, 런린이는 숨겨진 ACWR·EF 때문에 안내도 판정 카드도 없었다.
+    /// 거리는 증감 판정(`distance`)이 있을 때만 센다 — 주간 이력 차트(`weeks`)는 기록만 있으면
+    /// 늘 그려지므로(이슈 #91) 그것까지 세면 표본 부족 안내가 영영 뜨지 않는다.
+    func visibleCards(level: RunnerLevel) -> [ReportCard] {
+        [(ReportCard.distance, distance != nil),
+         (.acwr, acwr != nil),
+         (.efficiency, efficiency != nil)]
+            .filter { $0.1 && ReportGate.shows($0.0, level: level) }
+            .map(\.0)
+    }
 
     /// 상세 화면 첫 문장 — 가장 나쁜 톤 기준으로 한 주를 요약한다
     var headline: String {
