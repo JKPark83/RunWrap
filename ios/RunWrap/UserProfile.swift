@@ -104,6 +104,11 @@ enum ProfileKey {
     static let purposes = "profile.purposes"
     /// 주간 러닝 목표 횟수 — 성장 XP의 주간 보너스 분모이자 홈 목표 칩의 기준
     static let weeklyGoal = "profile.weeklyGoal"
+    /// 주간 목표를 마지막으로 바꾼 시각 (timeIntervalSince1970) — 0이면 변경 없음.
+    /// 바뀐 목표는 다음 주부터 보너스 판정에 적용한다 — 변경한 주까지는 `weeklyGoalBefore`로 판정 (이슈 #108)
+    static let weeklyGoalChangedAt = "profile.weeklyGoalChangedAt"
+    /// 주간 목표 변경 직전 값 — 같은 주에 여러 번 바꾸면 그 주 첫 변경 전 값 (이슈 #108)
+    static let weeklyGoalBefore = "profile.weeklyGoalBefore"
     /// 온보딩 완료 시각 (timeIntervalSince1970)
     static let onboardedAt = "profile.onboardedAt"
     /// 승급 제안을 거절한 시각 — 4주간 다시 묻지 않는다 (§3)

@@ -7,6 +7,9 @@ struct SettingsScreen: View {
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     @AppStorage(ProfileKey.purposes) private var purposesRaw = ""
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
+    // 주간 목표 변경 기록 (이슈 #108) — 0이면 변경 없음. 바뀐 목표는 다음 주부터 보너스에 적용된다
+    @AppStorage(ProfileKey.weeklyGoalChangedAt) private var weeklyGoalChangedAtRaw = 0.0
+    @AppStorage(ProfileKey.weeklyGoalBefore) private var weeklyGoalBefore = 0
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
     // 대회 날짜 — 0이면 미설정. Date를 직접 저장할 수 없어 timeIntervalSince1970로 둔다
@@ -70,6 +73,13 @@ struct SettingsScreen: View {
                 section(title: "주간 러닝 목표") {
                     weeklyGoalRow
                 }
+                .onChange(of: weeklyGoal) { oldValue, _ in
+                    recordWeeklyGoalChange(from: oldValue)
+                }
+                Text("바뀐 목표는 다음 주부터 보너스에 적용돼요")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+                    .padding(.horizontal, 4)
                 // 대회 목표 묶음 (이슈 #21) — 레이스·기록·날짜를 한 토글 아래 모은다.
                 // 끄면 대회 날짜만 지운다 — 레이스·기록은 훈련 가이드·도감이 계속 쓴다
                 section(title: "대회 목표") {
@@ -279,6 +289,16 @@ struct SettingsScreen: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+    }
+
+    /// 주간 목표 변경을 기록한다 (이슈 #108) — 판정 규칙은 GrowthEngine.recordWeeklyGoalChange
+    private func recordWeeklyGoalChange(from oldValue: Int) {
+        let previous = weeklyGoalChangedAtRaw > 0
+            ? (at: Date(timeIntervalSince1970: weeklyGoalChangedAtRaw), before: weeklyGoalBefore)
+            : nil
+        let change = GrowthEngine.recordWeeklyGoalChange(previous: previous, oldGoal: oldValue, now: Date())
+        weeklyGoalChangedAtRaw = change.at.timeIntervalSince1970
+        weeklyGoalBefore = change.before
     }
 
     /// 목적 복수 선택 토글 — 최소 1개는 남긴다 (전부 끄면 문장 강조점을 정할 수 없다)

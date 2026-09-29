@@ -258,6 +258,35 @@ struct ProgressSnapshotTests {
         #expect(defaults.integer(forKey: ProfileKey.hrMaxManual) == 0)
     }
 
+    @Test("주간 목표 변경 기록 왕복 — apply→readLocal로 보존되고, 기록 없음은 nil·옛 JSON도 디코드된다")
+    func weeklyGoalChangeRoundTrip() throws {
+        let defaults = Self.freshDefaults("weeklyGoalChange")
+        var snapshot = Self.makeSnapshot()
+        snapshot.weeklyGoalChangedAt = Self.date("2026-08-12T00:00:00Z")
+        snapshot.weeklyGoalBefore = 3
+        snapshot.apply(to: defaults)
+
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(read.weeklyGoalChangedAt == Self.date("2026-08-12T00:00:00Z"))
+        #expect(read.weeklyGoalBefore == 3)
+
+        // nil 옵셔널은 키 자체가 빠진다 — 이슈 #108 이전 본과 같은 JSON이 nil로 디코드된다
+        let data = try JSONEncoder().encode(Self.makeSnapshot())
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["weeklyGoalChangedAt"] == nil)
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self, from: data)
+        #expect(decoded.weeklyGoalChangedAt == nil)
+        #expect(decoded.weeklyGoalBefore == nil)
+
+        // 스냅샷이 단일 원본 — 기록 없는 본을 적용하면 로컬 기록도 지워져 readLocal이 nil로 읽는다
+        decoded.apply(to: defaults)
+        let readCleared = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(readCleared.weeklyGoalChangedAt == nil)
+        #expect(readCleared.weeklyGoalBefore == nil)
+    }
+
     // MARK: - 복원 선택 판정 (이슈 #44)
 
     @Test("복원 선택 — 동기화 이력 없는 설치가 서버의 다른 사이클 본을 만나면 묻는다")

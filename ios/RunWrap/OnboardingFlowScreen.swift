@@ -401,6 +401,19 @@ final class OnboardingFlowModel: ObservableObject {
         let decided = LevelEngine.decide(answers)
         defaults.set(decided.rawValue, forKey: ProfileKey.levelV2)
         defaults.set(RunPurpose.encode(answers.q9Purposes), forKey: ProfileKey.purposes)
+        // 재진단으로 주간 목표가 바뀌면 변경 시점을 남긴다 — 설정 화면의 onChange에 기대지 않고
+        // 여기서 직접 기록해 과거 주가 새 목표로 소급 판정되는 일을 막는다 (이슈 #108)
+        let oldGoal = defaults.integer(forKey: ProfileKey.weeklyGoal)
+        if isRediagnosis, oldGoal > 0, oldGoal != weeklyGoal {
+            let changedAt = defaults.double(forKey: ProfileKey.weeklyGoalChangedAt)
+            let previous = changedAt > 0
+                ? (at: Date(timeIntervalSince1970: changedAt),
+                   before: defaults.integer(forKey: ProfileKey.weeklyGoalBefore))
+                : nil
+            let change = GrowthEngine.recordWeeklyGoalChange(previous: previous, oldGoal: oldGoal, now: now)
+            defaults.set(change.at.timeIntervalSince1970, forKey: ProfileKey.weeklyGoalChangedAt)
+            defaults.set(change.before, forKey: ProfileKey.weeklyGoalBefore)
+        }
         defaults.set(weeklyGoal, forKey: ProfileKey.weeklyGoal)
         defaults.set(answers.q7Target?.rawValue ?? "", forKey: ProfileKey.raceGoal)
         defaults.set(answers.q8GoalSec ?? 0, forKey: ProfileKey.raceGoalSec)
