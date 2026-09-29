@@ -27,6 +27,9 @@ struct SettingsScreen: View {
     @AppStorage(NotifyKey.weeklyHour) private var weeklyHour = 18
     @AppStorage(NotifyKey.hydrationEnabled) private var hydrationNotify = false
     @AppStorage(NotifyKey.runHour) private var runHour = 19
+    /// 알림 토글을 켰는데 시스템 권한이 없을 때의 안내 (이슈 #94)
+    @State private var showsNotificationDenied = false
+    @Environment(\.openURL) private var openURL
     // 데모 모드 — 워치 기록이 없는 기기(심사자 포함)에서 합성 데이터로 화면을 보여준다 (DemoMode)
     @AppStorage(DemoMode.key) private var demoMode = false
 
@@ -196,11 +199,12 @@ struct SettingsScreen: View {
             }
         }
         .onChange(of: workoutNotify) { _, isOn in
-            if isOn { Task { _ = await NotificationScheduler.requestAuthorization() } }
+            if isOn { Task { _ = await confirmNotificationPermission($workoutNotify) } }
         }
         .onChange(of: weeklyNotify) { _, isOn in
             Task {
-                if isOn { _ = await NotificationScheduler.requestAuthorization() }
+                // 권한이 없어 되돌리면 false로 다시 불려 그쪽에서 예약을 거둔다
+                if isOn, !(await confirmNotificationPermission($weeklyNotify)) { return }
                 await NotificationScheduler.rescheduleWeekly()
             }
         }
@@ -212,12 +216,30 @@ struct SettingsScreen: View {
         }
         .onChange(of: hydrationNotify) { _, isOn in
             if isOn {
-                Task { _ = await NotificationScheduler.requestAuthorization() }
+                Task { _ = await confirmNotificationPermission($hydrationNotify) }
             } else {
                 // 예약된 당일분이 있으면 거둔다 — 예보는 오늘 탭이 다시 조회할 때 확인
                 Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
             }
         }
+        .alert("알림이 꺼져 있어요", isPresented: $showsNotificationDenied) {
+            Button("설정 열기") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }
+            Button("닫기", role: .cancel) {}
+        } message: {
+            Text("설정 > 런미새 > 알림에서 허용해 주세요")
+        }
+    }
+
+    /// 알림 토글을 켤 때 권한 확인 (이슈 #94) — 처음이면 시스템 다이얼로그로 묻고,
+    /// 이미 거부·해제했으면 토글을 되돌리고 설정으로 안내한다. 켜진 채 조용히 안 나가는 상태를 막는다
+    private func confirmNotificationPermission(_ toggle: Binding<Bool>) async -> Bool {
+        if await NotificationScheduler.requestAuthorization() { return true }
+        if await NotificationScheduler.authorizationGranted() { return true }
+        toggle.wrappedValue = false
+        showsNotificationDenied = true
+        return false
     }
 
     /// 현재 레벨 + 다시 진단받기 — 레벨 변경의 유일한 경로 (기획서 §7)

@@ -20,6 +20,8 @@ enum NotifyKey {
 enum NotificationScheduler {
     /// 같은 id로 다시 add하면 기존 예약이 교체된다
     static let weeklyId = "runwrap.weekly"
+    /// 주간 백업 알림 id — 첫 회 다음 주부터 3주치 (이슈 #94). 취소할 때 weeklyId와 함께 지운다
+    static let weeklyBackupIds = (2...4).map { "\(weeklyId).\($0)" }
     static let workoutId = "runwrap.workout"
     static let hydrationId = "runwrap.hydration"
 
@@ -46,6 +48,9 @@ enum NotificationScheduler {
                       snapshot.runCount, snapshot.weekKm, snapshot.headline)
     }
 
+    /// 주간 백업 본문 (이슈 #94) — 앱을 오래 안 열면 스냅샷이 낡으므로 수치를 싣지 않는다
+    static let weeklyBackupBody = "이번 주 러닝은 어땠나요? 런미새 리포트에서 확인해 보세요"
+
     /// 스냅샷 신선도 판정 (이슈 #61) — 발송 시각 기준 maxAge(기본 48시간)를 넘겼으면 오래된 것.
     /// 앱을 며칠 안 열면 캐시가 갱신되지 않아 "최근 7일" 수치가 실제와 어긋난다 —
     /// 틀린 수치를 보내느니 기본 문구가 낫다. 정확히 maxAge인 경우는 아직 신선하다
@@ -54,10 +59,22 @@ enum NotificationScheduler {
         trigger.timeIntervalSince(snapshot.generatedAt) > maxAge
     }
 
-    /// 주간 트리거 시각 — 다음 (요일, 시)의 정각. repeats: false로 예약하고
-    /// 포그라운드 진입마다 최신 캐시 본문으로 재예약한다 (반복 예약 아님)
-    static func weeklyTrigger(weekday: Int, hour: Int) -> DateComponents {
-        DateComponents(hour: hour, minute: 0, weekday: weekday)
+    /// 주간 발송 시각 count건 — from 이후 첫 (요일, 시) 정각부터 7일 간격 (이슈 #94).
+    /// 요일·시만 맞추는 트리거는 시작일을 못 정해 첫 회와 겹치므로, 회차마다 정확한
+    /// 날짜(year/month/day/hour/minute)로 만들어 각각 repeats: false로 예약한다.
+    /// 첫 회는 스냅샷 본문, 나머지는 백업 본문이다 — 1주 넘게 앱을 안 열어도 4주까지는 끊기지 않는다.
+    /// 정확히 (요일, 시) 정각인 from은 이미 지난 것으로 보고 다음 주부터 센다 (nextTriggerDate와 같은 규약)
+    static func weeklyFireDates(from: Date, weekday: Int, hour: Int, count: Int,
+                                calendar: Calendar = .current) -> [DateComponents] {
+        guard count > 0,
+              let first = calendar.nextDate(after: from,
+                                            matching: DateComponents(hour: hour, minute: 0, weekday: weekday),
+                                            matchingPolicy: .nextTime) else { return [] }
+        return (0..<count).compactMap { week in
+            calendar.date(byAdding: .day, value: 7 * week, to: first).map {
+                calendar.dateComponents([.year, .month, .day, .hour, .minute], from: $0)
+            }
+        }
     }
 
     /// 수분 알람 시각 판정 (순수 함수, 계획서 M9) — 조건을 모두 만족하면 오늘
@@ -85,6 +102,31 @@ enum NotificationScheduler {
             .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
     }
 
+    /// 지금 알림을 보낼 수 있는지 (이슈 #94) — 시스템 설정에서 거부·해제했으면 false
+    static func authorizationGranted() async -> Bool {
+        isGranted(await UNUserNotificationCenter.current().notificationSettings().authorizationStatus)
+    }
+
+    /// 권한 상태 판정 (순수 함수) — 임시(provisional)·앱 클립(ephemeral) 허용도 발송 가능으로 본다
+    static func isGranted(_ status: UNAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorized, .provisional, .ephemeral: true
+        default: false
+        }
+    }
+
+    /// 포그라운드 복귀 동기화 (이슈 #94) — 시스템 알림 권한이 거부돼 있으면 켜진 토글을 모두 끈다.
+    /// 토글은 켜져 있는데 알림은 조용히 안 나가는 상태를 남기지 않는다. 미결정(notDetermined)은 건드리지 않는다
+    static func disableTogglesIfDenied() async {
+        guard await UNUserNotificationCenter.current().notificationSettings()
+            .authorizationStatus == .denied else { return }
+        let defaults = UserDefaults.standard
+        for key in [NotifyKey.workoutEnabled, NotifyKey.weeklyEnabled, NotifyKey.hydrationEnabled] {
+            defaults.set(false, forKey: key)
+        }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [hydrationId])
+    }
+
     /// 운동 직후 인사이트 — 즉시 발송 (트리거 nil)
     static func sendWorkoutInsight(body: String) async {
         let content = UNMutableNotificationContent()
@@ -95,27 +137,36 @@ enum NotificationScheduler {
             .add(UNNotificationRequest(identifier: workoutId, content: content, trigger: nil))
     }
 
-    /// 주간 알림 재예약 — 설정을 읽어 끄면 취소, 켜면 다음 (요일·시) 1건만 예약.
-    /// 포그라운드 진입·설정 변경 때마다 불려 본문이 항상 최신 캐시를 반영한다
+    /// 주간 알림 재예약 — 설정을 읽어 끄면 전부 취소, 켜면 다음 (요일·시)부터 4주치를 예약한다.
+    /// 첫 회(weeklyId)는 최신 캐시 스냅샷 본문, 이후 3주(weeklyBackupIds)는 수치 없는 백업 본문 (이슈 #94).
+    /// 포그라운드 진입·설정 변경 때마다 다시 불려 첫 회 본문이 항상 최신 캐시를 반영하고 4주 창이 밀린다
     static func rescheduleWeekly() async {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [weeklyId])
+        center.removePendingNotificationRequests(withIdentifiers: [weeklyId] + weeklyBackupIds)
 
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: NotifyKey.weeklyEnabled) else { return }
         let weekday = defaults.object(forKey: NotifyKey.weeklyWeekday) as? Int ?? 1
         let hour = defaults.object(forKey: NotifyKey.weeklyHour) as? Int ?? 18
 
-        let trigger = UNCalendarNotificationTrigger(
-            dateMatching: weeklyTrigger(weekday: weekday, hour: hour), repeats: false)
-        // 신선도는 예약 시각이 아니라 실제 발송 시각 기준으로 본다 (이슈 #61)
-        let fireDate = trigger.nextTriggerDate() ?? Date()
-        let content = UNMutableNotificationContent()
-        content.title = "주간 러닝 리포트"
-        content.body = weeklyBody(snapshot: ReportCache.load(), at: fireDate)
-        content.sound = .default
-        try? await center.add(UNNotificationRequest(identifier: weeklyId,
-                                                    content: content, trigger: trigger))
+        let fireDates = weeklyFireDates(from: Date(), weekday: weekday, hour: hour,
+                                        count: 1 + weeklyBackupIds.count)
+        for (index, components) in fireDates.enumerated() {
+            let content = UNMutableNotificationContent()
+            content.title = "주간 러닝 리포트"
+            if index == 0 {
+                // 신선도는 예약 시각이 아니라 실제 발송 시각 기준으로 본다 (이슈 #61)
+                let fireDate = Calendar.current.date(from: components) ?? Date()
+                content.body = weeklyBody(snapshot: ReportCache.load(), at: fireDate)
+            } else {
+                content.body = weeklyBackupBody
+            }
+            content.sound = .default
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+            let id = index == 0 ? weeklyId : weeklyBackupIds[index - 1]
+            try? await center.add(UNNotificationRequest(identifier: id,
+                                                        content: content, trigger: trigger))
+        }
     }
 
     /// 수분 알람 재예약 (계획서 M9) — 오늘 탭이 날씨를 받아올 때마다 당일분 1건을

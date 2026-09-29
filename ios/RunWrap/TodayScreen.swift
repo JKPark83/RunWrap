@@ -10,6 +10,7 @@ struct TodayScreen: View {
     @State private var weatherFailed = false
     /// 첫 진입 로딩이 끝나기 전에 당겨서 새로고침이 겹치면 조회가 이중으로 나간다 — 한 번에 하나만
     @State private var isReloading = false
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ScrollView {
@@ -24,9 +25,7 @@ struct TodayScreen: View {
 
                 switch location.state {
                 case .denied:
-                    noticeCard("위치 권한이 꺼져 있어요",
-                               message: "설정 > RunWrap에서 위치 접근을 허용하면 현재 위치의 날씨와 복장 추천을 볼 수 있어요.",
-                               symbol: "location.slash")
+                    deniedCard
                 // 새로고침 중 일시 실패로 이미 떠 있는 카드를 지우지 않는다 — 보여줄 값이 없을 때만 안내
                 case .failed where weather == nil:
                     noticeCard("현재 위치를 확인하지 못했어요",
@@ -398,6 +397,31 @@ struct TodayScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
         .rrCard()
+    }
+
+    /// 위치 거부 안내 + 설정 바로가기 (이슈 #94) — 앱 안에서는 다시 물을 수 없어 설정으로 보낸다.
+    /// 아이폰 전체 위치 서비스가 꺼진 경우도 .denied로 오므로 문구를 시스템 스위치 쪽으로 바꾼다
+    private var deniedCard: some View {
+        VStack(spacing: 10) {
+            if location.servicesDisabled {
+                noticeCard("아이폰의 위치 서비스가 꺼져 있어요",
+                           message: "설정 > 개인정보 보호 및 보안 > 위치 서비스를 켜면 현재 위치의 날씨와 복장 추천을 볼 수 있어요.",
+                           symbol: "location.slash")
+            } else {
+                noticeCard("위치 권한이 꺼져 있어요",
+                           message: "설정 > 런미새에서 위치 접근을 허용하면 현재 위치의 날씨와 복장 추천을 볼 수 있어요.",
+                           symbol: "location.slash")
+            }
+            Button {
+                openURL(URL(string: UIApplication.openSettingsURLString)!)
+            } label: {
+                Label("설정 열기", systemImage: "gearshape")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
+        }
     }
 
     private var loadingCard: some View {
