@@ -203,6 +203,32 @@ struct BatteryEngineTests {
         #expect(!report.factors.contains { $0.name == "수면 질" })
     }
 
+    @Test("수면 질 신선도 — 단계 데이터가 있는 최근 밤이 3일 전이면 팩터 없음 (이슈 #99)")
+    func staleSleepQualityNightStaysSilent() throws {
+        // 하락 폭은 위와 같이 26.7%지만, 최근 밤(3일 전 = 8/7)이 어제(8/9) 이전이라 신선도 가드에 걸린다
+        var vitals = VitalsSnapshot(hrvMs: reading(60, 60),
+                                    restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        vitals.sleepNights = [night(daysAgo: 3, fraction: 0.22)] +
+            (4...9).map { night(daysAgo: Double($0), fraction: 0.30) }
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: [], now: now))
+        #expect(report.level == 50)
+        #expect(!report.factors.contains { $0.name == "수면 질" })
+    }
+
+    @Test("수면 질 신선도 — 최근 밤이 어제면 감점 유지")
+    func yesterdaySleepQualityNightPenalizes() throws {
+        // 최근 밤(1일 전 = 8/9)은 어제라 가드 통과, 22% vs 30% → 26.7% 하락 → −8, 50 − 8 = 42
+        var vitals = VitalsSnapshot(hrvMs: reading(60, 60),
+                                    restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        vitals.sleepNights = [night(daysAgo: 1, fraction: 0.22)] +
+            (2...7).map { night(daysAgo: Double($0), fraction: 0.30) }
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: [], now: now))
+        #expect(report.level == 42)
+        #expect(report.factors.contains { $0.name == "수면 질" && $0.points == -8 })
+    }
+
     @Test("수면 질·리듬 — 단계/취침 데이터가 있는 밤이 6개뿐이면 둘 다 팩터 없음") func fewerThanSevenNightsStayBothSilent() throws {
         var vitals = VitalsSnapshot(hrvMs: reading(60, 60),
                                     restingHR: reading(52, 52),

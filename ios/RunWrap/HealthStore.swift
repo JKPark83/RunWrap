@@ -253,7 +253,8 @@ final class HealthStore: ObservableObject {
     }
 
     /// 최근 2주 밤별 수면 상세 — 수면 질(깊은+렘 비율)·취침 규칙성 팩터의 재료 (제안 문서 A5).
-    /// 밤 구분: 잠든 구간의 종료 시각이 속한 날짜(기상일)로 묶고, 3시간 미만은 낮잠으로 보고 버린다.
+    /// 밤 구분: 잠든 구간의 종료 시각이 속한 날짜(기상일)로 묶고, 그 안에서 가장 긴 수면 블록만
+    /// 밤 수면으로 인정한다(같은 날 낮잠 제외 — SleepBlocks). 3시간 미만은 밤 수면으로 보지 않고 버린다.
     private func fetchSleepNights(now: Date) async -> [VitalsSnapshot.SleepNight] {
         let samples = (try? await categorySamples(HKCategoryType(.sleepAnalysis),
                                                   from: now.addingTimeInterval(-14 * 86_400),
@@ -270,32 +271,23 @@ final class HealthStore: ObservableObject {
             calendar.startOfDay(for: $0.endDate)
         }
         return byNight.compactMap { night, nightSamples -> VitalsSnapshot.SleepNight? in
-            // 워치+아이폰 이중 기록 대비 구간 병합으로 총 수면을 센다 (lastNightSleepHours와 같은 이유)
-            let intervals = nightSamples.map { (start: $0.startDate, end: $0.endDate) }
-                .sorted { $0.start < $1.start }
-            var merged: [(start: Date, end: Date)] = []
-            for interval in intervals {
-                if let last = merged.last, interval.start <= last.end {
-                    if interval.end > last.end { merged[merged.count - 1].end = interval.end }
-                } else {
-                    merged.append(interval)
-                }
-            }
-            let asleepHours = merged.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) } / 3_600
+            // 워치+아이폰 이중 기록 병합 후 가장 긴 블록만 센다 — 같은 날 낮잠은 제외 (이슈 #99)
+            let main = SleepBlocks.mainBlock(nightSamples.map { (start: $0.startDate, end: $0.endDate) })
+            guard let blockStart = main.first?.start, let blockEnd = main.last?.end else { return nil }
+            let asleepHours = SleepBlocks.asleepSec(main) / 3_600
             guard asleepHours >= 3 else { return nil }
 
             // 단계 비율은 단계를 기록한 소스(워치)의 표본만으로 계산 —
-            // 아이폰의 asleepUnspecified가 분모에 섞이면 비율이 왜곡된다
-            let stageSec = nightSamples.filter { stageValues.contains($0.value) }
+            // 아이폰의 asleepUnspecified가 분모에 섞이면 비율이 왜곡된다. 낮잠 표본은 빼고 그 블록 안만.
+            let blockSamples = nightSamples.filter { $0.startDate >= blockStart && $0.endDate <= blockEnd }
+            let stageSec = blockSamples.filter { stageValues.contains($0.value) }
                 .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
-            let deepRemSec = nightSamples.filter { deepRemValues.contains($0.value) }
+            let deepRemSec = blockSamples.filter { deepRemValues.contains($0.value) }
                 .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
 
             // 취침 시각: 정오(전날 12:00) 기준 경과 분 — 자정 넘김(23시=660, 새벽 1시=780)을
             // 연속값으로 다뤄 표준편차 계산이 깨지지 않게 한다
-            let bedtime = merged.first.map {
-                $0.start.timeIntervalSince(night.addingTimeInterval(-12 * 3_600)) / 60
-            }
+            let bedtime = blockStart.timeIntervalSince(night.addingTimeInterval(-12 * 3_600)) / 60
             return VitalsSnapshot.SleepNight(date: night,
                                              asleepHours: asleepHours,
                                              deepRemFraction: stageSec > 0 ? deepRemSec / stageSec : nil,
@@ -333,7 +325,7 @@ final class HealthStore: ObservableObject {
                      baselineDays: baselineDays.count)
     }
 
-    /// 지난밤 수면 시간 — 최근 24시간에 끝난 "잠든" 구간을 겹침 없이 합산
+    /// 지난밤 수면 시간 — 최근 24시간에 끝난 "잠든" 구간을 겹침 없이 합산하되, 가장 긴 블록만 센다(낮잠 제외)
     private func lastNightSleepHours(now: Date) async -> Double? {
         let predicate = HKQuery.predicateForSamples(withStart: now.addingTimeInterval(-36 * 3_600),
                                                     end: now)
@@ -354,20 +346,12 @@ final class HealthStore: ObservableObject {
 
         let asleepValues = Set(HKCategoryValueSleepAnalysis.allAsleepValues.map(\.rawValue))
         let cutoff = now.addingTimeInterval(-24 * 3_600)
-        // 워치+아이폰 등 여러 소스가 같은 밤을 중복 기록할 수 있어 구간을 병합한다
+        // 워치+아이폰 등 여러 소스가 같은 밤을 중복 기록할 수 있어 구간을 병합하고,
+        // 낮잠이 밤 수면에 더해지지 않게 가장 긴 블록만 센다 (이슈 #99)
         let intervals = samples
             .filter { asleepValues.contains($0.value) && $0.endDate > cutoff }
             .map { (start: $0.startDate, end: $0.endDate) }
-            .sorted { $0.start < $1.start }
-        var merged: [(start: Date, end: Date)] = []
-        for interval in intervals {
-            if let last = merged.last, interval.start <= last.end {
-                if interval.end > last.end { merged[merged.count - 1].end = interval.end }
-            } else {
-                merged.append(interval)
-            }
-        }
-        let total = merged.reduce(0.0) { $0 + $1.end.timeIntervalSince($1.start) }
+        let total = SleepBlocks.asleepSec(SleepBlocks.mainBlock(intervals))
         guard total >= 3_600 else { return nil }  // 1시간 미만이면 수면 기록으로 보지 않는다
         return total / 3_600
     }
