@@ -564,6 +564,11 @@ private struct RaceRecordInputSheet: View {
         return floor...Date()
     }
 
+    /// 입력한 기록이 종목 거리에 비해 비현실적인지 — 0:00:00은 아직 입력 전이라 안내하지 않는다
+    private var isImplausible: Bool {
+        timeSec > 0 && !RaceRecord.isPlausible(timeSec: Double(timeSec), km: race.km)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -579,6 +584,12 @@ private struct RaceRecordInputSheet: View {
                         .padding(12)
                     }
                     field(title: "완주 기록") { timeWheels }
+                    if isImplausible {
+                        Text("기록이 종목 거리에 비해 너무 빠르거나 느려요")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(RR.warn)
+                            .padding(.horizontal, 4)
+                    }
                     field(title: "대회 날짜") {
                         DatePicker("대회 날짜",
                                    selection: $date, in: dateRange,
@@ -610,7 +621,8 @@ private struct RaceRecordInputSheet: View {
                                           timeSec: Double(timeSec), date: date))
                         dismiss()
                     }
-                    .disabled(timeSec == 0)   // 0:00:00은 기록이 아니다
+                    // 0:00:00은 기록이 아니고, 비현실 페이스는 예측을 오염시킨다 (이슈 #93)
+                    .disabled(!RaceRecord.isPlausible(timeSec: Double(timeSec), km: race.km))
                 }
             }
         }

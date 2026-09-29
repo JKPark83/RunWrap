@@ -63,7 +63,9 @@ enum RaceResultParser {
     /// - 종목 매칭: 공인 거리와 ±15% 안이면 해당 종목, 밖이면 nil (폼 기본값 유지)
     /// - 날짜: 연도가 없으면 그 월·일의 가장 가까운 과거로 해석한다 —
     ///   "작년 가을(10월)"은 지금이 8월이면 자연히 작년 10월이 된다.
-    ///   미래 연도가 오면 오독으로 보고 버린다.
+    ///   미래 연도나 최근 2년 밖 연도가 오면 오독으로 보고 버린다 (두 자리는 2000년대).
+    /// - 범위 검사: 시 0~7·분·초 0~59(휠 범위) 밖이나 음수인 필드는 버린다 (이슈 #93).
+    ///   단 시가 없으면 "105분"처럼 분만으로 말한 경우를 살리기 위해 분은 0~479까지 허용한다.
     /// - 세 필드 모두 확신이 없으면 nil — 화면이 "읽지 못했다"를 안내한다
     static func interpret(distanceKm: Double?, hours: Int?, minutes: Int?, seconds: Int?,
                           year: Int?, month: Int?, day: Int?, now: Date) -> Parsed? {
@@ -71,20 +73,39 @@ enum RaceResultParser {
             guard km > 0 else { return nil }
             return RaceDistance.allCases.first { abs($0.km - km) / $0.km <= 0.15 }
         }
-        let totalSec = (hours ?? 0) * 3_600 + (minutes ?? 0) * 60 + (seconds ?? 0)
+        // 시·분·초 범위 검사 (이슈 #93) — 입력 휠 범위(0~7시간, 0~59분·초) 밖이거나 음수인
+        // 필드는 오독으로 보고 그 필드만 버린다. 곱셈은 검사 뒤에 해 거대값의 오버플로 트랩을 막는다.
+        // 시간 없이 분만 오면("105분") 분이 최상위 단위라 휠 상한(8시간 미만)까지 허용한다.
+        let validHours = hours.flatMap { (0...7).contains($0) ? $0 : nil }
+        let validMinutes = minutes.flatMap { (0...(hours == nil ? 479 : 59)).contains($0) ? $0 : nil }
+        let validSeconds = seconds.flatMap { (0...59).contains($0) ? $0 : nil }
+        let totalSec = (validHours ?? 0) * 3_600 + (validMinutes ?? 0) * 60 + (validSeconds ?? 0)
         let timeSec: Double? = totalSec > 0 ? Double(totalSec) : nil
         let date: Date? = month.flatMap { month in
             guard (1...12).contains(month) else { return nil }
             var comps = DateComponents()
             comps.month = month
-            // 일을 모르면 15일 — 예측 재료로는 월 해상도면 충분하다 (VO₂max 창이 ±14일)
-            comps.day = day.flatMap { (1...31).contains($0) ? $0 : nil } ?? 15
             let calendar = Calendar.current
             if let year {
-                comps.year = year
+                // 두 자리 연도('25년')는 2000년대로 본다. 대회 기록 최대 나이(약 2년) 밖의
+                // 연도는 오독이다 — 서기 25년이 date <= now를 통과하던 구멍 (이슈 #93)
+                let fullYear = (0...99).contains(year) ? year + 2_000 : year
+                let currentYear = calendar.component(.year, from: now)
+                guard ((currentYear - 2)...currentYear).contains(fullYear) else { return nil }
+                comps.year = fullYear
+                comps.day = 1
+                // 그 달의 실제 일수로 검증 — '9월 31일'이 10월 1일로 정규화되지 않게.
+                // 그 달에 없는 일이면 일을 모를 때처럼 15일로 둔다
+                guard let monthStart = calendar.date(from: comps),
+                      let validDays = calendar.range(of: .day, in: .month, for: monthStart)
+                else { return nil }
+                comps.day = day.flatMap { validDays.contains($0) ? $0 : nil } ?? 15
                 guard let date = calendar.date(from: comps), date <= now else { return nil }
                 return date
             }
+            // 일을 모르면 15일 — 예측 재료로는 월 해상도면 충분하다 (VO₂max 창이 ±14일).
+            // 연도가 없으면 31일까지 받고, 그 달에 없는 일은 nextDate가 처리한다
+            comps.day = day.flatMap { (1...31).contains($0) ? $0 : nil } ?? 15
             return calendar.nextDate(after: now, matching: comps,
                                      matchingPolicy: .nextTime, direction: .backward)
         }
