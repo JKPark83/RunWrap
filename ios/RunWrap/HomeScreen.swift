@@ -27,6 +27,9 @@ struct HomeScreen: View {
     /// 주간 목표 — 온보딩 Q5에서 항상 먼저 쓰이므로 이 기본값은 사실상 안전망이다.
     /// 값은 `OnboardingFlowScreen`의 미응답 기본값(2)과 맞춰 둔다
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
+    /// 주간 목표 변경 기록 (이슈 #108) — 0이면 변경 없음. 설정 화면이 기록한다
+    @AppStorage(ProfileKey.weeklyGoalChangedAt) private var weeklyGoalChangedAtRaw = 0.0
+    @AppStorage(ProfileKey.weeklyGoalBefore) private var weeklyGoalBefore = 0
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @AppStorage(ProfileKey.promotionDeclinedAt) private var promotionDeclinedAtRaw = 0.0
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
@@ -113,6 +116,7 @@ struct HomeScreen: View {
                                         cycleStartedAt: cycleStartedAt,
                                         maxStage: maxStage,
                                         weeklyGoal: weeklyGoal,
+                                        weeklyGoalChange: weeklyGoalChange,
                                         now: now)
         let level = RunnerLevel(rawValue: levelRaw) ?? .beginner
         let promotion = promotionOffer(runs: runs, level: level, now: now)
@@ -504,6 +508,12 @@ struct HomeScreen: View {
         if cycleStartedAtRaw > 0 { return Date(timeIntervalSince1970: cycleStartedAtRaw) }
         if onboardedAtRaw > 0 { return Date(timeIntervalSince1970: onboardedAtRaw) }
         return .distantPast
+    }
+
+    /// 주간 목표 변경 기록 — 미기록(0)이면 nil이라 모든 주를 현재 목표로 판정한다 (이슈 #108)
+    private var weeklyGoalChange: (at: Date, before: Int)? {
+        guard weeklyGoalChangedAtRaw > 0 else { return nil }
+        return (Date(timeIntervalSince1970: weeklyGoalChangedAtRaw), weeklyGoalBefore)
     }
 
     /// 표시 단계를 최고 단계에 기록하고, 성조면 세러모니를 띄운다 — 홈 진입·단계 변화 두 곳에서 부른다 (이슈 #60)

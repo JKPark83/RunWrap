@@ -9,7 +9,7 @@ import Foundation
 /// 이 파일은 Foundation만 알아 순수 로직으로 테스트한다.
 struct ProgressSnapshot: Codable, Equatable {
     /// 현재 스키마 버전 — 필드가 바뀌면 올리고, 병합·복원은 이 값 이하만 받는다.
-    /// 심박 기준 필드(이슈 #56)는 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
+    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 기록(이슈 #108)은 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
     /// 올리면 구버전 기기가 keepServer로 백업 자체를 멈춘다
     static let currentSchemaVersion = 1
 
@@ -39,6 +39,11 @@ struct ProgressSnapshot: Codable, Equatable {
     var restingHRManual: Int?
     var hrZoneMethodRaw: String?
 
+    /// 주간 목표 변경 기록 (이슈 #108) — nil = 변경 없음. 심박 필드와 같은 방식으로 옛 스냅샷도
+    /// 디코드된다. 복원 후에도 "바뀐 목표는 다음 주부터"가 유지되도록 함께 백업한다
+    var weeklyGoalChangedAt: Date?
+    var weeklyGoalBefore: Int?
+
     /// 내용이 같은지 — 동기화 메타(revision·updatedAt)만 다른 스냅샷은 다시 올릴 필요가 없다
     func hasSameContent(as other: ProgressSnapshot) -> Bool {
         var lhs = self
@@ -62,6 +67,7 @@ struct ProgressSnapshot: Codable, Equatable {
         let hrMaxManual = defaults.integer(forKey: ProfileKey.hrMaxManual)
         let restingHRManual = defaults.integer(forKey: ProfileKey.restingHRManual)
         let hrZoneMethodRaw = defaults.string(forKey: ProfileKey.hrZoneMethod) ?? ""
+        let weeklyGoalChangedAtRaw = defaults.double(forKey: ProfileKey.weeklyGoalChangedAt)
         return ProgressSnapshot(
             schemaVersion: currentSchemaVersion,
             revision: 0,
@@ -79,7 +85,9 @@ struct ProgressSnapshot: Codable, Equatable {
             collectedBirds: birds,
             hrMaxManual: hrMaxManual > 0 ? hrMaxManual : nil,
             restingHRManual: restingHRManual > 0 ? restingHRManual : nil,
-            hrZoneMethodRaw: hrZoneMethodRaw.isEmpty ? nil : hrZoneMethodRaw)
+            hrZoneMethodRaw: hrZoneMethodRaw.isEmpty ? nil : hrZoneMethodRaw,
+            weeklyGoalChangedAt: weeklyGoalChangedAtRaw > 0 ? Date(timeIntervalSince1970: weeklyGoalChangedAtRaw) : nil,
+            weeklyGoalBefore: weeklyGoalChangedAtRaw > 0 ? defaults.integer(forKey: ProfileKey.weeklyGoalBefore) : nil)
     }
 
     /// 스냅샷을 로컬 저장값에 적용한다 — 신규 설치 복원 경로.
@@ -110,6 +118,14 @@ struct ProgressSnapshot: Codable, Equatable {
             defaults.set(hrZoneMethodRaw, forKey: ProfileKey.hrZoneMethod)
         } else {
             defaults.removeObject(forKey: ProfileKey.hrZoneMethod)
+        }
+        // 주간 목표 변경 기록 (이슈 #108) — 심박 기준과 같이 nil이면 로컬 기록도 지운다
+        if let weeklyGoalChangedAt, let weeklyGoalBefore {
+            defaults.set(weeklyGoalChangedAt.timeIntervalSince1970, forKey: ProfileKey.weeklyGoalChangedAt)
+            defaults.set(weeklyGoalBefore, forKey: ProfileKey.weeklyGoalBefore)
+        } else {
+            defaults.removeObject(forKey: ProfileKey.weeklyGoalChangedAt)
+            defaults.removeObject(forKey: ProfileKey.weeklyGoalBefore)
         }
     }
 

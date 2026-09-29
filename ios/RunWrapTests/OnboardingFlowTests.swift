@@ -153,6 +153,28 @@ struct OnboardingPersistTests {
         #expect(defaults.integer(forKey: ProfileKey.raceGoalSec) == 6_300)
     }
 
+    @Test("재진단 저장 — 주간 목표가 바뀌면 변경 시각과 이전 목표를 남긴다 (이슈 #108)")
+    func rediagnosisRecordsWeeklyGoalChange() {
+        let defaults = seededDefaults("rediagnosisGoalChange")
+        defaults.set(2, forKey: ProfileKey.weeklyGoal)  // 재진단 전 주 2회
+
+        model().persist(isRediagnosis: true, now: now, defaults: defaults)  // Q5 fourPlus → 4회
+
+        #expect(defaults.integer(forKey: ProfileKey.weeklyGoal) == 4)
+        #expect(defaults.double(forKey: ProfileKey.weeklyGoalChangedAt) == now.timeIntervalSince1970)
+        #expect(defaults.integer(forKey: ProfileKey.weeklyGoalBefore) == 2)
+    }
+
+    @Test("재진단 저장 — 주간 목표가 그대로면 변경 기록을 남기지 않는다")
+    func rediagnosisSameGoalLeavesNoRecord() {
+        let defaults = seededDefaults("rediagnosisSameGoal")
+        defaults.set(4, forKey: ProfileKey.weeklyGoal)
+
+        model().persist(isRediagnosis: true, now: now, defaults: defaults)
+
+        #expect(defaults.double(forKey: ProfileKey.weeklyGoalChangedAt) == 0)
+    }
+
     @Test("첫 온보딩 저장 — 새 사이클을 연다: 시작=지금, 단계=알, 새 식별자, 온보딩 시각=지금")
     func firstOnboardingOpensNewCycle() throws {
         let defaults = seededDefaults("firstOnboarding")

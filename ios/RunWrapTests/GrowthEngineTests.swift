@@ -91,6 +91,62 @@ struct GrowthEngineTests {
         #expect(state.xp == 44 + 120 + 50)
     }
 
+    @Test("주간 목표 변경 — 이번 주에 3→1로 낮춰도 완결된 과거 주(러닝 1~2회)에는 +30이 붙지 않는다")
+    func weeklyGoalLoweredDoesNotRewardPastWeeks() {
+        // 지난주(08-03 주) 3km 2회, 그 전 주(07-27 주) 3km 1회. 세션 XP: 13 * 3 = 39.
+        // 변경 시각이 이번 주(08-10 주)라 완결된 두 주 모두 변경 전 목표 3으로 판정 → 둘 다 미달, 보너스 0
+        let runs = [run(daysAgo: 6, km: 3), run(daysAgo: 8, km: 3), run(daysAgo: 15, km: 3)]
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 1,
+                                        weeklyGoalChange: (at: now, before: 3), now: now)
+        #expect(state.xp == 39)
+    }
+
+    @Test("주간 목표 변경 — 변경한 주까지는 옛 목표, 다음 주부터는 새 목표 1회로 달성한다")
+    func weeklyGoalChangeAppliesFromNextWeek() {
+        // 변경 시각 = 14일 전(07-30 목, 07-27 주)에 3→1.
+        // 07-27 주(변경한 주) 3km 1회 → 옛 목표 3으로 판정 → 미달.
+        // 08-03 주(변경 다음 주) 3km 1회 → 새 목표 1로 판정 → +30 (연속 1주라 연속 보너스 없음).
+        // 세션 XP: 13 * 2 = 26. 합계 26 + 30 = 56
+        let runs = [run(daysAgo: 15, km: 3), run(daysAgo: 8, km: 3)]
+        let changedAt = now.addingTimeInterval(-14 * 86_400)
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 1,
+                                        weeklyGoalChange: (at: changedAt, before: 3), now: now)
+        #expect(state.xp == 26 + 30)
+    }
+
+    @Test("주간 목표 변경 정보가 nil이면 기존처럼 모든 완결된 주를 현재 목표로 판정한다")
+    func weeklyGoalChangeNilKeepsLegacyBehavior() {
+        // 첫 테스트와 같은 러닝. 현재 목표 1로 두 주(07-27 주 1회, 08-03 주 2회) 모두 달성 → +30 * 2.
+        // 연속 2주라 4주 연속 보너스 없음. 세션 XP 39 + 60 = 99
+        let runs = [run(daysAgo: 6, km: 3), run(daysAgo: 8, km: 3), run(daysAgo: 15, km: 3)]
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 1,
+                                        weeklyGoalChange: nil, now: now)
+        #expect(state.xp == 39 + 60)
+    }
+
+    @Test("주간 목표 변경 기록 — 첫 변경·다른 주 변경은 새로 쓰고, 같은 주 재변경은 첫 변경 전 값을 유지한다")
+    func recordWeeklyGoalChange() {
+        // 기록 없음 → (now, 직전 값 3)
+        let first = GrowthEngine.recordWeeklyGoalChange(previous: nil, oldGoal: 3, now: now)
+        #expect(first.at == now)
+        #expect(first.before == 3)
+
+        // 같은 주(08-10 주) 안에서 2→1로 다시 바꿔도 기록(08-13, 3)을 그대로 둔다
+        let sameWeek = GrowthEngine.recordWeeklyGoalChange(previous: first, oldGoal: 2,
+                                                          now: now.addingTimeInterval(86_400))
+        #expect(sameWeek.at == now)
+        #expect(sameWeek.before == 3)
+
+        // 다음 주(7일 뒤)에 바꾸면 (그 시각, 직전 값 1)로 새로 쓴다
+        let nextWeekTime = now.addingTimeInterval(7 * 86_400)
+        let nextWeek = GrowthEngine.recordWeeklyGoalChange(previous: first, oldGoal: 1, now: nextWeekTime)
+        #expect(nextWeek.at == nextWeekTime)
+        #expect(nextWeek.before == 1)
+    }
+
     @Test("단계 경계 — XP 정확히 50이면 금 간 알")
     func stageBoundaryAtFifty() {
         // 기본 10 + 거리 보너스 40(40km, 21 상한 미적용 구간 아님 주의: 40km는 21 상한 걸림)
