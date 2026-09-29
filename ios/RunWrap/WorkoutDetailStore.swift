@@ -16,7 +16,7 @@ struct WorkoutDetail {
     var zones: [Double]?          // Z1~Z5 비율 (합 1)
     var cadenceSpm: Double?
     var elevationM: Double?
-    var hrMaxEstimated = false    // true면 생년월일이 없어 HRmax 190 폴백
+    var hrMaxEstimated = false    // true면 HRmax 추정치(관찰 최대·Tanaka)가 둘 다 없어 190 폴백
     /// 세션 최고 심박(bpm)과 존 계산에 쓴 HRmax — 존 카드의 "최고 심박 · HRmax 대비 %" 라인 재료
     var maxHeartRateBpm: Double?
     var hrMaxBpm: Double?
@@ -40,23 +40,25 @@ final class WorkoutDetailStore: ObservableObject {
     private let store = HKHealthStore()
 
     /// others: 기준선 재료 후보(전체 목록 그대로) — 창·표본 가드는 FormEngine이 건다
-    func load(run: RunSummary, others: [RunSummary] = []) async {
+    /// hrMaxBpm: HealthStore.hrMaxBpm 값 그대로 — 존 HRmax 산출을 TrainingGuideEngine.hrMax
+    /// 한 곳으로 모은다 (이슈 #48). 스토어 참조가 아니라 값만 받는다
+    func load(run: RunSummary, others: [RunSummary] = [], hrMaxBpm: Double?) async {
         guard detail == nil, !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
         // 데모 모드에서는 HealthKit을 건드리지 않고 합성 상세를 만든다 (DemoMode)
         if DemoMode.isActive {
-            detail = Self.synthetic(for: run)
+            detail = Self.synthetic(for: run, hrMaxBpm: hrMaxBpm)
             formSnapshots = Self.syntheticSnapshots(others: others, excluding: run.id)
         } else {
-            detail = await fetch(run: run)
+            detail = await fetch(run: run, hrMaxBpm: hrMaxBpm)
             formSnapshots = await fetchFormSnapshots(others: others, excluding: run.id)
         }
     }
 
     // MARK: - 실기기: HealthKit 조회
 
-    private func fetch(run: RunSummary) async -> WorkoutDetail {
+    private func fetch(run: RunSummary, hrMaxBpm: Double?) async -> WorkoutDetail {
         var detail = WorkoutDetail()
         guard HKHealthStore.isHealthDataAvailable(),
               let workout = try? await fetchWorkout(id: run.id) else { return detail }
@@ -82,11 +84,14 @@ final class WorkoutDetailStore: ObservableObject {
         let bpmUnit = HKUnit.count().unitDivided(by: .minute())
         let hrSamples = (try? await fetchQuantitySamples(.heartRate, in: workout)) ?? []
         if !hrSamples.isEmpty {
-            let (hrMax, estimated) = heartRateMax()
-            detail.zones = Self.zoneFractions(samples: hrSamples, hrMax: hrMax)
-            detail.hrMaxEstimated = estimated
-            detail.hrMaxBpm = hrMax
-            detail.maxHeartRateBpm = hrSamples.map { $0.quantity.doubleValue(for: bpmUnit) }.max()
+            let points = hrSamples.map {
+                (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
+            }
+            let zoneHrMax = TrainingGuideEngine.zoneHrMax(hrMaxBpm)
+            detail.zones = TrainingGuideEngine.heartRateZones(samples: points, hrMax: zoneHrMax.bpm)
+            detail.hrMaxEstimated = zoneHrMax.estimated
+            detail.hrMaxBpm = zoneHrMax.bpm
+            detail.maxHeartRateBpm = TrainingGuideEngine.sessionPeakBpm(points.map(\.bpm))
         }
 
         let distanceSamples = ((try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout)) ?? [])
@@ -239,37 +244,6 @@ final class WorkoutDetailStore: ObservableObject {
         }
     }
 
-    /// Tanaka 공식 HRmax = 208 − 0.7×나이. 생년월일이 없으면 190 폴백(추정 표기)
-    private func heartRateMax() -> (Double, estimated: Bool) {
-        if let dob = try? store.dateOfBirthComponents(),
-           let birthYear = dob.year {
-            let age = Calendar.current.component(.year, from: Date()) - birthYear
-            if (10...100).contains(age) { return (208 - 0.7 * Double(age), false) }
-        }
-        return (190, true)
-    }
-
-    /// 심박 샘플 → Z1~Z5 시간 비율. 샘플 간격(≤15초 캡)으로 가중한다.
-    static func zoneFractions(samples: [HKQuantitySample], hrMax: Double) -> [Double] {
-        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
-        var seconds = [Double](repeating: 0, count: 5)
-        for (i, sample) in samples.enumerated() {
-            let bpm = sample.quantity.doubleValue(for: bpmUnit)
-            let weight: Double
-            if i + 1 < samples.count {
-                weight = min(samples[i + 1].startDate.timeIntervalSince(sample.startDate), 15)
-            } else {
-                weight = 5
-            }
-            let ratio = bpm / hrMax
-            let zone = ratio < 0.6 ? 0 : ratio < 0.7 ? 1 : ratio < 0.8 ? 2 : ratio < 0.9 ? 3 : 4
-            seconds[zone] += max(weight, 0)
-        }
-        let total = seconds.reduce(0, +)
-        guard total > 0 else { return [0, 0, 0, 0, 0] }
-        return seconds.map { $0 / total }
-    }
-
     /// 워크아웃 이벤트 → 정지 구간. 사용자 정지와 모션(오토포즈) 정지를 모두 읽는다.
     /// 이벤트가 없는 기록은 벽시계와 활동 시간이 30초 넘게 어긋날 때만 거리 샘플 공백으로
     /// 추정한다 — 정지 없는 세션의 GPS 공백까지 빼지 않기 위해서 (감사 리포트 M6)
@@ -295,7 +269,7 @@ final class WorkoutDetailStore: ObservableObject {
 
     // MARK: - 데모 모드: 합성 데이터 (run.id 시드 — 같은 세션은 항상 같은 모양)
 
-    static func synthetic(for run: RunSummary) -> WorkoutDetail {
+    static func synthetic(for run: RunSummary, hrMaxBpm: Double?) -> WorkoutDetail {
         var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)))
         var detail = WorkoutDetail()
 
@@ -332,7 +306,8 @@ final class WorkoutDetailStore: ObservableObject {
         let sum = zones.reduce(0, +)
         zones = zones.map { max($0, 0.01) / sum }
         detail.zones = zones
-        detail.hrMaxEstimated = true
+        let zoneHrMax = TrainingGuideEngine.zoneHrMax(hrMaxBpm)
+        detail.hrMaxEstimated = zoneHrMax.estimated
 
         let dynamics = syntheticDynamics(for: run)
         detail.cadenceSpm = dynamics.cadenceSpm
@@ -345,8 +320,13 @@ final class WorkoutDetailStore: ObservableObject {
         }
 
         // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다
-        detail.hrMaxBpm = 190  // 합성은 생년월일이 없어 폴백 HRmax와 맞춘다
-        detail.maxHeartRateBpm = min((run.avgHeartRate ?? 150) + 22 + rng.unit() * 12, 188)
+        // 실기기와 같은 경로로 HRmax를 주입받는다 (이슈 #48). 세션 최고 심박은 hrMax 관찰 표본과
+        // 같은 run.maxHeartRate를 쓰고 HRmax로 캡한다 — 데모에서 "HRmax의 104%"가 나오지 않게.
+        // jitter는 maxHeartRate가 없을 때만 쓰지만 rng 호출 순서 유지를 위해 항상 뽑는다
+        detail.hrMaxBpm = zoneHrMax.bpm
+        let jitter = rng.unit()
+        let peak = run.maxHeartRate ?? (run.avgHeartRate ?? 150) + 22 + jitter * 12
+        detail.maxHeartRateBpm = min(peak, zoneHrMax.bpm)
         if run.durationSec >= 1_800 {
             // 후반 처짐 스플릿과 결이 맞는 완만한 양수 디커플링 (2~8%)
             let decoupling = 2 + rng.unit() * 6
