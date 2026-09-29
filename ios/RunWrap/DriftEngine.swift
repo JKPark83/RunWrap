@@ -22,23 +22,39 @@ enum DriftEngine {
     private static let improvingThreshold = -2.0  // 이하면 후반이 더 효율적
     private static let cautionThreshold = 5.0     // 미만이면 유산소 기반 탄탄(Friel 기준)
 
+    private static let maxTimelineGapSec = 30.0  // 벽시계 − 활동 − 정지 합이 이보다 크면 타임라인 복원 불가 (감사 M5)
+
+    /// - durationSec: 활동 시간(일시정지 제외, HKWorkout.duration)
+    /// - pauses: 정지 구간(벽시계). 중앙 시각을 활동 기준으로 옮기고 정지 중 심박을 뺀다 (이슈 #47)
+    /// - end: 워크아웃 종료 벽시계 시각. 주어지면 정지 구간으로 벽시계와 활동 시간이
+    ///   맞춰지는지 확인하고, 안 맞으면 판정하지 않는다(표본 부족 원칙)
     static func compute(hrSamples: [(time: Date, bpm: Double)],
                         distanceSamples: [(start: Date, end: Date, meters: Double)],
-                        start: Date, durationSec: Double) -> Result? {
+                        start: Date, durationSec: Double,
+                        pauses: [DateInterval] = [], end: Date? = nil) -> Result? {
         guard durationSec >= minDurationSec else { return nil }
 
-        let midpoint = start.addingTimeInterval(durationSec / 2)
-        let end = start.addingTimeInterval(durationSec)
+        if let end {
+            let pausedSec = pauses.reduce(0.0) { $0 + $1.duration }
+            let unaccounted = end.timeIntervalSince(start) - durationSec - pausedSec
+            guard abs(unaccounted) <= maxTimelineGapSec else { return nil }
+        }
 
-        let firstHR = hrSamples.filter { $0.time < midpoint }
-        let secondHR = hrSamples.filter { $0.time >= midpoint }
+        // 중앙 시각은 활동 시간의 절반 지점 — 앞선 정지 구간만큼 벽시계로 밀린다
+        let midpoint = ActiveTimeline.wallTime(afterActive: durationSec / 2, from: start, pauses: pauses)
+
+        // 정지 중 심박(신호 대기의 낮은 심박)은 효율 비교에서 뺀다
+        let activeHR = hrSamples.filter { !ActiveTimeline.isPaused($0.time, pauses: pauses) }
+        let firstHR = activeHR.filter { $0.time < midpoint }
+        let secondHR = activeHR.filter { $0.time >= midpoint }
         guard firstHR.count >= minSamplesPerHalf, secondHR.count >= minSamplesPerHalf else { return nil }
 
         let (firstMeters, secondMeters) = splitDistance(distanceSamples, at: midpoint)
         guard firstMeters > 0, secondMeters > 0 else { return nil }
 
-        let firstMinutes = midpoint.timeIntervalSince(start) / 60
-        let secondMinutes = end.timeIntervalSince(midpoint) / 60
+        // 전·후반 모두 활동 시간의 절반 (정지 구간은 중앙 시각 계산에서 이미 건너뛰었다)
+        let firstMinutes = durationSec / 2 / 60
+        let secondMinutes = firstMinutes
 
         // 전/후반 페이스(분/km) 차이가 크면 정속주가 아니다 — 디커플링 해석 불가
         let firstPace = firstMinutes * 1_000 / firstMeters

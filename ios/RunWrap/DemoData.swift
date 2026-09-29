@@ -46,7 +46,8 @@ enum DemoData {
     /// 초여름(38~46 구간)·선선한 날(38 이하 → 보정 카드 미노출 가드 확인)을 섞는다.
     private static var recentTuned: [RunSummary] {
         [
-            run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171, tempC: 28, humidityPct: 72),
+            run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171, tempC: 28, humidityPct: 72,
+                id: pausedRunID),  // 신호 대기 정지 시나리오(pauseScenario) — 이슈 #47
             run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170, tempC: 26, humidityPct: 65),
             run(daysAgo: 5, km: 6.6, minPerKm: 6.0, hr: 144, indoor: true, cadence: 169),
             run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167, tempC: 30, humidityPct: 78),
@@ -82,8 +83,9 @@ enum DemoData {
     private static func run(daysAgo: Double, km: Double, minPerKm: Double,
                             hr: Double, indoor: Bool = false,
                             cadence: Double? = nil,
-                            tempC: Double? = nil, humidityPct: Double? = nil) -> RunSummary {
-        RunSummary(id: UUID(),
+                            tempC: Double? = nil, humidityPct: Double? = nil,
+                            id: UUID = UUID()) -> RunSummary {
+        RunSummary(id: id,
                    start: Date().addingTimeInterval(-daysAgo * 86_400),
                    durationSec: km * minPerKm * 60,
                    distanceMeters: km * 1000,
@@ -94,6 +96,62 @@ enum DemoData {
                    cadenceSpm: cadence,
                    weatherTempC: tempC,
                    weatherHumidityPct: humidityPct)
+    }
+
+    /// 신호 대기 정지 시나리오를 심은 세션(1일 전 10km)의 고정 ID.
+    /// 새 세션을 28일 창에 추가하면 리포트 홈 톤(증가율·ACWR·EF)이 바뀌므로 기존 세션을 쓴다.
+    static let pausedRunID = UUID(uuidString: "4E3A7C1D-2B9F-4E57-A0C6-47F1A2B3C4D5")!
+
+    /// 도심 신호 대기 시나리오 — 세션 상세의 스플릿·드리프트 카드가 정지 구간을 빼고
+    /// 계산되는지 시뮬레이터에서 확인하는 재료 (이슈 #47). pausedRunID 세션에만 값을 준다.
+    ///
+    /// 활동 시간은 세션 요약 그대로(10km · 3,660초), km별 페이스는 평균 ±4초 고정 흔들림.
+    /// 정지 1: 1.5km 지점 90초(전반 — 드리프트 중앙 시각 검증),
+    /// 정지 2: 8.5km 지점 120초(후반 1/4 — 스플릿 문장 검증). 정지 중에는 거리 샘플이 없고
+    /// 심박은 115bpm(제외되는지 드러내는 값). 달리는 동안 심박은 145→150bpm으로 완만히 오른다.
+    /// 기대 화면: 스플릿은 막대가 튀지 않고 "고르게 유지" 문장(마지막 2km 흔들림 합 0),
+    /// 드리프트는 전반 평균 146.25 · 후반 148.75bpm, 거리 5,000m씩 → 148.75/146.25 − 1 ≈ +1.7% steady.
+    /// (정지를 빼지 않으면 2km·9km 스플릿이 90·120초 느려져 "페이스 유지 실패"가 뜬다)
+    static func pauseScenario(for run: RunSummary)
+        -> (distance: [(start: Date, end: Date, meters: Double)],
+            hr: [(time: Date, bpm: Double)],
+            pauses: [DateInterval], end: Date)? {
+        guard run.id == pausedRunID else { return nil }
+        let jitter: [Double] = [-3, 2, -1, 4, -2, 1, -4, 3, 0, 0]  // 합 0 · 전반 5km 합 0 — 난수를 쓰지 않는다
+        let pauseAfterHalfKm: [Int: Double] = [2: 90, 16: 120]      // 반 km 구간 번호(0부터, 2 = 1.5km 끝) → 정지 초
+        let basePace = run.durationSec / 10
+        let samplesPerHalfKm = 20  // 반 km ≈ 183초 → 약 9초 간격, 샘플당 25m(누적 오차 없이 km 경계에 딱 맞는다)
+
+        var distance: [(start: Date, end: Date, meters: Double)] = []
+        var hr: [(time: Date, bpm: Double)] = []
+        var pauses: [DateInterval] = []
+        var cursor = run.start
+        var activeElapsed = 0.0
+
+        for half in 0..<20 {
+            let segmentSec = (basePace + jitter[half / 2]) / 2
+            for j in 0..<samplesPerHalfKm {
+                let sampleStart = cursor.addingTimeInterval(segmentSec * Double(j) / Double(samplesPerHalfKm))
+                distance.append((start: sampleStart,
+                                 end: sampleStart.addingTimeInterval(segmentSec / Double(samplesPerHalfKm)),
+                                 meters: 500 / Double(samplesPerHalfKm)))
+            }
+            for offset in stride(from: 0.0, to: segmentSec, by: 5) {
+                let bpm = 145 + 5 * (activeElapsed + offset) / run.durationSec
+                hr.append((time: cursor.addingTimeInterval(offset), bpm: bpm))
+            }
+            cursor = cursor.addingTimeInterval(segmentSec)
+            activeElapsed += segmentSec
+
+            if let pauseSec = pauseAfterHalfKm[half] {
+                pauses.append(DateInterval(start: cursor, duration: pauseSec))
+                for offset in stride(from: 0.0, to: pauseSec, by: 5) {
+                    hr.append((time: cursor.addingTimeInterval(offset), bpm: 115))
+                }
+                cursor = cursor.addingTimeInterval(pauseSec)
+            }
+        }
+        return (distance: distance, hr: hr, pauses: pauses, end: cursor)
     }
 
     /// 합성 VO₂max — 12주에 걸친 완만한 상승(주 +0.3), 주 1~2회 추정 기록.
