@@ -252,6 +252,16 @@ enum Format {
         return withYear ? "\(calendar.component(.year, from: thursday))년 \(label)" : label
     }
 
+    /// "9월 30일 오후 3:12" — 날짜·시각 한 줄 표기 (설정의 마지막 iCloud 백업 시각, 이슈 #129).
+    /// 기기 로케일과 무관하게 한국어 고정, 시간대는 기기 설정을 따른다
+    static func monthDayTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.timeZone = .current
+        formatter.dateFormat = "M월 d일 a h:mm"
+        return formatter.string(from: date)
+    }
+
     /// "이번 주" / "지난주" / "3주 전" — 달력 주(ISO 8601, 월요일 시작) 기준 상대 표기.
     /// 두 날짜 사이의 7일 묶음 수가 아니라 **각자 속한 주의 시작일끼리** 비교한다 —
     /// 그래야 월요일에 본 지난주 일요일 세션이 "이번 주"가 아니라 "지난주"가 된다.

@@ -185,6 +185,14 @@ struct SettingsScreen: View {
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
                     .padding(.horizontal, 4)
+                // 마지막 iCloud 백업 성공 시각 (이슈 #129) — 갱신이 멈추면 CloudKit 설정 오류를 의심할 수 있다.
+                // 데모 모드는 백업 경로 자체를 막으므로 숨긴다 (시뮬레이터는 토글과 무관하게 항상 데모)
+                if !demoMode && !DemoMode.isActive {
+                    Text("iCloud 백업 · \(backup.lastBackupAt.map(Format.monthDayTime) ?? "아직 없음")")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(RR.text3)
+                        .padding(.horizontal, 4)
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 12)
