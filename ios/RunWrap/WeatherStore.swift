@@ -21,6 +21,9 @@ final class WeatherStore: ObservableObject {
     /// 마지막으로 잡힌 좌표 — 홈이 대기질(AirQualityStore) 조회에 쓴다.
     /// 날씨와 같은 위치 결론을 공유해 위치 조회를 두 번 하지 않는다
     @Published private(set) var coordinate: CLLocationCoordinate2D?
+    /// 마지막으로 결론이 난 시각(성공·실패 모두) — 포그라운드 복귀 갱신의 기준 (이슈 #69).
+    /// 실패도 찍는다: 값이 있는 .loaded에서 일시 실패했을 때 복귀마다 다시 두드리지 않게
+    private(set) var fetchedAt: Date?
 
     /// 결론이 났는가 — 스플래시 해제 조건. 성공뿐 아니라 거부·실패도 결론이다:
     /// 어차피 더 기다려도 값이 생기지 않으므로 홈을 열고 힌트 문구로 안내한다.
@@ -57,8 +60,37 @@ final class WeatherStore: ObservableObject {
         state = resolved
     }
 
+    /// 포그라운드 복귀 갱신 (이슈 #69) — 결론이 낡았을 때만 refresh()를 부른다.
+    /// 수분 알람 재예약이 날씨 조회에 묶여 있어, 앱을 켜 둔 채 날이 바뀌면 알람도 끊겼다.
+    /// 값이 없는 결론(.denied·.unavailable)은 신선도와 무관하게 다시 시도한다 —
+    /// 설정에서 방금 허용했거나 네트워크가 돌아왔을 수 있고, 보여 줄 값이 없으니 기다릴 이유도 없다.
+    /// 여전히 거부면 LocationProvider.request()가 동기적으로 .denied를 내 비용이 거의 없다
+    func refreshIfStale(now: Date = Date()) async {
+        switch state {
+        case .denied, .unavailable:
+            await refresh()
+        default:
+            guard Self.needsRefresh(fetchedAt: fetchedAt, now: now) else { return }
+            await refresh()
+        }
+    }
+
+    /// 다시 받아야 하는가 — 결론이 없거나, maxAge(기본 30분)를 넘겼거나, 날짜가 바뀌었을 때.
+    /// 날짜 조건은 당일 최고기온 기반 수분 알람(계획서 M9)이 날마다 새로 예약돼야 해서다.
+    /// 시계가 뒤로 가 fetchedAt이 미래면 낡은 것으로 본다 (AirQualityEngine.isFresh와 같은 규칙)
+    nonisolated static func needsRefresh(fetchedAt: Date?, now: Date,
+                                         calendar: Calendar = .current,
+                                         maxAge: TimeInterval = 30 * 60) -> Bool {
+        guard let fetchedAt else { return true }
+        let age = now.timeIntervalSince(fetchedAt)
+        guard age >= 0, age < maxAge else { return true }
+        return !calendar.isDate(fetchedAt, inSameDayAs: now)
+    }
+
     /// 위치 요청부터 날씨 조회까지의 본체 — 결론(State)만 돌려주고 상태 전이는 호출부가 정한다
     private func resolve() async -> State {
+        // 어느 경로로 끝나든 결론 시각을 남긴다 — refreshIfStale의 기준
+        defer { fetchedAt = Date() }
         location.request()
 
         // LocationProvider는 델리게이트 기반이라 @Published 스트림으로 결론만 소비한다

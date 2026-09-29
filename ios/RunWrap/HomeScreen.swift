@@ -18,6 +18,7 @@ struct HomeScreen: View {
     /// '오늘' 시트의 스토어와 별개 인스턴스지만 1시간 디스크 캐시를 공유해 중복 조회는 없다
     @StateObject private var airQuality = AirQualityStore()
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var showsToday = false
     @State private var showsLastRun = false
@@ -61,6 +62,16 @@ struct HomeScreen: View {
             Task {
                 await airQuality.load(latitude: coordinate.latitude,
                                       longitude: coordinate.longitude)
+            }
+        }
+        // 포그라운드 복귀 — load()는 첫 조회만 하므로 낡은 대기질은 여기서 갱신한다 (이슈 #69).
+        // 좌표는 직전 위치 결론이다 — 같은 순간 루트가 날씨를 새로 받는 중이어도 측정소가
+        // 바뀔 만큼 이동한 경우가 아니면 결과가 같고, 다음 복귀·당겨서 새로고침이 따라잡는다
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, let coordinate = weather.coordinate else { return }
+            Task {
+                await airQuality.refreshIfStale(latitude: coordinate.latitude,
+                                                longitude: coordinate.longitude)
             }
         }
     }

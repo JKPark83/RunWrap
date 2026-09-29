@@ -19,6 +19,8 @@ final class AirQualityStore: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+    /// 마지막으로 결론이 난 시각(성공·실패 모두) — 포그라운드 복귀 갱신의 기준 (이슈 #69)
+    private(set) var fetchedAt: Date?
 
     private let client = AirQualityClient()
 
@@ -35,8 +37,23 @@ final class AirQualityStore: ObservableObject {
         state = await resolve(latitude: latitude, longitude: longitude)
     }
 
+    /// 포그라운드 복귀 갱신 (이슈 #69) — 날씨와 같은 신선도 규칙(WeatherStore.needsRefresh)으로
+    /// 낡았을 때만 refresh()한다. 값이 없는 .unavailable은 바로 다시 시도한다.
+    /// 첫 조회 전·조회 중이면 홈의 load() 경로에 맡긴다. 1시간 응답 캐시는 resolve 안에서 그대로 적용된다
+    func refreshIfStale(latitude: Double, longitude: Double, now: Date = Date()) async {
+        switch state {
+        case .idle, .loading: return
+        case .unavailable: break
+        case .loaded:
+            guard WeatherStore.needsRefresh(fetchedAt: fetchedAt, now: now) else { return }
+        }
+        await refresh(latitude: latitude, longitude: longitude)
+    }
+
     /// 최근접 측정소 탐색 → 캐시 확인 → 조회의 본체 — 결론(State)만 돌려준다
     private func resolve(latitude: Double, longitude: Double) async -> State {
+        // 어느 경로로 끝나든 결론 시각을 남긴다 — refreshIfStale의 기준
+        defer { fetchedAt = Date() }
         #if targetEnvironment(simulator)
         // 시뮬레이터 기본 위치(쿠퍼티노)는 측정소 커버리지 밖이라 항상 미노출이 된다 —
         // 합성 데이터로 카드 구성을 검증한다 (CLAUDE.md 빌드·검증 항목)
