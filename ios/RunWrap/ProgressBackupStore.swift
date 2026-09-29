@@ -335,6 +335,9 @@ final class ProgressBackupStore: ObservableObject {
         try? CollectionCache.save(birds)
         RaceRecordCache.save(raceRecords)
         RaceRecordCache.saveDeletedIDs(deleted)
+        // "새로 시작"은 로컬 본을 이기게 하겠다는 명시적 선택이다 — 병합이 로컬 변경 시각으로 최신을
+        // 가리므로(이슈 #130), 온보딩 뒤 서버 본이 더 늦게 올라왔어도 로컬이 이기도록 지금을 기록한다
+        ProgressSnapshot.markLocalChanged(defaults: defaults, now: Date())
         defaults.set(true, forKey: SyncKey.restoreChoiceMade)
         restoreCandidate = nil
         Task { await backupIfChanged() }

@@ -122,6 +122,8 @@ final class RaceRecordStore: ObservableObject {
         records.append(record)
         records.sort { $0.date > $1.date }   // 최신이 위 — 설정 목록 표시 순서
         RaceRecordCache.save(records)
+        // 대회 기록은 스냅샷 내용이다 — 병합 기준 시각을 갱신한다 (이슈 #130)
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
     }
 
     /// 지운 id는 삭제 표식으로 남긴다 (이슈 #118) — 다음 백업의 합집합 병합에서 서버 본이 되살리지 못하게
@@ -133,6 +135,7 @@ final class RaceRecordStore: ObservableObject {
             deleted.append(record.id)
             RaceRecordCache.saveDeletedIDs(deleted)
         }
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
     }
 
     /// 복원·병합된 목록으로 통째로 교체한다 (이슈 #118) — CollectionStore.replace와 같은 역할.

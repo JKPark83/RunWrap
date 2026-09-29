@@ -74,6 +74,7 @@ struct SettingsScreen: View {
                 }
                 .onChange(of: weeklyGoal) { oldValue, _ in
                     recordWeeklyGoalChange(from: oldValue)
+                    markLocalChanged()
                 }
                 Text("바뀐 목표는 다음 주부터 보너스에 적용돼요")
                     .font(.system(size: 12.5))
@@ -216,6 +217,15 @@ struct SettingsScreen: View {
                 scheduleBackup()
             }
         }
+        // 스냅샷에 담기는 설정값 — 바뀌면 병합 기준 시각을 갱신한다 (이슈 #130).
+        // 쓰기 지점(토글·스테퍼·휠·날짜 바인딩)이 흩어져 있어 값 변화로 한 번에 잡는다
+        .onChange(of: purposesRaw) { _, _ in markLocalChanged() }
+        .onChange(of: raceGoalRaw) { _, _ in markLocalChanged() }
+        .onChange(of: raceGoalSec) { _, _ in markLocalChanged() }
+        .onChange(of: raceDateRaw) { _, _ in markLocalChanged() }
+        .onChange(of: hrMaxManual) { _, _ in markLocalChanged() }
+        .onChange(of: restingHRManual) { _, _ in markLocalChanged() }
+        .onChange(of: hrZoneMethodRaw) { _, _ in markLocalChanged() }
         // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다.
         // 끌 때는 주간 알림 캐시를 비우고 다시 예약한다 — 데모 수치가 알림 본문에 남지 않게 (이슈 #44)
         .onChange(of: demoMode) { _, isOn in
@@ -314,6 +324,11 @@ struct SettingsScreen: View {
         let history = WeeklyGoalChangeLog.load(defaults: .standard)
         WeeklyGoalChangeLog.save(GrowthEngine.recordWeeklyGoalChange(history: history, oldGoal: oldValue, now: Date()),
                                  defaults: .standard)
+    }
+
+    /// 스냅샷 내용이 로컬에서 바뀌었음을 기록한다 — CloudKit 병합의 최신 판정 기준 (이슈 #130)
+    private func markLocalChanged() {
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
     }
 
     /// 목적 복수 선택 토글 — 최소 1개는 남긴다 (전부 끄면 문장 강조점을 정할 수 없다)

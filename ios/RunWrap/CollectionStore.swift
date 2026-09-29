@@ -84,6 +84,8 @@ final class CollectionStore: ObservableObject {
             return false
         }
         birds.append(bird)
+        // 도감은 스냅샷 내용이다 — 병합 기준 시각을 갱신한다 (이슈 #130)
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
         return true
     }
 

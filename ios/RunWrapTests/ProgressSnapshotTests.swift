@@ -340,6 +340,76 @@ struct ProgressSnapshotTests {
             defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")) == nil)
     }
 
+    // MARK: - 로컬 변경 시각 (이슈 #130)
+
+    @Test("readLocal updatedAt — 로컬 변경 시각 키가 있으면 그 시각, 없으면(도입 전 설치) now")
+    func readLocalUpdatedAtUsesLocalChangedAt() throws {
+        let defaults = Self.freshDefaults("localChangedAt")
+        defaults.set("intermediate", forKey: ProfileKey.levelV2)
+        let now = Self.date("2026-09-30T09:00:00Z")
+
+        // 키 없음 → 업로드 시각(now)으로 폴백
+        let fallback = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], raceRecords: [], now: now))
+        #expect(fallback.updatedAt == now)
+
+        // 키 있음 → now가 아니라 기록된 변경 시각(9/1)
+        let changedAt = Self.date("2026-09-01T09:00:00Z")
+        defaults.set(changedAt.timeIntervalSince1970, forKey: GrowthKey.localChangedAt)
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], raceRecords: [], now: now))
+        #expect(read.updatedAt == changedAt)
+    }
+
+    @Test("markLocalChanged — 기록한 시각이 다음 readLocal의 updatedAt이 된다")
+    func markLocalChangedReflectsInReadLocal() throws {
+        let defaults = Self.freshDefaults("markLocalChanged")
+        defaults.set("intermediate", forKey: ProfileKey.levelV2)
+        let changedAt = Self.date("2026-09-10T12:00:00Z")
+
+        ProgressSnapshot.markLocalChanged(defaults: defaults, now: changedAt)
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-09-30T09:00:00Z")))
+        #expect(read.updatedAt == changedAt)
+    }
+
+    @Test("apply — 서버 본 반영은 로컬 변경이 아니라 그 본의 updatedAt을 변경 시각으로 이어받는다")
+    func applyKeepsServerUpdatedAt() throws {
+        let defaults = Self.freshDefaults("applyUpdatedAt")
+        // 이전 로컬 변경(9/25)이 있어도 적용한 서버 본의 시각(8/1)으로 덮인다
+        ProgressSnapshot.markLocalChanged(defaults: defaults, now: Self.date("2026-09-25T00:00:00Z"))
+        let server = Self.makeSnapshot(updatedAt: Self.date("2026-08-01T09:00:00Z"))
+
+        server.apply(to: defaults)
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-09-30T09:00:00Z")))
+        #expect(read.updatedAt == server.updatedAt)
+    }
+
+    @Test("오래된 백업 복원 기기의 뒤늦은 업로드 — 로컬 변경이 9/1이면 9/20 서버 본(다른 사이클)을 이기지 못한다")
+    func staleRestoredDeviceLosesToNewerServer() throws {
+        let defaults = Self.freshDefaults("staleUpload")
+        let oldCycle = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+        let newCycle = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
+        // 로컬: 옛 사이클 본, 마지막 로컬 변경 9/1. 업로드는 9/30에야 일어난다
+        Self.makeSnapshot(updatedAt: Self.date("2026-09-01T09:00:00Z"), cycleID: oldCycle, maxStage: 4)
+            .apply(to: defaults)
+        let local = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-09-30T09:00:00Z")))
+        // 서버: 다른 기기가 9/20에 새 사이클로 올린 본
+        let server = Self.makeSnapshot(updatedAt: Self.date("2026-09-20T09:00:00Z"),
+                                       cycleID: newCycle, maxStage: 1)
+
+        guard case .upload(let merged) = ProgressMergeEngine.merge(local: local, server: server) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        // 9/1 < 9/20 → 서버가 통째로 이긴다. 예전(updatedAt = 업로드 시각 9/30)이면 로컬이 이겼다
+        #expect(merged.cycleID == newCycle)
+        #expect(merged.maxStage == 1)
+        #expect(merged.updatedAt == server.updatedAt)
+    }
+
     @Test("심박 기준 왕복 — 수동 최대·안정 심박·존 방식이 apply→readLocal로 보존되고, 0/빈 값은 nil로 읽힌다")
     func heartRateRoundTrip() throws {
         let defaults = Self.freshDefaults("heartRate")

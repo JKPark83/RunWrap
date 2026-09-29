@@ -423,6 +423,8 @@ final class OnboardingFlowModel: ObservableObject {
             // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
             defaults.set(UUID().uuidString, forKey: GrowthKey.cycleID)
         }
+        // 레벨·목표·사이클 모두 스냅샷 내용이다 — 병합 기준 시각을 지금으로 (이슈 #130)
+        ProgressSnapshot.markLocalChanged(defaults: defaults, now: now)
 
         OnboardingAnswersStore.save(answers)
     }
