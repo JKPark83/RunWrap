@@ -15,6 +15,7 @@
 | UI | 전부 SwiftUI. UIKit은 `Theme.swift` 한 곳뿐(다이내믹 컬러 프로바이더용) |
 | 영속화 | `ReportCache`가 Application Support에 `Codable`+JSON으로 저장, 그 외는 `@AppStorage`. SwiftData·Core Data 미사용 |
 | 테스트 | Swift Testing 139개 / 16스위트 (`ios/RunWrapTests`) |
+| 프로젝트 생성 | xcodegen **2.45.4** — CI 고정 버전(`XCODEGEN_VERSION`, `test.yml`·`testflight.yml`). 로컬도 같은 버전을 쓴다 |
 | 포매터·린터 | 없음 (SwiftFormat·SwiftLint 미설치). 주변 코드 스타일을 눈으로 맞춘다 |
 
 ## 절대 하지 말 것
