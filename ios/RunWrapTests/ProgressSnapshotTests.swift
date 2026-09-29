@@ -608,4 +608,89 @@ struct ProgressSnapshotTests {
         #expect(first == second)
         #expect(defaults.string(forKey: GrowthKey.cycleID) == first.uuidString)
     }
+
+    // MARK: - 업로드 안전성 (이슈 #128)
+
+    @Test("업로드 보류 판정 — 서버 스키마가 더 크면 디코드 전에 보류하고, 같거나 작거나 필드가 없으면 보류하지 않는다")
+    func holdUploadForNewerSchema() throws {
+        let current = ProgressSnapshot.currentSchemaVersion
+        #expect(ProgressMergeEngine.shouldHoldUpload(serverSchemaVersion: current + 1))
+        #expect(!ProgressMergeEngine.shouldHoldUpload(serverSchemaVersion: current))
+        #expect(!ProgressMergeEngine.shouldHoldUpload(serverSchemaVersion: current - 1))
+        // 필드 없음은 보류 사유가 아니다 — payload 디코드 성패가 가른다
+        #expect(!ProgressMergeEngine.shouldHoldUpload(serverSchemaVersion: nil))
+    }
+
+    @Test("도감 관대 디코드 — 모르는 종이 섞인 JSON도 스냅샷은 디코드되고 나머지 새는 살아남으며, 버린 수를 셀 수 있다")
+    func lenientBirdDecoding() throws {
+        let known = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
+        let snapshot = Self.makeSnapshot(birds: [
+            Self.makeBird(id: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000001")!,
+                          collectedAt: Self.date("2026-05-01T00:00:00Z")),
+            Self.makeBird(id: known, collectedAt: Self.date("2026-06-01T00:00:00Z")),
+        ])
+        let original = try JSONEncoder().encode(snapshot)
+        // 정상 JSON은 버리는 새가 없다
+        #expect(ProgressSnapshot.undecodableBirdCount(in: original) == 0)
+
+        // 첫 번째 새를 미래 버전의 종("phoenix")으로 바꾼다
+        var object = try #require(try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        var birds = try #require(object["collectedBirds"] as? [[String: Any]])
+        birds[0]["species"] = "phoenix"
+        object["collectedBirds"] = birds
+        let tampered = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self, from: tampered)
+        #expect(decoded.collectedBirds.map(\.id) == [known])
+        #expect(decoded.levelRaw == snapshot.levelRaw)
+        // 업로드는 이 수가 0보다 크면 보류한다 — 버린 새가 서버에서 지워지지 않게
+        #expect(ProgressSnapshot.undecodableBirdCount(in: tampered) == 1)
+    }
+
+    @Test("병합 반영 — 기다리는 사이 바뀐 로컬 필드는 유지하고, 안 바뀐 필드·도감·maxStage는 병합 결과를 쓴다")
+    func localApplyingKeepsChangesMadeDuringUpload() throws {
+        let birdA = Self.makeBird(id: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000001")!,
+                                  collectedAt: Self.date("2026-05-01T00:00:00Z"))
+        let birdB = Self.makeBird(id: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!,
+                                  collectedAt: Self.date("2026-06-01T00:00:00Z"))
+        let recordServer = Self.makeRecord(id: UUID(uuidString: "CCCCCCCC-0000-0000-0000-000000000001")!,
+                                           date: Self.date("2026-04-01T00:00:00Z"))
+        let recordNew = Self.makeRecord(id: UUID(uuidString: "CCCCCCCC-0000-0000-0000-000000000002")!,
+                                        date: Self.date("2026-09-01T00:00:00Z"))
+        // 업로드 시작 시점 로컬: 주 3회, 단계 2, 도감 A
+        let start = Self.makeSnapshot(weeklyGoal: 3, maxStage: 2, birds: [birdA], raceRecords: [])
+        // 병합본: 서버가 이겨 레벨 advanced·주 4회, 단계 4, 도감 A+B, 서버 대회 기록
+        let merged = Self.makeSnapshot(levelRaw: "advanced", weeklyGoal: 4, maxStage: 4,
+                                       birds: [birdA, birdB], raceRecords: [recordServer])
+        // 기다리는 사이: 주간 목표를 5로 바꾸고 새 대회 기록을 입력했다
+        let current = Self.makeSnapshot(weeklyGoal: 5, maxStage: 2, birds: [birdA],
+                                        raceRecords: [recordNew])
+
+        let applied = ProgressMergeEngine.localApplying(merged: merged, start: start, current: current)
+        #expect(applied.weeklyGoal == 5)               // 로컬에서 바뀐 필드 → 현재 로컬
+        #expect(applied.levelRaw == "advanced")        // 로컬에서 안 바뀐 필드 → 병합본
+        #expect(applied.maxStage == 4)                 // 같은 사이클 → max(4, 2)
+        #expect(applied.collectedBirds.map(\.id) == [birdA.id, birdB.id])
+        // 대회 기록은 병합본 ∪ 현재 로컬, 최신순 — 기다리는 사이 입력한 기록도 남는다
+        #expect(applied.raceRecords?.map(\.id) == [recordNew.id, recordServer.id])
+    }
+
+    @Test("병합 반영 — 기다리는 사이 사이클이 바뀌면 새 사이클과 그 단계를 지키고, 지운 대회 기록은 되살리지 않는다")
+    func localApplyingKeepsNewCycleAndDeletions() throws {
+        let recordServer = Self.makeRecord(id: UUID(uuidString: "CCCCCCCC-0000-0000-0000-000000000001")!,
+                                           date: Self.date("2026-04-01T00:00:00Z"))
+        let newCycle = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000002")!
+        let start = Self.makeSnapshot(maxStage: 2, raceRecords: [recordServer])
+        let merged = Self.makeSnapshot(maxStage: 4, raceRecords: [recordServer])
+        // 기다리는 사이 새를 수집해 새 사이클(단계 0)로 넘어갔고, 대회 기록을 지웠다
+        let current = Self.makeSnapshot(cycleID: newCycle, maxStage: 0, raceRecords: [],
+                                        deletedRaceRecordIDs: [recordServer.id])
+
+        let applied = ProgressMergeEngine.localApplying(merged: merged, start: start, current: current)
+        #expect(applied.cycleID == newCycle)
+        // 옛 사이클의 단계 4를 새 사이클에 얹지 않는다 — 새 사이클의 현재 값 0
+        #expect(applied.maxStage == 0)
+        #expect(applied.raceRecords == [])
+        #expect(applied.deletedRaceRecordIDs == [recordServer.id])
+    }
 }

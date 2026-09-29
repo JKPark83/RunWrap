@@ -28,6 +28,24 @@ final class ProgressBackupStore: ObservableObject {
     /// 첫 업로드 직전에 발견한 서버의 이전 진행도 — nil이 아니면 RootView가
     /// "이전 기록 불러오기 / 새로 시작" 시트로 묻는다. 답을 받기 전에는 업로드하지 않는다 (이슈 #44)
     @Published private(set) var restoreCandidate: ProgressSnapshot?
+    /// 백업 병합이 서버 쪽 도감·대회 기록을 살려 로컬 파일을 바꿨을 때의 결과 — nil이 아니면 RootView가
+    /// 메모리의 `CollectionStore`·`RaceRecordStore`를 교체하고 `clearMergedResult()`로 비운다 (이슈 #128).
+    /// 그대로 두면 다음 수집·입력 때 메모리 배열이 파일을 덮어 되살린 항목이 다시 사라진다
+    @Published private(set) var mergedResult: MergedProgress?
+
+    /// 병합으로 바뀐 도감·대회 기록 — 스토어끼리 결합하지 않고 호출부가 반영한다
+    struct MergedProgress: Equatable {
+        let birds: [CollectedBird]
+        let raceRecords: [RaceRecord]
+    }
+
+    /// 업로드 한 번의 결과 — 보류 사유를 호출부가 가를 수 있게 돌려준다 (이슈 #128)
+    enum UploadOutcome: Equatable {
+        case uploaded          // 저장 완료
+        case keptServer        // 병합 규칙이 서버 본을 지켰다 (merge의 keepServer)
+        case heldNewerSchema   // 서버 레코드가 더 새 스키마 — 디코드 전에 보류
+        case heldUndecodable   // 서버 payload를 읽을 수 없거나 모르는 새가 있다 — 덮으면 지워지니 보류
+    }
 
     /// CloudKit 컨테이너 — project.yml의 icloud-container-identifiers와 짝
     private static let containerID = "iCloud.com.jkpark.runwrap"
@@ -104,9 +122,9 @@ final class ProgressBackupStore: ObservableObject {
                 Self.decode(try await CKContainer(identifier: containerID)
                     .privateCloudDatabase.record(for: CKRecord.ID(recordName: Self.recordName)))
             }) else {
-                // 레코드는 있는데 payload를 읽을 수 없다 — 손상된 레코드다.
-                // 새로 시작은 하되 안내는 남긴다. 읽을 수 없는 본은 복원 선택으로 물을 수도 없어
-                // 첫 업로드가 덮어쓴다 (디코드되는 미래 스키마는 merge의 keepServer가 막는다)
+                // 레코드는 있는데 payload를 읽을 수 없다 — 손상됐거나 이 앱이 모르는 미래 스키마다.
+                // 새로 시작은 하되 안내는 남긴다. 읽을 수 없는 본은 복원 선택으로 물을 수도 없지만
+                // 업로드도 덮어쓰지 않는다 — upload가 미래 스키마·디코드 실패를 보류한다 (이슈 #128)
                 restoreState = .failed
                 return nil
             }
@@ -168,11 +186,11 @@ final class ProgressBackupStore: ObservableObject {
                 restoreCandidate = server
                 return
             }
-            try await upload(local: local, onto: serverRecord)
+            _ = try await upload(local: local, onto: serverRecord)
         } catch let error as CKError where error.code == .serverRecordChanged {
             // 저장 경합 — 서버 최신본과 한 번 더 병합해 재시도, 또 실패하면 다음 기회로
             guard let latest = error.serverRecord else { return }
-            try? await upload(local: local, onto: latest)
+            _ = try? await upload(local: local, onto: latest)
         } catch {
             // 네트워크·quota 등 — 로컬은 그대로 두고 다음 기회에 다시 올린다
         }
@@ -189,19 +207,31 @@ final class ProgressBackupStore: ObservableObject {
 
     /// 스냅샷을 레코드에 실어 저장한다. 서버 본이 있으면 병합부터 —
     /// 같은 사이클의 `maxStage`는 내려가지 않고, 도감·대회 기록은 합집합이다 (ProgressMergeEngine).
-    private func upload(local: ProgressSnapshot, onto serverRecord: CKRecord?) async throws {
+    ///
+    /// 서버 본을 이해할 수 없으면 올리지 않는다 (이슈 #128): 더 새 스키마(디코드 전에 판정), payload 디코드 실패,
+    /// 관대 디코드가 버린 새가 있는 경우 — 덮어쓰면 구버전 기기가 미래 스키마나 모르는 새를 지운다.
+    private func upload(local: ProgressSnapshot, onto serverRecord: CKRecord?) async throws -> UploadOutcome {
         var outgoing = local
         let record: CKRecord
-        if let serverRecord, let server = Self.decode(serverRecord) {
+        if let serverRecord {
+            if ProgressMergeEngine.shouldHoldUpload(
+                serverSchemaVersion: serverRecord[RecordField.schemaVersion] as? Int) {
+                return .heldNewerSchema
+            }
+            guard let server = Self.decode(serverRecord),
+                  let payload = serverRecord[RecordField.payload] as? Data,
+                  ProgressSnapshot.undecodableBirdCount(in: payload) == 0 else {
+                return .heldUndecodable
+            }
             switch ProgressMergeEngine.merge(local: local, server: server) {
             case .keepServer:
-                return   // 서버가 더 새 스키마 — 덮어쓰지 않는다
+                return .keptServer   // 서버가 더 새 스키마 — 덮어쓰지 않는다
             case .upload(let merged):
                 outgoing = merged
             }
             record = serverRecord   // 가져온 인스턴스에 실어야 change tag가 맞는다
         } else {
-            record = serverRecord ?? CKRecord(recordType: Self.recordType, recordID: recordID)
+            record = CKRecord(recordType: Self.recordType, recordID: recordID)
         }
 
         Self.encode(outgoing, into: record)
@@ -209,13 +239,31 @@ final class ProgressBackupStore: ObservableObject {
         rememberSynced(outgoing)
 
         // 병합이 서버 쪽 값을 살렸다면 로컬에도 반영해 둔다 (재설치 경합 같은 드문 경우).
-        // 메모리의 CollectionStore·RaceRecordStore까지는 갱신하지 않는다 — 다음 실행에서 파일로 읽는다
-        if !outgoing.hasSameContent(as: local) {
-            outgoing.apply(to: defaults)
-            try? CollectionCache.save(outgoing.collectedBirds)
-            RaceRecordCache.save(outgoing.raceRecords ?? [])
-            RaceRecordCache.saveDeletedIDs(outgoing.deletedRaceRecordIDs ?? [])
+        // 기다리는 사이 사용자가 바꾼 값은 되돌리지 않게, 지금 로컬을 다시 읽어 바뀐 필드는 남긴다 (이슈 #128)
+        if !outgoing.hasSameContent(as: local),
+           let current = ProgressSnapshot.readLocal(defaults: defaults,
+                                                    birds: CollectionCache.load(),
+                                                    raceRecords: RaceRecordCache.load() ?? [],
+                                                    deletedRaceRecordIDs: RaceRecordCache.loadDeletedIDs(),
+                                                    now: Date()) {
+            let applied = ProgressMergeEngine.localApplying(merged: outgoing, start: local, current: current)
+            applied.apply(to: defaults)
+            try? CollectionCache.save(applied.collectedBirds)
+            RaceRecordCache.save(applied.raceRecords ?? [])
+            RaceRecordCache.saveDeletedIDs(applied.deletedRaceRecordIDs ?? [])
+            // 메모리의 CollectionStore·RaceRecordStore는 RootView가 이 값을 받아 교체한다
+            if applied.collectedBirds != current.collectedBirds
+                || applied.raceRecords != current.raceRecords {
+                mergedResult = MergedProgress(birds: applied.collectedBirds,
+                                              raceRecords: applied.raceRecords ?? [])
+            }
         }
+        return .uploaded
+    }
+
+    /// RootView가 `mergedResult`를 메모리 스토어에 반영한 뒤 비운다
+    func clearMergedResult() {
+        mergedResult = nil
     }
 
     // MARK: - 복원 선택 (이슈 #44)
