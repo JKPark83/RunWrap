@@ -145,6 +145,13 @@ struct RootView: View {
         .onChange(of: health.state) { _, newState in
             if case .loaded = newState { didConnectHealth = true }
         }
+        .onChange(of: backup.mergedResult) { _, merged in
+            // 백업 병합이 서버 쪽 도감·대회 기록을 살렸다 — 메모리도 맞춰야 다음 저장이 되살린 항목을 지우지 않는다 (이슈 #128)
+            guard let merged else { return }
+            collection.replace(with: merged.birds)
+            raceRecords.replace(with: merged.raceRecords)
+            backup.clearMergedResult()
+        }
         .onChange(of: scenePhase) { _, phase in
             // 포그라운드 복귀 — 날씨가 낡았으면 다시 받아 수분 알람까지 재예약한다 (이슈 #69).
             // WeatherStore를 쥔 곳이 여기라 RunWrapApp이 아니라 루트에서 건다.

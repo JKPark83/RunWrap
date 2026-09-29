@@ -178,7 +178,10 @@ extension ProgressSnapshot {
         raceGoalRaw = try container.decode(String.self, forKey: .raceGoalRaw)
         raceGoalSeconds = try container.decode(Int.self, forKey: .raceGoalSeconds)
         raceDate = try container.decodeIfPresent(Date.self, forKey: .raceDate)
-        collectedBirds = try container.decode([CollectedBird].self, forKey: .collectedBirds)
+        // 도감은 관대하게 읽는다 (이슈 #128) — 모르는 종·손상된 1건 때문에 스냅샷 전체가 읽히지 않으면
+        // 복원이 통째로 실패한다. 버린 새가 서버에서 지워지지 않게 업로드 쪽은 `undecodableBirdCount`로 보류한다
+        collectedBirds = try container.decode([LenientElement<CollectedBird>].self, forKey: .collectedBirds)
+            .compactMap(\.value)
         hrMaxManual = try container.decodeIfPresent(Int.self, forKey: .hrMaxManual)
         restingHRManual = try container.decodeIfPresent(Int.self, forKey: .restingHRManual)
         hrZoneMethodRaw = try container.decodeIfPresent(String.self, forKey: .hrZoneMethodRaw)
@@ -195,6 +198,27 @@ extension ProgressSnapshot {
                 weeklyGoalChanges = [WeeklyGoalChange(at: at, before: before)]
             }
         }
+    }
+
+    /// 스냅샷 JSON에서 관대 디코드가 버리는 새의 수 (이슈 #128) — 0보다 크면 이 앱이 모르는 종(미래 버전)이거나
+    /// 손상된 항목이 있다. 그대로 병합해 올리면 그 새가 서버에서도 사라지므로 업로드를 보류하는 판정에 쓴다.
+    /// JSON 자체를 읽을 수 없으면 0 — 그 경우는 스냅샷 디코드가 먼저 실패한다
+    static func undecodableBirdCount(in payload: Data) -> Int {
+        struct BirdsOnly: Decodable {
+            let collectedBirds: [LenientElement<CollectedBird>]
+        }
+        guard let probe = try? JSONDecoder().decode(BirdsOnly.self, from: payload) else { return 0 }
+        return probe.collectedBirds.filter { $0.value == nil }.count
+    }
+}
+
+/// 배열 원소 하나의 디코드 실패가 배열 전체 실패로 번지지 않게 감싼다 (이슈 #128).
+/// 실패한 원소는 nil로 남아 호출부가 걸러 낸다 — 원소 디코더 안에서 삼켜야 배열 커서가 다음으로 넘어간다
+private struct LenientElement<Element: Decodable>: Decodable {
+    let value: Element?
+
+    init(from decoder: Decoder) throws {
+        value = try? Element(from: decoder)
     }
 }
 
@@ -242,6 +266,56 @@ enum ProgressMergeEngine {
         merged.revision = max(local.revision, server.revision) + 1
         merged.updatedAt = max(local.updatedAt, server.updatedAt)
         return .upload(merged)
+    }
+
+    /// 서버 레코드의 스키마 버전만 보고 업로드를 보류할지 (이슈 #128) — payload 디코드 **전에** 판정한다.
+    /// 디코드되지 않는 미래 스키마는 `merge`의 keepServer까지 닿지 못해 덮어쓰이던 구멍을 막는다.
+    /// nil(필드 없음)은 보류 사유가 아니다 — 디코드 성패가 가른다
+    static func shouldHoldUpload(serverSchemaVersion: Int?) -> Bool {
+        guard let serverSchemaVersion else { return false }
+        return serverSchemaVersion > ProgressSnapshot.currentSchemaVersion
+    }
+
+    /// 업로드한 병합본을 로컬에 반영할 값 (이슈 #128).
+    ///
+    /// 조회·저장을 기다리는 동안 사용자가 설정을 바꿀 수 있다. 병합본을 통째로 적용하면 그 변경이
+    /// 업로드 시작 시점 값으로 되돌아가므로, 다시 읽은 현재 로컬(`current`)과 시작 시점 로컬(`start`)을 비교한다.
+    /// - 프로필·사이클 필드: 현재 로컬이 시작 시점과 **같을 때만** 병합본 값을 쓴다 — 바뀐 필드는 현재 로컬 유지
+    /// - `maxStage`: 병합본 값. 남은 사이클이 현재 로컬과 같으면 현재 값과의 최댓값(§5 "성장은 되돌리지 않는다")
+    /// - 도감·대회 기록·삭제 표식: 병합본에 현재 로컬을 합집합 — 기다리는 사이 수집·입력·삭제한 것도 잃지 않는다
+    static func localApplying(merged: ProgressSnapshot, start: ProgressSnapshot,
+                              current: ProgressSnapshot) -> ProgressSnapshot {
+        var result = merged
+        func keepLocalChange<Value: Equatable>(_ field: WritableKeyPath<ProgressSnapshot, Value>) {
+            if current[keyPath: field] != start[keyPath: field] {
+                result[keyPath: field] = current[keyPath: field]
+            }
+        }
+        keepLocalChange(\.cycleID)
+        keepLocalChange(\.levelRaw)
+        keepLocalChange(\.purposesRaw)
+        keepLocalChange(\.weeklyGoal)
+        keepLocalChange(\.onboardedAt)
+        keepLocalChange(\.cycleStartedAt)
+        keepLocalChange(\.raceGoalRaw)
+        keepLocalChange(\.raceGoalSeconds)
+        keepLocalChange(\.raceDate)
+        keepLocalChange(\.hrMaxManual)
+        keepLocalChange(\.restingHRManual)
+        keepLocalChange(\.hrZoneMethodRaw)
+        keepLocalChange(\.weeklyGoalChanges)
+        keepLocalChange(\.cycleGoalRaw)
+        keepLocalChange(\.cycleGoalSeconds)
+        if result.cycleID == current.cycleID {
+            let mergedStage = merged.cycleID == current.cycleID ? merged.maxStage : 0
+            result.maxStage = max(mergedStage, current.maxStage)
+        }
+        result.collectedBirds = unionBirds(merged.collectedBirds, current.collectedBirds)
+        let deleted = unionDeletedIDs(merged.deletedRaceRecordIDs ?? [], current.deletedRaceRecordIDs ?? [])
+        result.raceRecords = unionRaceRecords(merged.raceRecords ?? [], current.raceRecords ?? [],
+                                              deleted: deleted)
+        result.deletedRaceRecordIDs = deleted
+        return result
     }
 
     /// 첫 업로드 전에 사용자에게 "이전 기록 불러오기 / 새로 시작"을 물어야 하는지 (이슈 #44).
