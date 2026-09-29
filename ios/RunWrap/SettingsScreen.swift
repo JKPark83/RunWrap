@@ -51,6 +51,83 @@ struct SettingsScreen: View {
     }
 
     var body: some View {
+        settingsList
+            // 스냅샷에 담기는 설정값 — 바뀌면 병합 기준 시각을 갱신한다 (이슈 #130).
+            // 쓰기 지점(토글·스테퍼·휠·날짜 바인딩)이 흩어져 있어 값 변화로 한 번에 잡는다
+            .onChange(of: purposesRaw) { _, _ in markLocalChanged() }
+            .onChange(of: raceGoalRaw) { _, _ in markLocalChanged() }
+            .onChange(of: raceGoalSec) { _, _ in markLocalChanged() }
+            .onChange(of: raceDateRaw) { _, _ in markLocalChanged() }
+            .onChange(of: hrMaxManual) { _, _ in markLocalChanged() }
+            .onChange(of: restingHRManual) { _, _ in markLocalChanged() }
+            .onChange(of: hrZoneMethodRaw) { _, _ in markLocalChanged() }
+            // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다.
+            // 끌 때는 주간 알림 캐시를 비우고 다시 예약한다 — 데모 수치가 알림 본문에 남지 않게 (이슈 #44)
+            .onChange(of: demoMode) { _, isOn in
+                if !isOn { ReportCache.clear() }
+                Task {
+                    await health.load()
+                    if !isOn { await NotificationScheduler.rescheduleWeekly() }
+                }
+            }
+            .onChange(of: workoutNotify) { _, isOn in
+                if isOn { Task { _ = await confirmNotificationPermission($workoutNotify) } }
+            }
+            .onChange(of: weeklyNotify) { _, isOn in
+                Task {
+                    // 권한이 없어 되돌리면 false로 다시 불려 그쪽에서 예약을 거둔다
+                    if isOn, !(await confirmNotificationPermission($weeklyNotify)) { return }
+                    await NotificationScheduler.rescheduleWeekly()
+                }
+            }
+            .onChange(of: weeklyWeekday) { _, _ in
+                Task { await NotificationScheduler.rescheduleWeekly() }
+            }
+            .onChange(of: weeklyHour) { _, _ in
+                Task { await NotificationScheduler.rescheduleWeekly() }
+            }
+            .onChange(of: hydrationNotify) { _, isOn in
+                if isOn {
+                    Task { _ = await confirmNotificationPermission($hydrationNotify) }
+                } else {
+                    // 예약된 당일분이 있으면 거둔다 — 예보는 오늘 탭이 다시 조회할 때 확인
+                    Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
+                }
+            }
+            .alert("알림이 꺼져 있어요", isPresented: $showsNotificationDenied) {
+                Button("설정 열기") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+                Button("닫기", role: .cancel) {}
+            } message: {
+                Text("설정 > 런미새 > 알림에서 허용해 주세요")
+            }
+    }
+
+    /// 본문 + 시트. body의 modifier 체인이 길어 CI(Xcode 26.6) 타입 체커가 시간 초과해 둘로 나눴다
+    private var settingsList: some View {
+        content
+            .background(RR.bg.ignoresSafeArea())
+            .navigationTitle("설정")
+            .navigationBarTitleDisplayMode(.inline)
+            // 다시 진단받기 — 설문을 처음부터 다시 받는다.
+            // 이전 답을 프리필하지 않는 건 의도다: 다시 진단하는 이유는 그때와 지금이
+            // 달라졌기 때문이다 (기획서 §7). 설문 답은 갱신하지만 성장 사이클은 보존한다 —
+            // 재진단은 명시 파라미터로 알린다 (이슈 #44)
+            .sheet(isPresented: $isRediagnosing) {
+                OnboardingFlowScreen(isRediagnosis: true, onFinish: { isRediagnosing = false })
+                    .environmentObject(health)
+            }
+            // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
+            .sheet(isPresented: $isAddingRecord) {
+                RaceRecordInputSheet {
+                    raceRecords.add($0)
+                    scheduleBackup()
+                }
+            }
+    }
+
+    private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 // 레벨은 설문 결과라 여기서 직접 고르지 않는다 — 다시 진단받아야 바뀐다.
@@ -198,74 +275,6 @@ struct SettingsScreen: View {
             .padding(.horizontal, 18)
             .padding(.top, 12)
             .padding(.bottom, 26)
-        }
-        .background(RR.bg.ignoresSafeArea())
-        .navigationTitle("설정")
-        .navigationBarTitleDisplayMode(.inline)
-        // 다시 진단받기 — 설문을 처음부터 다시 받는다.
-        // 이전 답을 프리필하지 않는 건 의도다: 다시 진단하는 이유는 그때와 지금이
-        // 달라졌기 때문이다 (기획서 §7). 설문 답은 갱신하지만 성장 사이클은 보존한다 —
-        // 재진단은 명시 파라미터로 알린다 (이슈 #44)
-        .sheet(isPresented: $isRediagnosing) {
-            OnboardingFlowScreen(isRediagnosis: true, onFinish: { isRediagnosing = false })
-                .environmentObject(health)
-        }
-        // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
-        .sheet(isPresented: $isAddingRecord) {
-            RaceRecordInputSheet {
-                raceRecords.add($0)
-                scheduleBackup()
-            }
-        }
-        // 스냅샷에 담기는 설정값 — 바뀌면 병합 기준 시각을 갱신한다 (이슈 #130).
-        // 쓰기 지점(토글·스테퍼·휠·날짜 바인딩)이 흩어져 있어 값 변화로 한 번에 잡는다
-        .onChange(of: purposesRaw) { _, _ in markLocalChanged() }
-        .onChange(of: raceGoalRaw) { _, _ in markLocalChanged() }
-        .onChange(of: raceGoalSec) { _, _ in markLocalChanged() }
-        .onChange(of: raceDateRaw) { _, _ in markLocalChanged() }
-        .onChange(of: hrMaxManual) { _, _ in markLocalChanged() }
-        .onChange(of: restingHRManual) { _, _ in markLocalChanged() }
-        .onChange(of: hrZoneMethodRaw) { _, _ in markLocalChanged() }
-        // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다.
-        // 끌 때는 주간 알림 캐시를 비우고 다시 예약한다 — 데모 수치가 알림 본문에 남지 않게 (이슈 #44)
-        .onChange(of: demoMode) { _, isOn in
-            if !isOn { ReportCache.clear() }
-            Task {
-                await health.load()
-                if !isOn { await NotificationScheduler.rescheduleWeekly() }
-            }
-        }
-        .onChange(of: workoutNotify) { _, isOn in
-            if isOn { Task { _ = await confirmNotificationPermission($workoutNotify) } }
-        }
-        .onChange(of: weeklyNotify) { _, isOn in
-            Task {
-                // 권한이 없어 되돌리면 false로 다시 불려 그쪽에서 예약을 거둔다
-                if isOn, !(await confirmNotificationPermission($weeklyNotify)) { return }
-                await NotificationScheduler.rescheduleWeekly()
-            }
-        }
-        .onChange(of: weeklyWeekday) { _, _ in
-            Task { await NotificationScheduler.rescheduleWeekly() }
-        }
-        .onChange(of: weeklyHour) { _, _ in
-            Task { await NotificationScheduler.rescheduleWeekly() }
-        }
-        .onChange(of: hydrationNotify) { _, isOn in
-            if isOn {
-                Task { _ = await confirmNotificationPermission($hydrationNotify) }
-            } else {
-                // 예약된 당일분이 있으면 거둔다 — 예보는 오늘 탭이 다시 조회할 때 확인
-                Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
-            }
-        }
-        .alert("알림이 꺼져 있어요", isPresented: $showsNotificationDenied) {
-            Button("설정 열기") {
-                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
-            }
-            Button("닫기", role: .cancel) {}
-        } message: {
-            Text("설정 > 런미새 > 알림에서 허용해 주세요")
         }
     }
 
