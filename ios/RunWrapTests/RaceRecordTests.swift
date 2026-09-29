@@ -94,6 +94,36 @@ struct RaceRecordTests {
         #expect(abs(best.riegelSec - 6_054.8) < 0.5)
     }
 
+    @Test("타당성 가드 — 비현실 페이스 기록은 후보에서 빠지고 정상 기록이 근거가 된다 (이슈 #93)")
+    func implausibleRecordExcluded() throws {
+        // '1시간 45분'을 1분 45초로 오독한 하프 105초 = 약 5초/km — 150초/km 미만이라 제외
+        #expect(TrainingGuideEngine.racePrediction(
+            for: .half, runs: [], now: now,
+            raceRecords: [record(.half, timeSec: 105, daysAgo: 30)]) == nil)
+        // 휠 실수 5K 7:59:59(28,799초) = 5,759.8초/km — 1,200초/km 초과라 제외
+        #expect(TrainingGuideEngine.racePrediction(
+            for: .fiveK, runs: [], now: now,
+            raceRecords: [record(.fiveK, timeSec: 28_799, daysAgo: 30)]) == nil)
+        // 오독 기록이 섞여 있어도 Riegel 최솟값으로 이기지 못하고 정상 기록(6,330초)이 근거
+        let best = try #require(TrainingGuideEngine.racePrediction(
+            for: .half, runs: [], now: now,
+            raceRecords: [record(.half, timeSec: 105, daysAgo: 30),
+                          record(.half, timeSec: 6_330, daysAgo: 180)]))
+        #expect(best.riegelSec == 6_330)
+    }
+
+    @Test("타당성 판정 — 페이스 150~1,200초/km 안만 통과, 0초·0km는 실패 (이슈 #93)")
+    func plausibilityBounds() {
+        // 5K: 750초(2′30″/km)·6,000초(20′00″/km)가 양 끝
+        #expect(RaceRecord.isPlausible(timeSec: 750, km: 5))
+        #expect(!RaceRecord.isPlausible(timeSec: 749, km: 5))
+        #expect(RaceRecord.isPlausible(timeSec: 6_000, km: 5))
+        #expect(!RaceRecord.isPlausible(timeSec: 6_001, km: 5))
+        #expect(RaceRecord.isPlausible(timeSec: 6_330, km: RaceDistance.half.km))
+        #expect(!RaceRecord.isPlausible(timeSec: 0, km: 5))
+        #expect(!RaceRecord.isPlausible(timeSec: 1_500, km: 0))
+    }
+
     // MARK: - RaceOutlookEngine 통합
 
     @Test("기록만으로 ready — 근거가 대회 기록임을 Outlook이 밝힌다")
@@ -248,5 +278,83 @@ struct RaceRecordTests {
         #expect(parsed.date == nil)
         #expect(parsed.race == .tenK)
         #expect(parsed.timeSec == 3_000)
+    }
+
+    @Test("두 자리 연도는 2000년대 — '25년'은 2025년, 최근 2년 밖 연도는 날짜만 버린다 (이슈 #93)")
+    func interpretValidatesYear() throws {
+        // now 2026-08-26 → 허용 연도 2024...2026
+        let twoDigit = try #require(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: nil, seconds: nil,
+            year: 25, month: 10, day: 3, now: now)?.date)
+        let comps = Calendar.current.dateComponents([.year, .month, .day], from: twoDigit)
+        #expect(comps.year == 2025 && comps.month == 10 && comps.day == 3)
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: nil, seconds: nil,
+            year: 2024, month: 3, day: nil, now: now)?.date != nil)
+        // 2023년(3년 전)·'23년'은 범위 밖 → 날짜 nil, 종목은 살린다
+        for year in [2023, 23] {
+            let parsed = try #require(RaceResultParser.interpret(
+                distanceKm: 10, hours: nil, minutes: nil, seconds: nil,
+                year: year, month: 10, day: nil, now: now))
+            #expect(parsed.date == nil)
+            #expect(parsed.race == .tenK)
+        }
+    }
+
+    @Test("연도가 있으면 그 달 실제 일수로 검증 — '9월 31일'은 10월 1일이 아니라 9월 15일 (이슈 #93)")
+    func interpretValidatesDayInMonth() throws {
+        let september = try #require(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: nil, seconds: nil,
+            year: 2025, month: 9, day: 31, now: now)?.date)
+        let sepComps = Calendar.current.dateComponents([.month, .day], from: september)
+        #expect(sepComps.month == 9 && sepComps.day == 15)
+        // 윤년 2024년 2월 29일은 실재하는 날 — 그대로 둔다
+        let leap = try #require(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: nil, seconds: nil,
+            year: 2024, month: 2, day: 29, now: now)?.date)
+        let leapComps = Calendar.current.dateComponents([.month, .day], from: leap)
+        #expect(leapComps.month == 2 && leapComps.day == 29)
+    }
+
+    @Test("시·분·초 범위 밖·음수 필드는 버린다 — 시 0~7, 분·초 0~59 (이슈 #93)")
+    func interpretValidatesTimeFields() throws {
+        // 1시간 −5분 → 분을 버리고 3,600초 (예전엔 3,300초)
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: 1, minutes: -5, seconds: nil,
+            year: nil, month: nil, day: nil, now: now)?.timeSec == 3_600)
+        // 1시간 60분 75초 → 분·초를 버리고 3,600초
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: 1, minutes: 60, seconds: 75,
+            year: nil, month: nil, day: nil, now: now)?.timeSec == 3_600)
+        // 8시간은 휠 범위(0..<8) 밖 → 시를 버리고 30분 = 1,800초
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: 8, minutes: 30, seconds: nil,
+            year: nil, month: nil, day: nil, now: now)?.timeSec == 1_800)
+        // 분만 오면 8시간 미만(479분)까지 허용 — 480분은 버린다
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: 479, seconds: nil,
+            year: nil, month: nil, day: nil, now: now)?.timeSec == 28_740)
+        // 셋 다 버려지면 timeSec nil — 다른 필드도 없으면 파싱 실패(nil)
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: -1, minutes: nil, seconds: -3,
+            year: nil, month: nil, day: nil, now: now) == nil)
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: 480, seconds: nil,
+            year: nil, month: nil, day: nil, now: now) == nil)
+        let parsed = try #require(RaceResultParser.interpret(
+            distanceKm: 10, hours: 9, minutes: nil, seconds: nil,
+            year: nil, month: nil, day: nil, now: now))
+        #expect(parsed.timeSec == nil)
+        #expect(parsed.race == .tenK)
+    }
+
+    @Test("거대값도 트랩 없이 버린다 — 범위 검사가 곱셈보다 먼저다 (이슈 #93)")
+    func interpretHugeValuesDoNotOverflow() {
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: Int.max, minutes: Int.max, seconds: Int.max,
+            year: Int.max, month: nil, day: nil, now: now) == nil)
+        #expect(RaceResultParser.interpret(
+            distanceKm: nil, hours: nil, minutes: Int.max, seconds: 30,
+            year: nil, month: nil, day: nil, now: now)?.timeSec == 30)
     }
 }

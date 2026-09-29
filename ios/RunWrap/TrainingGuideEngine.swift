@@ -389,10 +389,12 @@ struct TrainingGuideEngine {
         // 직접 입력한 대회 기록 후보 (이슈 #35) — 표본 창을 적용하지 않는다: 몇 달 전
         // 대회 기록이라도 훈련 표본에는 없는 "전력 노력"의 증거다. 시점 차이는 VO₂max
         // 추세 배율이 보정한다. 최소 거리·3배 외삽·최대 나이 가드는 훈련 표본과 동일하다.
+        // 페이스 타당성 가드(이슈 #93) — 오독·휠 실수 기록이 최솟값으로 항상 이기지 않게 한다.
         // 대회 기록엔 세션 날씨가 없어 열 중립 환산은 자연히 원본 그대로다.
         let recordCutoff = now.addingTimeInterval(-Double(maxRaceRecordAgeDays) * 86_400)
         let record: RacePrediction? = raceRecords
-            .filter { $0.timeSec > 0 && $0.date <= now && $0.date >= recordCutoff
+            .filter { RaceRecord.isPlausible(timeSec: $0.timeSec, km: $0.race.km)
+                && $0.date <= now && $0.date >= recordCutoff
                 && $0.race.km >= minSampleKm
                 && goal.km / $0.race.km <= maxExtrapolationRatio }
             .map { record -> RacePrediction in
@@ -577,6 +579,10 @@ struct TrainingGuideEngine {
     /// 5000m 세계기록(12:35.36, 첩테게이 2020) 페이스가 약 2′31″/km — 이보다 빠른 목표
     /// 페이스는 사람 기록이 아니라 입력 실수다 (예: 종목을 풀로 바꿨는데 목표 기록이 30:00으로 남음)
     static let minGoalPaceSecPerKm = 150.0
+
+    /// 대회 기록 페이스 상한 20′00″/km — RunSummary.paceSecPerKm 가드(150...1200초/km)와
+    /// 같은 상한이다. 걷기보다 느린 대회 기록은 휠 실수로 보고 표본에서 뺀다 (이슈 #93)
+    static let maxRacePaceSecPerKm = 1_200.0
 
     /// 존 상수 (Daniels' Running Formula): 이지 62~74% / 템포 88% / 인터벌 97.5%.
     /// VDOT 50에서 Daniels 표와 대조: 이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″ 일치.

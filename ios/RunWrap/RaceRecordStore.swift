@@ -17,6 +17,15 @@ struct RaceRecord: Codable, Equatable, Identifiable {
     let timeSec: Double
     /// 대회 날짜 — 오래된 기록의 시점 차이는 엔진의 VO₂max 추세 배율이 보정한다
     let date: Date
+
+    /// 기록 타당성 (이슈 #93) — 페이스가 세계기록 수준(2′30″/km)보다 빠르거나 20′00″/km보다
+    /// 느리면 오독('1시간 45분' → 1분 45초)이나 휠 실수다. 이런 기록 하나가 Riegel 최솟값으로
+    /// 2년간 예측을 지배하지 않도록, 엔진 후보 필터와 입력 시트 저장 버튼이 같은 판정을 쓴다
+    static func isPlausible(timeSec: Double, km: Double) -> Bool {
+        guard timeSec > 0, km > 0 else { return false }
+        return (TrainingGuideEngine.minGoalPaceSecPerKm...TrainingGuideEngine.maxRacePaceSecPerKm)
+            .contains(timeSec / km)
+    }
 }
 
 /// Application Support/RunWrap/race-records.json — PBBaselineCache와 같은 패턴 (atomic write,
