@@ -60,13 +60,48 @@ struct RaceEngineTests {
         #expect(try #require(entries.first).status == nil)
     }
 
-    @Test("마감일 미상 접수중 — 시작일만 있고 지났으면 open(end: nil)")
+    @Test("마감일 미상 접수중 — 시작일만 있고 지났으며 대회까지 30일 이상이면 open(end: nil)")
     func openWithoutEnd() throws {
+        // 대회 10/1 → D-50 (8월 19일 + 9월 30일 + 1) ≥ 30
         let entries = RaceEngine.entries(
-            from: [race(date: "2026-09-01", registerStart: "2026-08-01")], now: now)
+            from: [race(date: "2026-10-01", registerStart: "2026-08-01")], now: now)
         let entry = try #require(entries.first)
         #expect(entry.status == .open(end: nil))
         #expect(entry.deadlineDDay == nil)
+    }
+
+    @Test("마감일 미상 가드 — 대회가 30일 안으로 다가오면 접수중으로 보지 않는다(nil)")
+    func unknownEndNearRaceGuard() throws {
+        // 대회 9/1 → D-20 (8/12→8/31 19일 + 1) < 30. 크롤러가 "9월31일" 마감을 버린 경우 (#45)
+        let entries = RaceEngine.entries(
+            from: [race(date: "2026-09-01", registerStart: "2026-08-01")], now: now)
+        let entry = try #require(entries.first)
+        #expect(entry.status == nil)
+        #expect(entry.deadlineDDay == nil)
+    }
+
+    @Test("마감일 미상 가드 경계 — D-30은 접수중, D-29는 상태 미상")
+    func unknownEndBoundary() throws {
+        // 대회 9/11 → D-30 (8월 남은 19일 + 9월 11일), 9/10 → D-29
+        let entries = RaceEngine.entries(
+            from: [race(id: 1, date: "2026-09-11", registerStart: "2026-08-01"),
+                   race(id: 2, date: "2026-09-10", registerStart: "2026-08-01")],
+            now: now)
+        let d30 = try #require(entries.first { $0.race.id == 1 })
+        let d29 = try #require(entries.first { $0.race.id == 2 })
+        #expect(d30.dDay == 30)
+        #expect(d30.status == .open(end: nil))
+        #expect(d29.dDay == 29)
+        #expect(d29.status == nil)
+    }
+
+    @Test("마감일 미상이어도 시작 전이면 notYet — 가드는 접수예정 판정 뒤에 온다")
+    func notYetWithoutEndNearRace() throws {
+        // 대회 8/30 → D-18, 접수 시작 8/20 > 오늘 8/12 → 접수예정 유지
+        let entries = RaceEngine.entries(
+            from: [race(date: "2026-08-30", registerStart: "2026-08-20")], now: now)
+        let entry = try #require(entries.first)
+        #expect(entry.status == .notYet(start: RaceEngine.day("2026-08-20")!))
     }
 
     @Test("지난 대회 필터 — 대회일이 어제면 빠지고, 오늘이면 D-0으로 남는다")
