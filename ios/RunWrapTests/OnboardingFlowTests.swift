@@ -107,7 +107,7 @@ struct OnboardingFlowTests {
 @Suite("온보딩 저장 — 재진단 사이클 보존")
 struct OnboardingPersistTests {
     let now = ISO8601DateFormatter().date(from: "2026-09-29T09:00:00Z")!
-    /// 재진단 전부터 키우던 사이클 — 8/1 시작, 4단계(fledgling), 고정 식별자
+    /// 재진단 전부터 키우던 사이클 — 8/1 시작, 4단계(fledgling), 고정 식별자, 사이클 목표 풀 4:00:00
     let cycleStartedAt = ISO8601DateFormatter().date(from: "2026-08-01T00:00:00Z")!
     let onboardedAt = ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!
     let cycleID = "AAAAAAAA-0000-0000-0000-000000000001"
@@ -120,6 +120,8 @@ struct OnboardingPersistTests {
         defaults.set(cycleStartedAt.timeIntervalSince1970, forKey: GrowthKey.cycleStartedAt)
         defaults.set(GrowthStage.fledgling.rawValue, forKey: GrowthKey.maxStage)
         defaults.set(cycleID, forKey: GrowthKey.cycleID)
+        defaults.set(RaceDistance.full.rawValue, forKey: GrowthKey.cycleGoal)
+        defaults.set(4 * 3_600, forKey: GrowthKey.cycleGoalSec)
         defaults.set(onboardedAt.timeIntervalSince1970, forKey: ProfileKey.onboardedAt)
         return defaults
     }
@@ -146,6 +148,9 @@ struct OnboardingPersistTests {
         #expect(defaults.integer(forKey: GrowthKey.maxStage) == GrowthStage.fledgling.rawValue)
         #expect(defaults.string(forKey: GrowthKey.cycleID) == cycleID)
         #expect(defaults.double(forKey: ProfileKey.onboardedAt) == onboardedAt.timeIntervalSince1970)
+        // 사이클 목표(이슈 #110): 재진단의 하프 목표로 바뀌지 않고 풀 4:00:00 그대로 — 새 종류는 다음 사이클부터
+        #expect(defaults.string(forKey: GrowthKey.cycleGoal) == RaceDistance.full.rawValue)
+        #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 4 * 3_600)
         // 설문 답: 레벨은 LevelEngine 판정, 주간 목표는 Q5 fourPlus → 4회, 대회 목표는 Q7·Q8
         #expect(defaults.string(forKey: ProfileKey.levelV2) == LevelEngine.decide(model.answers).rawValue)
         #expect(defaults.integer(forKey: ProfileKey.weeklyGoal) == 4)
@@ -175,7 +180,7 @@ struct OnboardingPersistTests {
         #expect(defaults.double(forKey: ProfileKey.weeklyGoalChangedAt) == 0)
     }
 
-    @Test("첫 온보딩 저장 — 새 사이클을 연다: 시작=지금, 단계=알, 새 식별자, 온보딩 시각=지금")
+    @Test("첫 온보딩 저장 — 새 사이클을 연다: 시작=지금, 단계=알, 새 식별자, 온보딩 시각=지금, 사이클 목표=Q7·Q8")
     func firstOnboardingOpensNewCycle() throws {
         let defaults = seededDefaults("firstOnboarding")
 
@@ -187,5 +192,8 @@ struct OnboardingPersistTests {
         #expect(newID != cycleID)
         #expect(UUID(uuidString: newID) != nil)
         #expect(defaults.double(forKey: ProfileKey.onboardedAt) == now.timeIntervalSince1970)
+        // 사이클 목표(이슈 #110): Q7 하프·Q8 1:45:00(6_300초)으로 고정
+        #expect(defaults.string(forKey: GrowthKey.cycleGoal) == RaceDistance.half.rawValue)
+        #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 6_300)
     }
 }

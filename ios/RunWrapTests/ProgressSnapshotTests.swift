@@ -181,7 +181,10 @@ struct ProgressSnapshotTests {
     func applyReadLocalRoundTrip() throws {
         let defaults = Self.freshDefaults("roundTrip")
         let bird = Self.makeBird(id: UUID(), collectedAt: Self.date("2026-07-10T00:00:00Z"))
-        let original = Self.makeSnapshot(birds: [bird])
+        var original = Self.makeSnapshot(birds: [bird])
+        // apply는 nil 사이클 목표를 raceGoal로 채우므로, 무손실 왕복을 보려면 값을 넣어 둔다 (이슈 #110)
+        original.cycleGoalRaw = "full"
+        original.cycleGoalSeconds = 4 * 3_600
 
         original.apply(to: defaults)
         let read = try #require(ProgressSnapshot.readLocal(
@@ -285,6 +288,77 @@ struct ProgressSnapshotTests {
             defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(readCleared.weeklyGoalChangedAt == nil)
         #expect(readCleared.weeklyGoalBefore == nil)
+    }
+
+    @Test("사이클 목표 왕복 — 설정 목표와 다른 사이클 목표가 인코딩·디코딩과 apply→readLocal로 보존된다 (이슈 #110)")
+    func cycleGoalRoundTrip() throws {
+        // 설정 목표는 풀 4:00:00(makeSnapshot), 사이클 목표는 하프 1:45:00(6_300초) — 중간에 목표를 바꾼 상황
+        var snapshot = Self.makeSnapshot()
+        snapshot.cycleGoalRaw = "half"
+        snapshot.cycleGoalSeconds = 6_300
+
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self,
+                                               from: JSONEncoder().encode(snapshot))
+        #expect(decoded == snapshot)
+        #expect(decoded.cycleGoalRaw == "half")
+        #expect(decoded.cycleGoalSeconds == 6_300)
+
+        let defaults = Self.freshDefaults("cycleGoal")
+        decoded.apply(to: defaults)
+        #expect(defaults.string(forKey: GrowthKey.cycleGoal) == "half")
+        #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 6_300)
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(read.cycleGoalRaw == "half")
+        #expect(read.cycleGoalSeconds == 6_300)
+        #expect(read.raceGoalRaw == "full")
+    }
+
+    @Test("사이클 목표 — 목표 없음(빈 문자열·0초)은 nil이 아니라 유효한 값으로 왕복한다")
+    func cycleGoalNoneRoundTrip() throws {
+        var snapshot = Self.makeSnapshot()
+        snapshot.cycleGoalRaw = ""
+        snapshot.cycleGoalSeconds = 0
+
+        let defaults = Self.freshDefaults("cycleGoalNone")
+        snapshot.apply(to: defaults)
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(read.cycleGoalRaw == "")
+        #expect(read.cycleGoalSeconds == 0)
+    }
+
+    @Test("옛 스냅샷 호환 — 사이클 목표 필드가 없는 JSON은 nil로 디코드되고, 적용하면 raceGoal로 대체한다 (이슈 #110)")
+    func legacySnapshotWithoutCycleGoal() throws {
+        // makeSnapshot의 사이클 목표는 nil → synthesized 인코딩에서 키가 빠진다 — 이슈 #110 이전 본과 같은 JSON
+        let data = try JSONEncoder().encode(Self.makeSnapshot())
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["cycleGoalRaw"] == nil)
+        #expect(object["cycleGoalSeconds"] == nil)
+
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self, from: data)
+        #expect(decoded.cycleGoalRaw == nil)
+        #expect(decoded.cycleGoalSeconds == nil)
+
+        // 복원: 로컬에 남은 다른 사이클 목표(10K) 대신 스냅샷의 raceGoal(풀 4:00:00)로 채운다
+        let defaults = Self.freshDefaults("legacyCycleGoal")
+        defaults.set("tenK", forKey: GrowthKey.cycleGoal)
+        defaults.set(3_000, forKey: GrowthKey.cycleGoalSec)
+        decoded.apply(to: defaults)
+        #expect(defaults.string(forKey: GrowthKey.cycleGoal) == "full")
+        #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 4 * 3_600)
+    }
+
+    @Test("readLocal — 사이클 목표 키가 없는 설치(도입 전)는 nil로 읽힌다")
+    func readLocalNilCycleGoalWithoutKey() throws {
+        let defaults = Self.freshDefaults("cycleGoalMissing")
+        defaults.set("intermediate", forKey: ProfileKey.levelV2)
+        defaults.set("full", forKey: ProfileKey.raceGoal)
+
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(read.cycleGoalRaw == nil)
+        #expect(read.cycleGoalSeconds == nil)
     }
 
     // MARK: - 복원 선택 판정 (이슈 #44)

@@ -96,6 +96,13 @@ struct SettingsScreen: View {
                                 raceGoalRaw = race.rawValue
                             }
                         }
+                        // 새 종류는 사이클 시작 때 고정한 목표로 정해진다 — 여기서 바꾼 목표는 다음 사이클부터 (이슈 #110)
+                        Text("지금 키우는 새의 종류는 이번 사이클을 시작할 때 목표로 정해졌어요. 바꾼 목표는 다음 새부터 적용돼요.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(RR.text2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
                     }
                     section(title: "목표 기록") { goalTimeRow }
                     // 대회 날짜 — 훈련 가이드의 D-day 주기화와 리포트 D-day의 기준 (§4.9)
