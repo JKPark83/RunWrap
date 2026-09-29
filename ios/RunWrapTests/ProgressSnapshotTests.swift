@@ -485,6 +485,73 @@ struct ProgressSnapshotTests {
         #expect(readCleared.weeklyGoalChanges == nil)
     }
 
+    // MARK: - 병합: 주간 목표 변경 이력 합집합 (이슈 #126)
+    // 시각은 모두 주 중간(화~목) 12:00Z — 어느 시간대에서 돌려도 ISO 주 경계(월 00:00)를 넘지 않는다
+
+    @Test("목표 변경 이력 합집합 — 서로 다른 주의 이력은 모두 남고 시각 오름차순, 완전히 같은 항목은 하나로")
+    func weeklyGoalChangesUnionAcrossWeeks() throws {
+        let july = WeeklyGoalChange(at: Self.date("2026-07-15T12:00:00Z"), before: 3)   // 수요일
+        let shared = WeeklyGoalChange(at: Self.date("2026-07-29T12:00:00Z"), before: 4) // 양쪽에 동기화돼 있던 항목
+        let august = WeeklyGoalChange(at: Self.date("2026-08-12T12:00:00Z"), before: 5)
+
+        let union = ProgressMergeEngine.unionWeeklyGoalChanges([august, shared], [shared, july])
+        // 세 주가 모두 다르다 → 3건, 7/15 → 7/29 → 8/12 순. shared는 한 번만
+        #expect(union == [july, shared, august])
+    }
+
+    @Test("목표 변경 이력 합집합 — 같은 ISO 주에 두 기기가 각각 바꿨으면 먼저 바꾼 1건만 남긴다")
+    func weeklyGoalChangesUnionKeepsEarliestInWeek() throws {
+        // 8/4(화)·8/6(목)은 같은 주(8/3 월요일 시작) — 그 주 판정은 먼저 바꾸기 직전 목표(3)로 해야 한다
+        let earlier = WeeklyGoalChange(at: Self.date("2026-08-04T12:00:00Z"), before: 3)
+        let later = WeeklyGoalChange(at: Self.date("2026-08-06T12:00:00Z"), before: 4)
+
+        #expect(ProgressMergeEngine.unionWeeklyGoalChanges([later], [earlier]) == [earlier])
+        #expect(ProgressMergeEngine.unionWeeklyGoalChanges([earlier], [later]) == [earlier])
+    }
+
+    @Test("목표 변경 이력 병합 — 다른 사이클의 서버 본이 통째로 이겨도 로컬 이력이 합쳐져 남고, 양쪽 모두 없으면 nil")
+    func mergeUnionsWeeklyGoalChangesEvenWhenServerWins() throws {
+        let localCycle = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+        let serverCycle = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
+        let localChange = WeeklyGoalChange(at: Self.date("2026-07-15T12:00:00Z"), before: 3)
+        let serverChange = WeeklyGoalChange(at: Self.date("2026-08-12T12:00:00Z"), before: 5)
+        var local = Self.makeSnapshot(updatedAt: Self.date("2026-08-05T09:00:00Z"), cycleID: localCycle)
+        local.weeklyGoalChanges = [localChange]
+        var server = Self.makeSnapshot(updatedAt: Self.date("2026-08-10T09:00:00Z"), cycleID: serverCycle)
+        server.weeklyGoalChanges = [serverChange]
+
+        guard case .upload(let merged) = ProgressMergeEngine.merge(local: local, server: server) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        // 서버(8/10)가 최신 → 사이클은 서버 것. 이력은 로컬 7/15 + 서버 8/12 합집합
+        #expect(merged.cycleID == serverCycle)
+        #expect(merged.weeklyGoalChanges == [localChange, serverChange])
+
+        // 양쪽 모두 이력 없음 → nil 유지 (빈 배열을 쓰지 않는다)
+        guard case .upload(let mergedEmpty) = ProgressMergeEngine.merge(local: Self.makeSnapshot(),
+                                                                        server: Self.makeSnapshot()) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        #expect(mergedEmpty.weeklyGoalChanges == nil)
+    }
+
+    @Test("목표 변경 이력 병합 반영 — 기다리는 사이 로컬에서 바꾼 이력과 병합본 이력이 합집합으로 남는다")
+    func localApplyingUnionsWeeklyGoalChanges() throws {
+        let serverChange = WeeklyGoalChange(at: Self.date("2026-07-15T12:00:00Z"), before: 3)
+        let localChange = WeeklyGoalChange(at: Self.date("2026-08-12T12:00:00Z"), before: 4)
+        let start = Self.makeSnapshot()
+        var merged = Self.makeSnapshot()
+        merged.weeklyGoalChanges = [serverChange]
+        var current = Self.makeSnapshot()
+        current.weeklyGoalChanges = [localChange]
+
+        let applied = ProgressMergeEngine.localApplying(merged: merged, start: start, current: current)
+        // 필드 단위 채택이면 현재 로컬([8/12])만 남았다 — 합집합이라 7/15도 남는다
+        #expect(applied.weeklyGoalChanges == [serverChange, localChange])
+    }
+
     @Test("#108 스냅샷 흡수 — weeklyGoalChangedAt·weeklyGoalBefore만 있는 옛 JSON은 1건짜리 이력으로 디코드되고, 다시 인코드하면 새 필드만 쓴다 (이슈 #116)")
     func legacyWeeklyGoalChangeSnapshotDecodes() throws {
         // #108 인코더와 같은 모양 — Date는 JSONEncoder 기본 전략(2001 기준 초)으로 적힌다

@@ -259,6 +259,7 @@ enum ProgressMergeEngine {
     /// - 다른 cycleID: 사이클 전환은 원자적 사건이라 최신 `updatedAt` 쪽이 통째로 이긴다.
     /// - 도감: 어느 경우든 합집합 — 수집 이력은 잃을 이유가 없다.
     /// - 대회 기록(이슈 #118): 어느 경우든 합집합이되 양쪽의 삭제 표식에 걸린 기록은 뺀다 — `unionRaceRecords` 참고.
+    /// - 주간 목표 변경 이력(이슈 #126): 어느 경우든 합집합 — 한쪽만 남기면 그 주의 보너스 판정이 달라진다.
     static func merge(local: ProgressSnapshot, server: ProgressSnapshot) -> ProgressMergeResult {
         guard server.schemaVersion <= ProgressSnapshot.currentSchemaVersion else {
             return .keepServer
@@ -272,6 +273,8 @@ enum ProgressMergeEngine {
         merged.raceRecords = unionRaceRecords(local.raceRecords ?? [], server.raceRecords ?? [],
                                               deleted: deleted)
         merged.deletedRaceRecordIDs = deleted
+        let goalChanges = unionWeeklyGoalChanges(local.weeklyGoalChanges ?? [], server.weeklyGoalChanges ?? [])
+        merged.weeklyGoalChanges = goalChanges.isEmpty ? nil : goalChanges  // 이력 없음은 nil (readLocal과 같은 규칙)
         merged.schemaVersion = ProgressSnapshot.currentSchemaVersion
         // 서버 revision보다 커야 이 병합이 최신본으로 남는다 — 단조 증가 보장
         merged.revision = max(local.revision, server.revision) + 1
@@ -293,7 +296,7 @@ enum ProgressMergeEngine {
     /// 업로드 시작 시점 값으로 되돌아가므로, 다시 읽은 현재 로컬(`current`)과 시작 시점 로컬(`start`)을 비교한다.
     /// - 프로필·사이클 필드: 현재 로컬이 시작 시점과 **같을 때만** 병합본 값을 쓴다 — 바뀐 필드는 현재 로컬 유지
     /// - `maxStage`: 병합본 값. 남은 사이클이 현재 로컬과 같으면 현재 값과의 최댓값(§5 "성장은 되돌리지 않는다")
-    /// - 도감·대회 기록·삭제 표식: 병합본에 현재 로컬을 합집합 — 기다리는 사이 수집·입력·삭제한 것도 잃지 않는다
+    /// - 도감·대회 기록·삭제 표식·주간 목표 변경 이력: 병합본에 현재 로컬을 합집합 — 기다리는 사이 수집·입력·삭제·변경한 것도 잃지 않는다
     static func localApplying(merged: ProgressSnapshot, start: ProgressSnapshot,
                               current: ProgressSnapshot) -> ProgressSnapshot {
         var result = merged
@@ -314,7 +317,6 @@ enum ProgressMergeEngine {
         keepLocalChange(\.hrMaxManual)
         keepLocalChange(\.restingHRManual)
         keepLocalChange(\.hrZoneMethodRaw)
-        keepLocalChange(\.weeklyGoalChanges)
         keepLocalChange(\.cycleGoalRaw)
         keepLocalChange(\.cycleGoalSeconds)
         if result.cycleID == current.cycleID {
@@ -326,6 +328,8 @@ enum ProgressMergeEngine {
         result.raceRecords = unionRaceRecords(merged.raceRecords ?? [], current.raceRecords ?? [],
                                               deleted: deleted)
         result.deletedRaceRecordIDs = deleted
+        let goalChanges = unionWeeklyGoalChanges(merged.weeklyGoalChanges ?? [], current.weeklyGoalChanges ?? [])
+        result.weeklyGoalChanges = goalChanges.isEmpty ? nil : goalChanges
         return result
     }
 
@@ -369,6 +373,26 @@ enum ProgressMergeEngine {
         return (lhs + rhs)
             .filter { seen.insert($0.id).inserted }
             .sorted { $0.date > $1.date }
+    }
+
+    /// 주간 목표 변경 이력 합집합 (이슈 #126) — 시각 오름차순, 같은 ISO 주에는 먼저 기록된 1건만 남긴다.
+    ///
+    /// `GrowthEngine.recordWeeklyGoalChange`가 한 주에 첫 변경만 남기는 규칙(그 주 판정은 변경 직전 목표로)을
+    /// 기기 간에도 지킨다 — 두 기기가 같은 주에 각각 바꿨다면 먼저 바꾼 쪽의 `before`가 그 주의 원래 목표다.
+    /// 주 경계도 그 함수와 같다(ISO 8601, 월요일 시작, 현재 시간대). 완전히 같은 항목은 같은 주라 하나로 합쳐진다
+    static func unionWeeklyGoalChanges(_ lhs: [WeeklyGoalChange],
+                                       _ rhs: [WeeklyGoalChange]) -> [WeeklyGoalChange] {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = .current
+        var seenWeeks = Set<Date>()
+        return (lhs + rhs)
+            .sorted { $0.at < $1.at }
+            .filter { change in
+                guard let weekStart = calendar.dateInterval(of: .weekOfYear, for: change.at)?.start else {
+                    return true
+                }
+                return seenWeeks.insert(weekStart).inserted
+            }
     }
 
     /// 삭제 표식 합집합 (이슈 #118) — 순서는 의미 없지만 `hasSameContent` 비교가 안정되게 정렬한다
