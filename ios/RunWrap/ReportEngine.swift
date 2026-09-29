@@ -52,7 +52,7 @@ enum ReportVoice {
 /// - 심박 효율(EF): 분속(m/min) ÷ 평균 심박 (TrainingPeaks Efficiency Factor).
 ///   최근 2주 평균을 직전 2주와 비교 — 상승이면 같은 심박으로 더 빨리 달린다는 뜻.
 ///
-/// 표본이 부족해 비율이 과장될 상황(기준 주가 거의 비어 있음, 기록 3주 미만 등)에는
+/// 표본이 부족해 비율이 과장될 상황(기준 주가 거의 비어 있음, 기록 4주 미만 등)에는
 /// 해당 지표를 아예 내지 않는다 — 틀린 인사이트는 없느니만 못하다.
 struct ReportEngine {
     var now = Date()
@@ -103,15 +103,37 @@ struct ReportEngine {
         }
     }
 
+    // MARK: - ACWR 공통 산식 (이슈 #49)
+
+    /// 급성 부하(최근 7일 거리)와 만성 부하(최근 28일 거리 ÷ 4 = 주 평균) — Gabbett, 2016.
+    /// 리포트 문장·ACWR 카드·체력 배터리가 모두 이 한 곳을 쓴다. 창은 [now-N일, now) 반개구간.
+    ///
+    /// 표본 가드(하나라도 걸리면 nil):
+    /// - 최고령 기록이 28일 이상 전이어야 한다. 만성 부하는 항상 28일 합 ÷ 4라서
+    ///   이력이 21~27일뿐이면 분모가 실제 주평균보다 최대 25% 작아지고 비율이 최대 1.33배
+    ///   부풀려진다 — 기획서·심사 노트의 "4주 필요"와 맞춘다.
+    /// - 만성 부하가 주 3km 미만이면 지표가 무의미하다.
+    static func acwrLoad(runs: [RunSummary], now: Date) -> (acute: Double, chronic: Double)? {
+        guard let oldest = runs.map(\.start).min(),
+              oldest <= now.addingTimeInterval(-28 * 86_400) else { return nil }
+        func windowKm(days: Double) -> Double {
+            let from = now.addingTimeInterval(-days * 86_400)
+            return runs.filter { $0.start >= from && $0.start < now }
+                .compactMap(\.distanceKm)
+                .reduce(0, +)
+        }
+        let acute = windowKm(days: 7)
+        let chronic = windowKm(days: 28) / 4
+        guard chronic >= 3 else { return nil }
+        return (acute, chronic)
+    }
+
     // MARK: - ACWR (급성:만성 부하비)
 
     private func acwr(_ runs: [RunSummary]) -> Insight? {
-        // 기록이 3주 미만이면 만성 부하(분모)가 작아 비율이 과장된다
-        guard let oldest = runs.map(\.start).min(),
-              oldest <= date(daysAgo: 21) else { return nil }
-        let acute = totalKm(runs, fromDaysAgo: 7, toDaysAgo: 0)
-        let chronic = totalKm(runs, fromDaysAgo: 28, toDaysAgo: 0) / 4
-        guard chronic >= 3 else { return nil }  // 주 평균 3km 미만이면 지표가 무의미하다
+        // 기록 4주 미만·주평균 3km 미만 가드는 공통 산식이 맡는다 (이슈 #49)
+        guard let load = Self.acwrLoad(runs: runs, now: now) else { return nil }
+        let (acute, chronic) = load
         let ratio = acute / chronic
         let value = String(format: "%.1f", ratio)
         let detail = voice == .plain

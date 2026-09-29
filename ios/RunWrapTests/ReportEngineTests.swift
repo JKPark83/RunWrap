@@ -51,7 +51,9 @@ struct ReportEngineTests {
         let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
                     run(daysAgo: 10, km: 10),
                     run(daysAgo: 17, km: 10),
-                    run(daysAgo: 24, km: 10)]
+                    run(daysAgo: 24, km: 10),
+                    // 이슈 #49: 가드 28일 — 최고령 기록을 창 밖(30일)에 둬 chronic 50/4=12.5 유지
+                    run(daysAgo: 30, km: 10)]
         let result = insight(.acwr, in: runs)
         #expect(result?.tone == .warning)
         #expect(result?.headline.contains("1.6배") == true)
@@ -59,7 +61,9 @@ struct ReportEngineTests {
 
     @Test("부하가 4주 평균과 비슷하면 적정 판정")
     func acwrSteadyLoadIsPositive() {
-        let runs = stride(from: 2.0, through: 26, by: 3).map { run(daysAgo: $0, km: 5) }
+        // 이슈 #49: 가드 28일 — through 26→29로 최고령 기록(29일)을 창 밖에 둔다.
+        // 창 안은 그대로 2…26일 9회 → chronic 45/4=11.25, acute(2·5일) 10 → 0.89 적정
+        let runs = stride(from: 2.0, through: 29, by: 3).map { run(daysAgo: $0, km: 5) }
         let result = insight(.acwr, in: runs)
         #expect(result?.tone == .positive)
         #expect(result?.headline.contains("적정") == true)
@@ -69,6 +73,29 @@ struct ReportEngineTests {
     func acwrNeedsThreeWeeksOfHistory() {
         let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 10), run(daysAgo: 14, km: 10)]
         #expect(insight(.acwr, in: runs) == nil)
+    }
+
+    @Test("기록이 21~27일치면 ACWR을 내지 않는다 — 만성 분모 과소 방지 (이슈 #49)",
+          arguments: [21.0, 24.0, 27.9])
+    func acwrNeedsFourWeeksOfHistory(oldestDaysAgo: Double) {
+        // 옛 산식(21일 가드)이면 21일치 이력에서 50/4=12.5 → 20/12.5=1.6(부상 위험)이지만,
+        // 실제 3주 주평균은 50/3≈16.7 → 1.2(적정)다. 분모가 부풀려지므로 내지 않는다.
+        let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
+                    run(daysAgo: 10, km: 10), run(daysAgo: 17, km: 10),
+                    run(daysAgo: oldestDaysAgo, km: 10)]
+        #expect(insight(.acwr, in: runs) == nil)
+    }
+
+    @Test("기록이 정확히 28일이면 ACWR을 낸다 — 가드 경계 (이슈 #49)")
+    func acwrAtExactlyFourWeeks() {
+        // 최고령 기록이 now-28일 정각 → 가드(<=) 통과, 창 시작(>=)에도 포함.
+        // acute 2·4일 = 20, chronic 50/4 = 12.5 → 1.6
+        let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
+                    run(daysAgo: 10, km: 10), run(daysAgo: 17, km: 10),
+                    run(daysAgo: 28, km: 10)]
+        let result = insight(.acwr, in: runs)
+        #expect(result?.tone == .warning)
+        #expect(result?.headline.contains("1.6배") == true)
     }
 
     // MARK: 심박 효율

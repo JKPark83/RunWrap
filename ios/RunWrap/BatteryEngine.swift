@@ -161,7 +161,10 @@ enum BatteryEngine {
                                  systemImage: "figure.run"))
         }
 
-        if let ratio = acwr(runs, now: now), ratio > 1.3 {
+        // ReportEngine과 같은 ACWR 산식·가드 (기록 4주 이상, 만성 주평균 3km 이상 — 이슈 #49)
+        if let load = ReportEngine.acwrLoad(runs: runs, now: now),
+           load.acute / load.chronic > 1.3 {
+            let ratio = load.acute / load.chronic
             factors.append(.init(name: "훈련 부하",
                                  detail: String(format: "부하 비율 %.2f", ratio),
                                  points: -min(15, Int(((ratio - 1.3) * 25).rounded())),
@@ -214,21 +217,5 @@ enum BatteryEngine {
         return runs.filter { $0.start >= dayStart && $0.start <= now }
             .compactMap(\.distanceKm)
             .reduce(0, +)
-    }
-
-    /// ReportEngine과 같은 가드의 ACWR — 3주 미만 기록이거나 주평균 3km 미만이면 nil
-    private static func acwr(_ runs: [RunSummary], now: Date) -> Double? {
-        guard let oldest = runs.map(\.start).min(),
-              oldest <= now.addingTimeInterval(-21 * 86_400) else { return nil }
-        func windowKm(_ days: Double) -> Double {
-            let from = now.addingTimeInterval(-days * 86_400)
-            return runs.filter { $0.start >= from && $0.start <= now }
-                .compactMap(\.distanceKm)
-                .reduce(0, +)
-        }
-        let acute = windowKm(7)
-        let chronic = windowKm(28) / 4
-        guard chronic >= 3 else { return nil }
-        return acute / chronic
     }
 }

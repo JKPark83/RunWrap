@@ -36,7 +36,32 @@ struct ReportMetricsTests {
         let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
                     run(daysAgo: 10, km: 10),
                     run(daysAgo: 17, km: 10),
-                    run(daysAgo: 24, km: 10)]
+                    run(daysAgo: 24, km: 10),
+                    // 이슈 #49: 가드 28일 — 최고령 기록을 창 밖(30일)에 둬 chronic 50/4=12.5 유지
+                    run(daysAgo: 30, km: 10)]
+        let card = try #require(engine.weeklyReport(from: runs).acwr)
+        #expect(abs(card.acute - 20) < 0.01)
+        #expect(abs(card.chronic - 12.5) < 0.01)
+        #expect(abs(card.ratio - 1.6) < 0.01)
+        #expect(card.tone == .overload)
+    }
+
+    @Test("ACWR 카드 — 기록이 21~27일치면 카드를 내지 않는다 (이슈 #49)",
+          arguments: [21.0, 24.0, 27.9])
+    func acwrCardNeedsFourWeeks(oldestDaysAgo: Double) {
+        // 옛 21일 가드였다면 분모 50/4=12.5로 1.6(과부하)이 나왔을 이력 — 실제 주평균은 더 크다
+        let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
+                    run(daysAgo: 10, km: 10), run(daysAgo: 17, km: 10),
+                    run(daysAgo: oldestDaysAgo, km: 10)]
+        #expect(engine.weeklyReport(from: runs).acwr == nil)
+    }
+
+    @Test("ACWR 카드 — 기록이 정확히 28일이면 카드를 낸다 (가드 경계, 이슈 #49)")
+    func acwrCardAtExactlyFourWeeks() throws {
+        // 최고령 now-28일 정각: 가드(<=)·창 시작(>=) 모두 포함 → acute 20, chronic 50/4=12.5
+        let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
+                    run(daysAgo: 10, km: 10), run(daysAgo: 17, km: 10),
+                    run(daysAgo: 28, km: 10)]
         let card = try #require(engine.weeklyReport(from: runs).acwr)
         #expect(abs(card.acute - 20) < 0.01)
         #expect(abs(card.chronic - 12.5) < 0.01)
