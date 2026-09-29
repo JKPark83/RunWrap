@@ -39,6 +39,8 @@ struct HomeScreen: View {
     /// 성장 상태가 바뀌는 지점(단계 상승·사이클 전환·승급)에서 CloudKit 스냅샷을 갱신한다 (이슈 #29)
     @EnvironmentObject private var backup: ProgressBackupStore
     @State private var showsCeremony = false
+    /// 수집 확정 때 도감 저장이 실패했는지 — 세러모니 위에 알림을 띄운다 (이슈 #67)
+    @State private var showsCollectFailed = false
     // PB 축하 (이슈 #21) — 홈 진입 때 베이스라인과 비교해 새 기록이면 한 번만 띄운다
     @State private var showsPBCongrats = false
     @State private var newPBs: [PersonalRecords.Entry] = []
@@ -128,6 +130,12 @@ struct HomeScreen: View {
                             goalLabel: pendingGoalLabel,
                             cycleStartedAt: cycleStartedAt) { newGoal, newSeconds in
                 startNewCycle(goal: newGoal, goalSeconds: newSeconds, now: Date())
+            }
+            // 세러모니는 저장 실패 시 닫히지 않으므로 알림도 그 위에 건다 — 홈에 걸면 커버에 가려진다
+            .alert("도감에 담지 못했어요", isPresented: $showsCollectFailed) {
+                Button("확인", role: .cancel) {}
+            } message: {
+                Text("저장 공간을 확인한 뒤 다시 시도해 주세요. 새는 그대로 기다리고 있어요.")
             }
         }
         .sheet(isPresented: $showsPBCongrats) {
@@ -511,11 +519,16 @@ struct HomeScreen: View {
     /// 사이클을 초기화한다 — 반대로 하면 저장에 실패했을 때 새를 잃는다.
     /// `cycleStartedAt`을 지금으로 옮기면 XP는 자동으로 0부터 다시 쌓인다
     /// (XP 원장을 저장하지 않는 설계라 리셋할 값이 따로 없다).
-    private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) {
-        collection.add(CollectionEngine.collect(distance: RaceDistance(rawValue: raceGoalRaw),
-                                                 goalSeconds: raceGoalSec,
-                                                 cycleStartedAt: cycleStartedAt,
-                                                 now: now))
+    /// - Returns: 도감 저장 성공 여부. 실패하면 사이클을 그대로 두고 알림만 띄운다 (이슈 #67)
+    private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) -> Bool {
+        let saved = collection.add(CollectionEngine.collect(distance: RaceDistance(rawValue: raceGoalRaw),
+                                                             goalSeconds: raceGoalSec,
+                                                             cycleStartedAt: cycleStartedAt,
+                                                             now: now))
+        guard saved else {
+            showsCollectFailed = true
+            return false
+        }
         raceGoalRaw = goal?.rawValue ?? ""
         raceGoalSec = goalSeconds
         cycleStartedAtRaw = now.timeIntervalSince1970
@@ -523,6 +536,7 @@ struct HomeScreen: View {
         // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
         UserDefaults.standard.set(UUID().uuidString, forKey: GrowthKey.cycleID)
         scheduleBackup()
+        return true
     }
 
     /// 성장 상태 변경 직후의 스냅샷 백업 — 실패해도 다음 트리거에서 다시 올라간다

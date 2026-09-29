@@ -187,3 +187,45 @@ struct CollectionCacheTests {
         #expect(Set(loaded.map(\.id)).count == 2)
     }
 }
+
+/// 도감 스토어 수집 — 저장 성공 여부를 호출부에 돌려주는지 (이슈 #67).
+/// 실패를 삼키면 홈이 사이클을 초기화해 수집한 새를 잃는다.
+@Suite("도감 스토어 수집")
+@MainActor
+struct CollectionStoreAddTests {
+
+    private func makeBird() throws -> CollectedBird {
+        let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
+        return CollectionEngine.collect(distance: .half, goalSeconds: 0,
+                                        cycleStartedAt: now.addingTimeInterval(-30 * 86_400),
+                                        now: now)
+    }
+
+    @Test("저장에 성공하면 true — 메모리와 파일에 모두 남는다")
+    func addSucceeds() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("collection-store-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let bird = try makeBird()
+        let store = CollectionStore(directory: dir)
+        #expect(store.add(bird))
+        #expect(store.birds.count == 1)
+        #expect(CollectionCache.load(from: dir).count == 1)
+    }
+
+    @Test("저장에 실패하면 false — 메모리에도 넣지 않아 재시도 때 중복되지 않는다")
+    func addFailsWhenDirectoryIsFile() throws {
+        // 디렉터리 자리에 일반 파일을 둬서 file/collection.json 쓰기가 반드시 실패하게 한다
+        let notADirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("collection-store-file-\(UUID().uuidString)")
+        try Data("x".utf8).write(to: notADirectory)
+        defer { try? FileManager.default.removeItem(at: notADirectory) }
+
+        let bird = try makeBird()
+        let store = CollectionStore(directory: notADirectory)
+        #expect(!store.add(bird))
+        #expect(store.birds.isEmpty)
+    }
+}

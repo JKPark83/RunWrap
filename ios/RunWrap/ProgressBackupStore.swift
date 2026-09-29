@@ -141,6 +141,7 @@ final class ProgressBackupStore: ObservableObject {
     func backupIfChanged() async {
         // 복원 선택을 기다리는 동안은 올리지 않는다 — 답하기 전에 서버 본을 덮으면 묻는 의미가 없다
         guard !DemoMode.isActive, !isBackingUp, restoreCandidate == nil else { return }
+        // 도감은 파일에서 읽는다 — 저장에 실패한 새는 사이클도 넘어가지 않으므로 의도적으로 올리지 않는다 (이슈 #67)
         guard var local = ProgressSnapshot.readLocal(defaults: defaults,
                                                      birds: CollectionCache.load(),
                                                      now: Date()) else { return }
