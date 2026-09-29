@@ -151,7 +151,7 @@ struct ReportHomeContent: View {
     var guide: TrainingGuide? = nil
     /// 걷뛰 처방 — 런린이 전용 (§4). 사이클 시작 시각이 없으면 엔진이 nil을 준다
     var walkRun: WalkRunEngine.Plan? = nil
-    /// 대회 목표 상태 — 체력 배터리 카드 하단 섹션 재료 (이슈 #21). 샘플 시트에서는 nil
+    /// 대회 목표 상태 — 배터리 카드 아래 독립 카드 재료 (이슈 #21·#119). 샘플 시트에서는 nil
     var raceStatus: RaceOutlookEngine.Status? = nil
     /// 샘플 리포트 시트에서는 상세 이동 대신 배너를 단다
     var isSample = false
@@ -174,6 +174,9 @@ struct ReportHomeContent: View {
                 } else if !isSample {
                     batteryHintCard
                 }
+
+                // 배터리와 따로 그린다 — 배터리가 nil이어도 D-day·예상 기록은 보여야 한다 (이슈 #119)
+                if let raceStatus { raceOutlookCard(raceStatus) }
 
                 // 걷뛰는 런린이에게서 걷어낸 지표들(ACWR·EF·VO₂max·주법)의 자리를 대신 채운다.
                 // 그래서 위쪽 — 배터리 바로 다음 — 에 둔다 (§4 "더하는 차별화")
@@ -202,11 +205,14 @@ struct ReportHomeContent: View {
 
                 // 훈련 가이드 카드는 지금은 숨긴다 (이슈 #21) — 상세 화면의 가이드 섹션은 유지
 
-                if report.isEmpty { insufficientCard }
+                // 레벨 게이트까지 거친 판정 카드 기준 — 런린이가 숨겨진 ACWR·EF 때문에
+                // 안내 없이 빈 상세로 가지 않게 한다 (이슈 #119)
+                let visibleCards = report.visibleCards(level: level)
+                if visibleCards.isEmpty { insufficientCard }
 
-                if !isSample && !report.isEmpty {
+                if !isSample && !visibleCards.isEmpty {
                     NavigationLink {
-                        ReportDetailScreen(report: report, guide: guide)
+                        ReportDetailScreen(report: report, level: level, guide: guide)
                     } label: {
                         HStack(spacing: 7) {
                             Text("리포트 자세히 보기")
@@ -446,10 +452,6 @@ struct ReportHomeContent: View {
                 .foregroundStyle(RR.text3)
                 .padding(.top, 13)
 
-            if let raceStatus {
-                raceOutlookSection(raceStatus)
-            }
-
             disclaimer("건강 상태를 진단하거나 의학적 조언을 하지 않습니다. 통증이나 이상이 있다면 전문가와 상담하세요.")
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
@@ -500,20 +502,32 @@ struct ReportHomeContent: View {
         .rrCard()
     }
 
-    // MARK: 대회 목표 섹션 (배터리 카드 하단, 이슈 #21)
+    // MARK: 대회 목표 카드 (배터리 카드 아래 독립 카드, 이슈 #21·#119)
 
-    /// 설정 상태에 따라 안내·D-day·예상 완주 기록을 보여준다.
+    /// 설정 상태에 따라 D-day·예상 완주 기록을 보여준다.
     /// 상태 판정은 RaceOutlookEngine이 한다 — 여기서는 switch로 그리기만.
+    /// 예전엔 배터리 카드 하단 섹션이라 배터리가 nil이면 함께 사라졌다 (이슈 #119).
+    /// 미설정이면 카드를 아예 그리지 않는다 — 설정 유도는 홈 브리핑이 맡는다.
+    @ViewBuilder
+    private func raceOutlookCard(_ status: RaceOutlookEngine.Status) -> some View {
+        if case .notConfigured = status {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Eyebrow(text: "race")
+                raceOutlookSection(status)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
+            .rrCard()
+        }
+    }
+
     @ViewBuilder
     private func raceOutlookSection(_ status: RaceOutlookEngine.Status) -> some View {
-        Divider().overlay(RR.line).padding(.top, 14)
         switch status {
         case .notConfigured:
-            Text("설정에서 대회 목표(레이스·기록·날짜)를 정하면 여기에 D-day와 예상 완주 기록이 떠요")
-                .font(.system(size: 11.5))
-                .lineSpacing(3)
-                .foregroundStyle(RR.text3)
-                .padding(.top, 12)
+            EmptyView()
         case .raceFinished(let race):
             Text("\(race.label) 대회 날짜가 지났어요 — 설정에서 다음 대회 목표를 정해 주세요")
                 .font(.system(size: 11.5))
@@ -600,10 +614,12 @@ struct ReportHomeContent: View {
 
     // MARK: 주간 거리 카드
 
-    /// `card`가 nil이면(이전 7일 3km 미만 — 증가율 가드) 차트만 그리고 증감 대신 안내 한 줄을 둔다
+    /// `card`가 nil이면(이전 7일 3km 미만 — 증가율 가드) 차트만 그리고 증감 대신 안내 한 줄을 둔다.
+    /// 런린이는 km 수치(막대 값·상한 라벨·하단 지표)를 감추고 문장만 남긴다 (§4 "문장만", 이슈 #119)
     private func distanceCard(_ card: WeeklyReport.DistanceCard?, weeks: [WeeklyReport.WeekBar]) -> some View {
         let overloaded = card?.tone == .overload
         let cap = overloaded ? card?.capKm : nil
+        let showsNumbers = ReportGate.showsNumbers(.distance, level: level)
         return VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "figure.run", title: "주간 거리", code: "DISTANCE",
                        tint: card?.tone.color ?? RR.brand, soft: card?.tone.softColor ?? RR.brandSoft,
@@ -624,10 +640,11 @@ struct ReportHomeContent: View {
             WeeklyBarsChart(weeks: weeks,
                             currentColor: overloaded ? RR.dang : RR.brand,
                             cap: cap,
-                            capLabel: cap.map { String(format: "+10%% 상한 %.1f km", $0) })
+                            capLabel: showsNumbers ? cap.map { String(format: "+10%% 상한 %.1f km", $0) } : nil,
+                            showsValues: showsNumbers)
                 .padding(.top, 16)
 
-            if let card {
+            if let card, showsNumbers {
                 Divider().overlay(RR.line).padding(.top, 12)
 
                 HStack(spacing: 8) {

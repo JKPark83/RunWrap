@@ -3,6 +3,8 @@ import SwiftUI
 /// 리포트 요약 — 최근 7일 지표를 문장 + 근거 수치 + 용어 설명으로 풀어낸다 (시안 "리포트 요약")
 struct ReportDetailScreen: View {
     let report: WeeklyReport
+    /// 레벨 — 홈과 같은 게이트(ReportGate)로 섹션·수치 노출을 정한다 (이슈 #119)
+    let level: RunnerLevel
     /// 훈련 가이드 — 목표 레이스 설정 시에만 값이 온다 (계획서 M7)
     var guide: TrainingGuide? = nil
 
@@ -18,9 +20,14 @@ struct ReportDetailScreen: View {
                 }
                 .padding(.bottom, 10)
 
-                if let distance = report.distance { distanceSection(distance) }
-                if let acwr = report.acwr { acwrSection(acwr) }
-                if let efficiency = report.efficiency { efficiencySection(efficiency) }
+                // 미노출 가드(엔진 nil) AND 레벨 게이트 — 홈 카드와 같은 순서 (ReportGate 주석)
+                if let distance = report.distance, ReportGate.shows(.distance, level: level) {
+                    distanceSection(distance)
+                }
+                if let acwr = report.acwr, ReportGate.shows(.acwr, level: level) { acwrSection(acwr) }
+                if let efficiency = report.efficiency, ReportGate.shows(.efficiency, level: level) {
+                    efficiencySection(efficiency)
+                }
 
                 if let guide {
                     if let prediction = guide.prediction { predictionSection(prediction) }
@@ -63,17 +70,26 @@ struct ReportDetailScreen: View {
 
     // MARK: 섹션
 
+    /// 런린이는 km 수치 없이 문장만 (§4 "문장만", 이슈 #119) — 문장의 km도 빼고 지표 줄은 비운다
     private func distanceSection(_ card: WeeklyReport.DistanceCard) -> some View {
-        let sentence = card.overKm > 0
-            ? String(format: "권장 상한 %.1f km를 %.1f km 넘겼습니다.", card.capKm, card.overKm)
-            : String(format: "권장 상한 %.1f km 안에서 달렸습니다.", card.capKm)
+        let showsNumbers = ReportGate.showsNumbers(.distance, level: level)
+        let sentence: String
+        if showsNumbers {
+            sentence = card.overKm > 0
+                ? String(format: "권장 상한 %.1f km를 %.1f km 넘겼습니다.", card.capKm, card.overKm)
+                : String(format: "권장 상한 %.1f km 안에서 달렸습니다.", card.capKm)
+        } else {
+            sentence = card.overKm > 0 ? "권장 상한을 넘겨 달렸습니다." : "권장 상한 안에서 달렸습니다."
+        }
         let changeText = String(format: "%@%.1f%%", card.changePct >= 0 ? "+" : "−", abs(card.changePct))
         return section(color: card.tone == .steady ? RR.brand : card.tone.color,
                        title: "주간 거리 · 10% 규칙",
                        sentence: sentence,
-                       metrics: [(Format.km(card.recent7Km) + " km", RR.text2),
-                                 (changeText, RR.text2),
-                                 (String(format: "상한 %.1f km", card.capKm), RR.text2)],
+                       metrics: showsNumbers
+                           ? [(Format.km(card.recent7Km) + " km", RR.text2),
+                              (changeText, RR.text2),
+                              (String(format: "상한 %.1f km", card.capKm), RR.text2)]
+                           : [],
                        explainTitle: "10% 규칙이란",
                        explainBody: "주간 거리를 직전 주 대비 10% 이내로 늘려야 몸이 적응할 시간이 생긴다는 경험칙.")
     }
@@ -221,17 +237,19 @@ struct ReportDetailScreen: View {
                 .foregroundStyle(RR.text)
                 .padding(.top, 11)
 
-            HStack(spacing: 8) {
-                ForEach(Array(metrics.enumerated()), id: \.offset) { index, metric in
-                    if index > 0 {
-                        Text("·").foregroundStyle(RR.text3)
+            if !metrics.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(Array(metrics.enumerated()), id: \.offset) { index, metric in
+                        if index > 0 {
+                            Text("·").foregroundStyle(RR.text3)
+                        }
+                        Text(metric.0)
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(metric.1)
                     }
-                    Text(metric.0)
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(metric.1)
                 }
+                .padding(.top, 13)
             }
-            .padding(.top, 13)
 
             VStack(alignment: .leading, spacing: 7) {
                 Text(explainTitle)

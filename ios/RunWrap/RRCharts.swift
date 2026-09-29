@@ -17,6 +17,8 @@ struct WeeklyBarsChart: View {
     var valueText: (Double) -> String = { Format.km($0) + " km" }
     /// 막대 위 상시 표시용 짧은 수치 — 단위 없이 숫자만 (슬롯 폭이 좁다)
     var barValueText: (Double) -> String = { Format.km($0) }
+    /// false면 막대 위 값과 콜아웃 수치를 감춘다 — 런린이 주간 거리 "문장만" (§4, 이슈 #119)
+    var showsValues = true
 
     @State private var selected: Int? = nil   // WeekBar.index
 
@@ -62,7 +64,7 @@ struct WeeklyBarsChart: View {
                 HStack(alignment: .bottom, spacing: 0) {
                     ForEach(weeks) { week in
                         VStack(spacing: 3) {
-                            if week.km > 0 {
+                            if showsValues, week.km > 0 {
                                 Text(barValueText(week.km))
                                     .font(.system(size: 8.5,
                                                   weight: week.isCurrent ? .semibold : .regular,
@@ -100,7 +102,7 @@ struct WeeklyBarsChart: View {
                 }
 
                 if let selected, let week = weeks.first(where: { $0.index == selected }) {
-                    ChartCallout(text: "\(week.label) · \(valueText(week.km))")
+                    ChartCallout(text: showsValues ? "\(week.label) · \(valueText(week.km))" : week.label)
                         .position(x: calloutX(slot: slot, width: width, index: selected), y: 13)
                 }
             }

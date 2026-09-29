@@ -114,6 +114,31 @@ struct ReportGateTests {
         #expect(report.acwr != nil)
         #expect(report.efficiency != nil)
     }
+
+    // MARK: 보이는 판정 카드 — 표본 부족 안내·상세 링크 판정 (이슈 #119)
+
+    @Test("보이는 카드 — 런린이는 거리 판정 없이 ACWR만 있으면 빈 배열(표본 부족 안내), 런잘알은 ACWR")
+    func visibleCardsRespectLevelGate() {
+        // 0~6일 전 + 14~28일 전 매일 5km, 심박 없음. 7~13일 전(이전 7일 창)이 비어
+        // 거리 가드(이전 7일 3km)에 걸리고, 기록 28일·만성 주평균 3km 이상이라 ACWR은 나온다.
+        // 심박이 없어 EF 표본도 없다
+        let runs = (Array(0...6) + Array(14...28)).map { run(daysAgo: Double($0), km: 5, hr: nil) }
+        let report = ReportEngine(now: now, level: .beginner).weeklyReport(from: runs)
+        #expect(report.distance == nil)
+        #expect(report.acwr != nil)
+        #expect(report.efficiency == nil)
+
+        #expect(report.visibleCards(level: .beginner).isEmpty)
+        #expect(report.visibleCards(level: .intermediate) == [.acwr])
+        #expect(report.visibleCards(level: .advanced) == [.acwr])
+    }
+
+    @Test("보이는 카드 — 표본이 충분하면 런린이는 거리만, 런잘알은 거리·ACWR·EF")
+    func visibleCardsWithRichSample() {
+        let report = ReportEngine(now: now, level: .intermediate).weeklyReport(from: richRuns)
+        #expect(report.visibleCards(level: .beginner) == [.distance])
+        #expect(report.visibleCards(level: .intermediate) == [.distance, .acwr, .efficiency])
+    }
 }
 
 /// 걷뛰 처방 엔진 검증 — 주차 점증과 미노출 가드

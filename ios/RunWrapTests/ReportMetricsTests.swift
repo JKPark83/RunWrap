@@ -176,7 +176,7 @@ struct ReportMetricsTests {
         #expect(report.distance == nil)   // 기준 주 3km 미만
         #expect(report.acwr == nil)       // 기록 3주 미만
         #expect(report.efficiency == nil) // 표본 3개 미만
-        #expect(report.isEmpty)
+        #expect(report.visibleCards(level: .advanced).isEmpty)
     }
 
     @Test("월간 통계 — 8월 집계와 지난달 같은 날짜까지 비교")
