@@ -63,6 +63,9 @@ enum CourseSupplyEngine {
         let lons = course.map(\.lon)
         let refLat = (lats.min()! + lats.max()!) / 2
         let lonScale = metersPerDegree * cos(refLat * .pi / 180)
+        // 위도가 범위 밖이거나 비유한이면 축척이 0 이하·NaN — 아래 lonPad가 음수가 되어
+        // 하한 > 상한인 ClosedRange를 만들며 트랩한다. 파서가 걸러도 엔진이 직접 막는다 (감사 M12)
+        guard lonScale > 0 else { return nil }
         let origin = course[0]
         let xy = course.map { p in
             (x: (p.lon - origin.lon) * lonScale, y: (p.lat - origin.lat) * metersPerDegree)
@@ -75,7 +78,7 @@ enum CourseSupplyEngine {
             cumulative.append(cumulative[i - 1] + d)
         }
         let totalMeters = cumulative.last!
-        guard totalMeters >= minCourseMeters else { return nil }
+        guard totalMeters.isFinite, totalMeters >= minCourseMeters else { return nil }
 
         // 코스 bbox + 버퍼로 1차 필터 — 전국 55,000건 중 코스 주변만 정밀 계산 (계획서 M12-2)
         let buffer = max(300, radiusMeters)

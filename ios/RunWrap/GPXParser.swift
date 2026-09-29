@@ -28,7 +28,11 @@ enum GPXParser {
                     attributes attributeDict: [String: String]) {
             guard elementName == "trkpt" || elementName == "rtept",
                   let lat = attributeDict["lat"].flatMap(Double.init),
-                  let lon = attributeDict["lon"].flatMap(Double.init) else { return }
+                  let lon = attributeDict["lon"].flatMap(Double.init),
+                  // 범위 밖·비유한 좌표(lat 120, nan, inf 등)는 조용히 버린다 — 엔진의 경도 축척이
+                  // 0 이하·NaN이 되어 크래시를 낸 원인이다 (2026-09-29 감사 M12)
+                  lat.isFinite, lon.isFinite,
+                  (-90...90).contains(lat), (-180...180).contains(lon) else { return }
             let point = GeoPoint(lat: lat, lon: lon)
             if elementName == "trkpt" {
                 trackPoints.append(point)
