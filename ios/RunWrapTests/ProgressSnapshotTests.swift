@@ -261,33 +261,73 @@ struct ProgressSnapshotTests {
         #expect(defaults.integer(forKey: ProfileKey.hrMaxManual) == 0)
     }
 
-    @Test("주간 목표 변경 기록 왕복 — apply→readLocal로 보존되고, 기록 없음은 nil·옛 JSON도 디코드된다")
+    @Test("주간 목표 변경 이력 왕복 — apply→readLocal로 전부 보존되고, 이력 없음은 nil·#108 이전 JSON도 디코드된다")
     func weeklyGoalChangeRoundTrip() throws {
         let defaults = Self.freshDefaults("weeklyGoalChange")
+        let history = [WeeklyGoalChange(at: Self.date("2026-07-16T00:00:00Z"), before: 3),
+                       WeeklyGoalChange(at: Self.date("2026-08-12T00:00:00Z"), before: 1)]
         var snapshot = Self.makeSnapshot()
-        snapshot.weeklyGoalChangedAt = Self.date("2026-08-12T00:00:00Z")
-        snapshot.weeklyGoalBefore = 3
+        snapshot.weeklyGoalChanges = history
         snapshot.apply(to: defaults)
 
         let read = try #require(ProgressSnapshot.readLocal(
             defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
-        #expect(read.weeklyGoalChangedAt == Self.date("2026-08-12T00:00:00Z"))
-        #expect(read.weeklyGoalBefore == 3)
+        #expect(read.weeklyGoalChanges == history)
+        let reencoded = try JSONDecoder().decode(ProgressSnapshot.self, from: JSONEncoder().encode(snapshot))
+        #expect(reencoded.weeklyGoalChanges == history)
 
         // nil 옵셔널은 키 자체가 빠진다 — 이슈 #108 이전 본과 같은 JSON이 nil로 디코드된다
         let data = try JSONEncoder().encode(Self.makeSnapshot())
         let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        #expect(object["weeklyGoalChangedAt"] == nil)
+        #expect(object["weeklyGoalChanges"] == nil)
         let decoded = try JSONDecoder().decode(ProgressSnapshot.self, from: data)
-        #expect(decoded.weeklyGoalChangedAt == nil)
-        #expect(decoded.weeklyGoalBefore == nil)
+        #expect(decoded.weeklyGoalChanges == nil)
 
-        // 스냅샷이 단일 원본 — 기록 없는 본을 적용하면 로컬 기록도 지워져 readLocal이 nil로 읽는다
+        // 스냅샷이 단일 원본 — 이력 없는 본을 적용하면 로컬 이력도 지워져 readLocal이 nil로 읽는다
         decoded.apply(to: defaults)
         let readCleared = try #require(ProgressSnapshot.readLocal(
             defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
-        #expect(readCleared.weeklyGoalChangedAt == nil)
-        #expect(readCleared.weeklyGoalBefore == nil)
+        #expect(readCleared.weeklyGoalChanges == nil)
+    }
+
+    @Test("#108 스냅샷 흡수 — weeklyGoalChangedAt·weeklyGoalBefore만 있는 옛 JSON은 1건짜리 이력으로 디코드되고, 다시 인코드하면 새 필드만 쓴다 (이슈 #116)")
+    func legacyWeeklyGoalChangeSnapshotDecodes() throws {
+        // #108 인코더와 같은 모양 — Date는 JSONEncoder 기본 전략(2001 기준 초)으로 적힌다
+        let changedAt = Self.date("2026-08-12T00:00:00Z")
+        var object = try #require(try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(Self.makeSnapshot())) as? [String: Any])
+        object["weeklyGoalChangedAt"] = changedAt.timeIntervalSinceReferenceDate
+        object["weeklyGoalBefore"] = 3
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self, from: legacyData)
+        #expect(decoded.weeklyGoalChanges == [WeeklyGoalChange(at: changedAt, before: 3)])
+
+        let reencoded = try #require(try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(decoded)) as? [String: Any])
+        #expect(reencoded["weeklyGoalChangedAt"] == nil)
+        #expect(reencoded["weeklyGoalBefore"] == nil)
+        #expect(reencoded["weeklyGoalChanges"] != nil)
+    }
+
+    @Test("옛 두 키 이관 — #108의 변경 시각·이전 목표 키는 첫 읽기 때 1건짜리 이력으로 옮겨지고 지워진다 (이슈 #116)")
+    func legacyWeeklyGoalKeysMigrate() {
+        let defaults = Self.freshDefaults("legacyWeeklyGoalKeys")
+        let changedAt = Self.date("2026-08-12T00:00:00Z")
+        defaults.set(changedAt.timeIntervalSince1970, forKey: WeeklyGoalChangeLog.legacyChangedAtKey)
+        defaults.set(3, forKey: WeeklyGoalChangeLog.legacyBeforeKey)
+
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults) == [WeeklyGoalChange(at: changedAt, before: 3)])
+        // 옛 키는 지워지고 새 키 하나에 남는다 — 다시 읽어도 같은 이력
+        #expect(defaults.object(forKey: WeeklyGoalChangeLog.legacyChangedAtKey) == nil)
+        #expect(defaults.object(forKey: WeeklyGoalChangeLog.legacyBeforeKey) == nil)
+        #expect(defaults.data(forKey: ProfileKey.weeklyGoalChanges) != nil)
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults) == [WeeklyGoalChange(at: changedAt, before: 3)])
+
+        // 아무 기록도 없으면 빈 이력이고 새 키를 만들지 않는다
+        let empty = Self.freshDefaults("noWeeklyGoalKeys")
+        #expect(WeeklyGoalChangeLog.load(defaults: empty).isEmpty)
+        #expect(empty.data(forKey: ProfileKey.weeklyGoalChanges) == nil)
     }
 
     @Test("사이클 목표 왕복 — 설정 목표와 다른 사이클 목표가 인코딩·디코딩과 apply→readLocal로 보존된다 (이슈 #110)")

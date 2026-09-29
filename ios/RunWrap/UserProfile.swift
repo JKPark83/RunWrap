@@ -104,11 +104,9 @@ enum ProfileKey {
     static let purposes = "profile.purposes"
     /// 주간 러닝 목표 횟수 — 성장 XP의 주간 보너스 분모이자 홈 목표 칩의 기준
     static let weeklyGoal = "profile.weeklyGoal"
-    /// 주간 목표를 마지막으로 바꾼 시각 (timeIntervalSince1970) — 0이면 변경 없음.
-    /// 바뀐 목표는 다음 주부터 보너스 판정에 적용한다 — 변경한 주까지는 `weeklyGoalBefore`로 판정 (이슈 #108)
-    static let weeklyGoalChangedAt = "profile.weeklyGoalChangedAt"
-    /// 주간 목표 변경 직전 값 — 같은 주에 여러 번 바꾸면 그 주 첫 변경 전 값 (이슈 #108)
-    static let weeklyGoalBefore = "profile.weeklyGoalBefore"
+    /// 주간 목표 변경 이력 (`[WeeklyGoalChange]` JSON Data) — 없으면 변경 없음.
+    /// 바뀐 목표는 다음 주부터 보너스 판정에 적용한다 (이슈 #108, #116). 읽기·쓰기는 `WeeklyGoalChangeLog`로만 한다
+    static let weeklyGoalChanges = "profile.weeklyGoalChanges"
     /// 온보딩 완료 시각 (timeIntervalSince1970)
     static let onboardedAt = "profile.onboardedAt"
     /// 승급 제안을 거절한 시각 — 4주간 다시 묻지 않는다 (§3)
@@ -127,6 +125,46 @@ enum ProfileKey {
     static let restingHRManual = "profile.restingHRManual"
     /// 심박 존 방식 (HeartRateZoneMethod rawValue) — 빈 문자열이면 %HRmax (이슈 #56)
     static let hrZoneMethod = "profile.hrZoneMethod"
+}
+
+/// 주간 목표 변경 이력 읽기·쓰기 — 저장 형식과 옛 키 이관을 한곳에 둔다 (이슈 #116).
+///
+/// #108은 (시각, 이전 목표) 1건을 두 키에 따로 저장했다. 첫 읽기 때 그 두 키를 1건짜리 이력으로
+/// 옮기고 지운다 — 홈·설정·재진단·백업 중 어디서 먼저 읽어도 같은 결과가 되도록 `load`가 처리한다.
+enum WeeklyGoalChangeLog {
+    /// #108의 옛 키 — 마지막 변경 시각(timeIntervalSince1970, 0이면 없음)과 변경 직전 목표. 이관용으로만 읽는다
+    static let legacyChangedAtKey = "profile.weeklyGoalChangedAt"
+    static let legacyBeforeKey = "profile.weeklyGoalBefore"
+
+    /// 저장된 이력(시각 오름차순). 새 키가 없고 옛 두 키가 있으면 1건짜리 이력으로 이관해 돌려준다
+    static func load(defaults: UserDefaults) -> [WeeklyGoalChange] {
+        if let data = defaults.data(forKey: ProfileKey.weeklyGoalChanges) {
+            return decode(data)
+        }
+        let legacyAt = defaults.double(forKey: legacyChangedAtKey)
+        guard legacyAt > 0 else { return [] }
+        let history = [WeeklyGoalChange(at: Date(timeIntervalSince1970: legacyAt),
+                                        before: defaults.integer(forKey: legacyBeforeKey))]
+        save(history, defaults: defaults)
+        return history
+    }
+
+    /// 이력을 저장한다 — 비어 있으면 키를 지운다. 옛 키는 항상 지워 이관이 되살아나지 않게 한다
+    static func save(_ history: [WeeklyGoalChange], defaults: UserDefaults) {
+        if history.isEmpty {
+            defaults.removeObject(forKey: ProfileKey.weeklyGoalChanges)
+        } else {
+            defaults.set(try? JSONEncoder().encode(history), forKey: ProfileKey.weeklyGoalChanges)
+        }
+        defaults.removeObject(forKey: legacyChangedAtKey)
+        defaults.removeObject(forKey: legacyBeforeKey)
+    }
+
+    /// 저장 Data → 이력. 깨진 값은 변경 없음으로 읽는다
+    static func decode(_ data: Data?) -> [WeeklyGoalChange] {
+        guard let data else { return [] }
+        return (try? JSONDecoder().decode([WeeklyGoalChange].self, from: data)) ?? []
+    }
 }
 
 /// 성장 시스템 저장 키 (기획서 §5).

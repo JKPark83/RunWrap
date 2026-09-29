@@ -27,9 +27,8 @@ struct HomeScreen: View {
     /// 주간 목표 — 온보딩 Q5에서 항상 먼저 쓰이므로 이 기본값은 사실상 안전망이다.
     /// 값은 `OnboardingFlowScreen`의 미응답 기본값(2)과 맞춰 둔다
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
-    /// 주간 목표 변경 기록 (이슈 #108) — 0이면 변경 없음. 설정 화면이 기록한다
-    @AppStorage(ProfileKey.weeklyGoalChangedAt) private var weeklyGoalChangedAtRaw = 0.0
-    @AppStorage(ProfileKey.weeklyGoalBefore) private var weeklyGoalBefore = 0
+    /// 주간 목표 변경 이력 (이슈 #108, #116) — 설정·재진단이 기록한다. 바뀌면 다시 그리도록 관찰한다
+    @AppStorage(ProfileKey.weeklyGoalChanges) private var weeklyGoalChangesData: Data?
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @AppStorage(ProfileKey.promotionDeclinedAt) private var promotionDeclinedAtRaw = 0.0
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
@@ -120,7 +119,7 @@ struct HomeScreen: View {
                                         cycleStartedAt: cycleStartedAt,
                                         maxStage: maxStage,
                                         weeklyGoal: weeklyGoal,
-                                        weeklyGoalChange: weeklyGoalChange,
+                                        weeklyGoalChanges: weeklyGoalChanges,
                                         now: now)
         let level = RunnerLevel(rawValue: levelRaw) ?? .beginner
         let promotion = promotionOffer(runs: runs, level: level, now: now)
@@ -502,10 +501,12 @@ struct HomeScreen: View {
         return .distantPast
     }
 
-    /// 주간 목표 변경 기록 — 미기록(0)이면 nil이라 모든 주를 현재 목표로 판정한다 (이슈 #108)
-    private var weeklyGoalChange: (at: Date, before: Int)? {
-        guard weeklyGoalChangedAtRaw > 0 else { return nil }
-        return (Date(timeIntervalSince1970: weeklyGoalChangedAtRaw), weeklyGoalBefore)
+    /// 주간 목표 변경 이력 — 비어 있으면 모든 주를 현재 목표로 판정한다 (이슈 #108, #116).
+    /// 새 키가 아직 없으면 읽기 헬퍼가 #108의 옛 두 키를 1건짜리 이력으로 이관한다 — 첫 렌더부터
+    /// 옛 기록으로 판정해야 이관 전 계산이 maxStage를 부풀리지 않는다
+    private var weeklyGoalChanges: [WeeklyGoalChange] {
+        if let weeklyGoalChangesData { return WeeklyGoalChangeLog.decode(weeklyGoalChangesData) }
+        return WeeklyGoalChangeLog.load(defaults: .standard)
     }
 
     /// 이번 사이클 목표 — 키가 아직 없으면 현재 목표로 대신한다 (보정 저장 전 첫 렌더 대비)

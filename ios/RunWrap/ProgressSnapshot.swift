@@ -9,7 +9,7 @@ import Foundation
 /// 이 파일은 Foundation만 알아 순수 로직으로 테스트한다.
 struct ProgressSnapshot: Codable, Equatable {
     /// 현재 스키마 버전 — 필드가 바뀌면 올리고, 병합·복원은 이 값 이하만 받는다.
-    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 기록(이슈 #108)·사이클 목표 필드(이슈 #110)는 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
+    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 이력(이슈 #108, #116)·사이클 목표 필드(이슈 #110)는 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
     /// 올리면 구버전 기기가 keepServer로 백업 자체를 멈춘다
     static let currentSchemaVersion = 1
 
@@ -39,10 +39,10 @@ struct ProgressSnapshot: Codable, Equatable {
     var restingHRManual: Int?
     var hrZoneMethodRaw: String?
 
-    /// 주간 목표 변경 기록 (이슈 #108) — nil = 변경 없음. 심박 필드와 같은 방식으로 옛 스냅샷도
-    /// 디코드된다. 복원 후에도 "바뀐 목표는 다음 주부터"가 유지되도록 함께 백업한다
-    var weeklyGoalChangedAt: Date?
-    var weeklyGoalBefore: Int?
+    /// 주간 목표 변경 이력 (이슈 #108, #116) — nil = 변경 없음. 복원 후에도 "바뀐 목표는 다음 주부터"가
+    /// 유지되도록 함께 백업한다. #108의 옛 두 필드(weeklyGoalChangedAt·weeklyGoalBefore)만 있는 스냅샷은
+    /// 디코드 때 1건짜리 이력으로 흡수하고, 인코드는 이 필드만 쓴다
+    var weeklyGoalChanges: [WeeklyGoalChange]?
     /// 사이클 시작 때 고정한 목표 (이슈 #110) — 새 종류 판정용. nil = 이 필드가 없던 옛 스냅샷이거나
     /// 로컬에 아직 사이클 목표 키가 없는 설치. 복원하면 raceGoal로 대체한다. #56 심박 필드와 같은 방식
     var cycleGoalRaw: String?
@@ -71,7 +71,7 @@ struct ProgressSnapshot: Codable, Equatable {
         let hrMaxManual = defaults.integer(forKey: ProfileKey.hrMaxManual)
         let restingHRManual = defaults.integer(forKey: ProfileKey.restingHRManual)
         let hrZoneMethodRaw = defaults.string(forKey: ProfileKey.hrZoneMethod) ?? ""
-        let weeklyGoalChangedAtRaw = defaults.double(forKey: ProfileKey.weeklyGoalChangedAt)
+        let weeklyGoalChanges = WeeklyGoalChangeLog.load(defaults: defaults)
         return ProgressSnapshot(
             schemaVersion: currentSchemaVersion,
             revision: 0,
@@ -90,8 +90,7 @@ struct ProgressSnapshot: Codable, Equatable {
             hrMaxManual: hrMaxManual > 0 ? hrMaxManual : nil,
             restingHRManual: restingHRManual > 0 ? restingHRManual : nil,
             hrZoneMethodRaw: hrZoneMethodRaw.isEmpty ? nil : hrZoneMethodRaw,
-            weeklyGoalChangedAt: weeklyGoalChangedAtRaw > 0 ? Date(timeIntervalSince1970: weeklyGoalChangedAtRaw) : nil,
-            weeklyGoalBefore: weeklyGoalChangedAtRaw > 0 ? defaults.integer(forKey: ProfileKey.weeklyGoalBefore) : nil,
+            weeklyGoalChanges: weeklyGoalChanges.isEmpty ? nil : weeklyGoalChanges,
             // 빈 문자열은 "목표 없음"이라 유효한 값 — 키가 없을 때만 nil이다
             cycleGoalRaw: defaults.string(forKey: GrowthKey.cycleGoal),
             cycleGoalSeconds: defaults.object(forKey: GrowthKey.cycleGoalSec) == nil
@@ -130,14 +129,8 @@ struct ProgressSnapshot: Codable, Equatable {
         } else {
             defaults.removeObject(forKey: ProfileKey.hrZoneMethod)
         }
-        // 주간 목표 변경 기록 (이슈 #108) — 심박 기준과 같이 nil이면 로컬 기록도 지운다
-        if let weeklyGoalChangedAt, let weeklyGoalBefore {
-            defaults.set(weeklyGoalChangedAt.timeIntervalSince1970, forKey: ProfileKey.weeklyGoalChangedAt)
-            defaults.set(weeklyGoalBefore, forKey: ProfileKey.weeklyGoalBefore)
-        } else {
-            defaults.removeObject(forKey: ProfileKey.weeklyGoalChangedAt)
-            defaults.removeObject(forKey: ProfileKey.weeklyGoalBefore)
-        }
+        // 주간 목표 변경 이력 (이슈 #108, #116) — 심박 기준과 같이 nil이면 로컬 이력도 지운다
+        WeeklyGoalChangeLog.save(weeklyGoalChanges ?? [], defaults: defaults)
     }
 
     /// 사이클 식별자를 읽고, 없으면 만들어 저장한다 — 이 기능 도입 전 사용자의
@@ -150,6 +143,47 @@ struct ProgressSnapshot: Codable, Equatable {
         let id = UUID()
         defaults.set(id.uuidString, forKey: GrowthKey.cycleID)
         return id
+    }
+}
+
+extension ProgressSnapshot {
+    /// #108의 옛 주간 목표 변경 필드 — 디코드 때 흡수만 한다 (이슈 #116)
+    private enum LegacyCodingKeys: String, CodingKey {
+        case weeklyGoalChangedAt, weeklyGoalBefore
+    }
+
+    /// 합성 디코더와 같되, `weeklyGoalChanges`가 없고 옛 두 필드가 있으면 1건짜리 이력으로 흡수한다 (이슈 #116).
+    /// 인코드는 합성 그대로라 옛 필드를 다시 쓰지 않는다
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        revision = try container.decode(Int.self, forKey: .revision)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        cycleID = try container.decode(UUID.self, forKey: .cycleID)
+        levelRaw = try container.decode(String.self, forKey: .levelRaw)
+        purposesRaw = try container.decode(String.self, forKey: .purposesRaw)
+        weeklyGoal = try container.decode(Int.self, forKey: .weeklyGoal)
+        onboardedAt = try container.decode(Date.self, forKey: .onboardedAt)
+        cycleStartedAt = try container.decode(Date.self, forKey: .cycleStartedAt)
+        maxStage = try container.decode(Int.self, forKey: .maxStage)
+        raceGoalRaw = try container.decode(String.self, forKey: .raceGoalRaw)
+        raceGoalSeconds = try container.decode(Int.self, forKey: .raceGoalSeconds)
+        raceDate = try container.decodeIfPresent(Date.self, forKey: .raceDate)
+        collectedBirds = try container.decode([CollectedBird].self, forKey: .collectedBirds)
+        hrMaxManual = try container.decodeIfPresent(Int.self, forKey: .hrMaxManual)
+        restingHRManual = try container.decodeIfPresent(Int.self, forKey: .restingHRManual)
+        hrZoneMethodRaw = try container.decodeIfPresent(String.self, forKey: .hrZoneMethodRaw)
+        cycleGoalRaw = try container.decodeIfPresent(String.self, forKey: .cycleGoalRaw)
+        cycleGoalSeconds = try container.decodeIfPresent(Int.self, forKey: .cycleGoalSeconds)
+
+        weeklyGoalChanges = try container.decodeIfPresent([WeeklyGoalChange].self, forKey: .weeklyGoalChanges)
+        if weeklyGoalChanges == nil {
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            if let at = try legacy.decodeIfPresent(Date.self, forKey: .weeklyGoalChangedAt),
+               let before = try legacy.decodeIfPresent(Int.self, forKey: .weeklyGoalBefore) {
+                weeklyGoalChanges = [WeeklyGoalChange(at: at, before: before)]
+            }
+        }
     }
 }
 
