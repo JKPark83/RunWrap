@@ -31,6 +31,24 @@ struct ReportMetricsTests {
         #expect(card.weeks.last?.isCurrent == true)
     }
 
+    @Test("최근 7일 창 — 헤더 날짜(6일 전 자정~지금)와 거리·횟수 창이 일치한다 (이슈 #75)")
+    func recentWindowMatchesHeaderDates() throws {
+        // now = 8.10 18:00 KST → 헤더 "8.4 – 8.10", 창은 8.4 00:00부터.
+        // 7일 전+2시간 = 8.3 20:00 → 롤링 7×86_400 안이지만 헤더 밖(8일째 날) → 이전 7일로
+        let calendar = Calendar.current
+        let windowStart = calendar.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
+        let eighthDay = run(daysAgo: 7 - 2.0 / 24, km: 5)
+        try #require(eighthDay.start < windowStart)  // 전제: 8일째 날 기록은 창 시작 전
+        let firstDay = RunSummary(id: UUID(), start: windowStart.addingTimeInterval(60),
+                                  durationSec: 4 * 360, distanceMeters: 4_000, avgHeartRate: 150)
+        let report = engine.weeklyReport(from: [eighthDay, firstDay])
+        #expect(report.dateRange == "8.4 – 8.10")
+        #expect(report.weekRunCount == 1)                             // 8.4 00:01만
+        let card = try #require(report.distance)
+        #expect(abs(card.recent7Km - 4) < 0.01)                       // 8.4 00:01 기록만
+        #expect(abs(card.previous7Km - 5) < 0.01)                     // 8.3 20:00 기록은 직전 7일
+    }
+
     @Test("ACWR 카드 — 급성 20 ÷ 만성 12.5 = 1.6, 과부하 톤")
     func acwrCardRatio() throws {
         let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
@@ -165,6 +183,36 @@ struct ReportMetricsTests {
         #expect(stats.comparisonDays == nil)
         #expect(stats.deltaCaption == "지난달 대비")
         #expect(stats.deltaPct != nil && abs(stats.deltaPct! - 25) < 0.01)  // 16→20km
+    }
+
+    @Test("월간 통계 — 진행 중인 달의 '주 N회'는 지난 날수로 나눈다 (이슈 #75)")
+    func currentMonthPerWeekUsesElapsedDays() {
+        // now = 9.3 09:00(로컬), 9.1·9.3 기록 2회 → 경과 3일(오늘 포함) → 2 ÷ (3/7) ≈ 4.67
+        // 월 전체 30일로 나누면 2 ÷ (30/7) ≈ 0.47로 과소 표시됐다.
+        // 로컬 달력으로 만들어 시간대와 무관하게 9월 안에 둔다
+        let calendar = Calendar.current
+        let september3 = calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9))!
+        let runs = [calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 9))!,
+                    calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 7))!]
+            .map { RunSummary(id: UUID(), start: $0, durationSec: 1_800,
+                              distanceMeters: 5_000, avgHeartRate: 150) }
+        let month = calendar.dateInterval(of: .month, for: september3)!.start
+        let stats = MonthlyStats.compute(runs: runs, month: month, now: september3)
+        #expect(stats.count == 2)
+        #expect(abs(stats.perWeek - 2 / (3.0 / 7)) < 0.05)
+    }
+
+    @Test("월간 통계 — 끝난 달의 '주 N회'는 월 전체 일수로 나눈다 (기존 동작 유지)")
+    func pastMonthPerWeekUsesWholeMonth() {
+        // now = 8.10에 6월(30일)을 본다 — 8회 ÷ (30/7) ≈ 1.87
+        let june = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 1))!
+        let runs = (0..<8).map { index in
+            RunSummary(id: UUID(), start: june.addingTimeInterval(Double(index) * 3 * 86_400 + 7 * 3_600),
+                       durationSec: 1_800, distanceMeters: 5_000, avgHeartRate: 150)
+        }
+        let stats = MonthlyStats.compute(runs: runs, month: june, now: now)
+        #expect(stats.count == 8)
+        #expect(abs(stats.perWeek - 8 / (30.0 / 7)) < 0.05)
     }
 
     @Test("월 목록 — 모든 기록이 다음 달이어도 이번 달 하나는 돌려준다 (이슈 #68)")

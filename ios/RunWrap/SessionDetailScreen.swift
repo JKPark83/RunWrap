@@ -174,11 +174,13 @@ struct SessionDetailScreen: View {
         return formatter.string(from: run.start)
     }
 
-    /// 과부하 주간에 이 세션이 최근 7일 거리의 40% 이상이면 맥락 배지
+    /// 과부하 주간에 이 세션이 최근 7일 거리의 40% 이상이면 맥락 배지.
+    /// 기간 판정은 분모(recent7Km)와 같은 창 — 6일 전 자정부터 (이슈 #75)
     private var contributionBadge: String? {
         guard let context = weeklyContext,
               let km = run.distanceKm, context.recent7Km > 0,
-              run.start >= Date().addingTimeInterval(-7 * 86_400) else { return nil }
+              run.start >= Calendar.current.startOfDay(for: Date().addingTimeInterval(-6 * 86_400))
+        else { return nil }
         let share = km / context.recent7Km
         guard share >= 0.4 else { return nil }
         return "이번 주 거리의 \(Int((share * 100).rounded()))%가 이 한 번에서 나왔어요"

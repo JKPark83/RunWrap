@@ -2,7 +2,8 @@ import Foundation
 
 /// 런미새 리포트('내 상태') 화면용 구조화 지표 — Insight(문장)와 같은 산식·가드를 쓰되,
 /// 카드/차트가 그릴 수 있도록 수치를 그대로 노출한다.
-/// 판정·헤더 표기는 달력 주가 아니라 롤링 최근 7일 기준이다 (이슈 #21).
+/// 판정·헤더 표기는 달력 주가 아니라 최근 7일 기준이다 (이슈 #21) — 헤더가 보여 주는
+/// "6일 전 자정 ~ 지금" 달력 창에 거리·횟수를 맞춘다 (이슈 #75). ACWR만 롤링 창이다.
 ///
 /// 산식과 미노출 가드는 ReportEngine 주석 참조. 여기서도 동일하게,
 /// 표본이 부족하면 해당 카드를 아예 만들지 않는다(nil).
@@ -18,8 +19,8 @@ struct WeeklyReport {
     struct DistanceCard {
         let tone: RRTone
         let weeks: [WeekBar]       // 기록 전체 달력 주, 최소 6주 (차트용 — 가로 스크롤)
-        let recent7Km: Double      // 롤링 최근 7일 (판정 기준)
-        let previous7Km: Double    // 롤링 이전 7일
+        let recent7Km: Double      // 최근 7일 — 헤더와 같은 달력 창 (판정 기준, 이슈 #75)
+        let previous7Km: Double    // 그 직전 달력 7일
         let capKm: Double          // 이전 7일 × 1.1 (10% 룰 상한)
         let changePct: Double
         var overKm: Double { recent7Km - capKm }
@@ -45,12 +46,12 @@ struct WeeklyReport {
         var paceDeltaSec: Double { previousPaceSec - recentPaceSec }  // 양수면 빨라짐
     }
 
-    let dateRange: String          // "8.15 – 8.21" — 롤링 최근 7일 (오늘 포함)
+    let dateRange: String          // "8.15 – 8.21" — 최근 7일 달력 날짜 (오늘 포함)
     let distance: DistanceCard?
     let acwr: AcwrCard?
     let efficiency: EfficiencyCard?
     let streakWeeks: Int           // 주 1회 이상 달린 ISO 주 연속 개수
-    let weekRunCount: Int          // 최근 7일 러닝 횟수 (streak 카드 캡션·알림 본문용)
+    let weekRunCount: Int          // 최근 7일(헤더와 같은 달력 창) 러닝 횟수 (streak 카드 캡션·알림 본문용)
 
     var isEmpty: Bool { distance == nil && acwr == nil && efficiency == nil }
 
@@ -83,7 +84,8 @@ extension ReportEngine {
         calendar.timeZone = .current
         let week = calendar.dateInterval(of: .weekOfYear, for: now)
             ?? DateInterval(start: now, duration: 7 * 86_400)
-        // 헤더 표기·횟수는 달력 주가 아니라 롤링 최근 7일 (이슈 #21) — 오늘 포함
+        // 헤더 표기·횟수는 달력 주가 아니라 최근 7일 (이슈 #21) — 오늘 포함.
+        // 헤더가 날짜로 표기하므로 횟수도 같은 달력 창으로 센다 (이슈 #75)
         let range = "\(shortDate(day(-6))) – \(shortDate(now))"
 
         return WeeklyReport(dateRange: range,
@@ -91,19 +93,22 @@ extension ReportEngine {
                             acwr: acwrCard(runs),
                             efficiency: efficiencyCard(runs),
                             streakWeeks: Self.streakWeeks(runs: runs, now: now),
-                            weekRunCount: runs.filter { $0.start >= day(-7) && $0.start < now }.count)
+                            weekRunCount: runs.filter { $0.start >= recentWindowStart && $0.start < now }.count)
     }
 
     // MARK: - 카드 계산
 
     private func distanceCard(_ runs: [RunSummary], calendar: Calendar,
                               currentWeek: DateInterval) -> WeeklyReport.DistanceCard? {
-        let recent = windowKm(runs, fromDaysAgo: 7, toDaysAgo: 0)
-        let previous = windowKm(runs, fromDaysAgo: 14, toDaysAgo: 7)
+        // 헤더("최근 7일 · 날짜")와 같은 달력 창, 이전 7일은 그 바로 앞 달력 7일 — 두 창이
+        // 맞붙어야 사이에 빠지는 기록이 없다 (이슈 #75)
+        let previousStart = Calendar.current.startOfDay(for: day(-13))
+        let recent = windowKm(runs, from: recentWindowStart, to: now)
+        let previous = windowKm(runs, from: previousStart, to: recentWindowStart)
         guard previous >= 3 else { return nil }  // ReportEngine과 동일 가드
         let change = (recent - previous) / previous * 100
 
-        // 차트: 기록 전체 달력 주 합계 (판정은 롤링 7일, 차트는 달력 주 — 라벨이 명확하다).
+        // 차트: 기록 전체 달력 주 합계 (판정은 헤더와 같은 최근 7일 달력 창, 차트는 달력 주 — 라벨이 명확하다).
         // 지난 주들은 차트의 가로 스크롤로 본다 — 최소 6주는 채워 그린다.
         let span = Self.chartWeekSpan(runs, calendar: calendar, currentWeek: currentWeek)
         let weeks: [WeeklyReport.WeekBar] = (0..<span).reversed().enumerated().map { index, back in
@@ -123,6 +128,8 @@ extension ReportEngine {
 
     private func acwrCard(_ runs: [RunSummary]) -> WeeklyReport.AcwrCard? {
         // 가드·산식은 리포트 문장과 공유한다 (이슈 #49 — 기록 4주 미만이면 nil)
+        // 급성·만성 부하는 7×86_400·28×86_400 롤링 창이 지표 정의라(Gabbett, 2016) 헤더의
+        // 달력 창(recentWindowStart)과 일부러 다르다 — 헤더에 맞추지 않는다 (이슈 #75)
         guard let load = Self.acwrLoad(runs: runs, now: now) else { return nil }
         let (acute, chronic) = load
         let ratio = acute / chronic
@@ -187,8 +194,14 @@ extension ReportEngine {
         now.addingTimeInterval(TimeInterval(offset) * 86_400)
     }
 
-    private func windowKm(_ runs: [RunSummary], fromDaysAgo: Int, toDaysAgo: Int) -> Double {
-        runs.filter { $0.start >= day(-fromDaysAgo) && $0.start < day(-toDaysAgo) }
+    /// '최근 7일' 헤더(6일 전 ~ 오늘)와 같은 달력 창의 시작 — 6일 전 자정 (이슈 #75)
+    private var recentWindowStart: Date {
+        Calendar.current.startOfDay(for: day(-6))
+    }
+
+    /// [from, to) 창에 시작된 러닝의 거리 합 (km)
+    private func windowKm(_ runs: [RunSummary], from: Date, to: Date) -> Double {
+        runs.filter { $0.start >= from && $0.start < to }
             .compactMap(\.distanceKm)
             .reduce(0, +)
     }
@@ -384,8 +397,11 @@ struct MonthlyStats {
         let previousInterval = calendar.dateInterval(of: .month, for: previousMonth)!
         let previousEnd: Date
         let comparisonDays: Int?
-        if interval.contains(now) {
-            let elapsed = (calendar.dateComponents([.day], from: interval.start, to: now).day ?? 0) + 1
+        // 진행 중인 달의 경과 일수(오늘 포함) — 비교 구간과 '주 N회' 분모가 함께 쓴다. 끝난 달은 nil
+        let elapsedDays: Int? = interval.contains(now)
+            ? (calendar.dateComponents([.day], from: interval.start, to: now).day ?? 0) + 1
+            : nil
+        if let elapsed = elapsedDays {
             // 지난달이 더 짧으면(예: 3월 30일 → 2월) 그 달 끝에서 멈춘다
             previousEnd = min(calendar.date(byAdding: .day, value: elapsed,
                                             to: previousInterval.start)!,
@@ -420,6 +436,9 @@ struct MonthlyStats {
         // 월 내 주차 (1일부터 7일 단위 — 달력 주 대신 단순 분할이 라벨과 맞다)
         let dayCount = calendar.range(of: .day, in: .month, for: month)!.count
         let weekCount = Int(ceil(Double(dayCount) / 7))
+        // '주 N회' 분모 — 진행 중인 달은 지난 날수만 센다. 월 전체 일수로 나누면 월초일수록
+        // 과소 표시된다 (이슈 #75: 9.3에 2회 → 0.5회가 아니라 4.7회)
+        let perWeekDays = elapsedDays.map { max(1, $0) } ?? dayCount
         let weeks: [WeeklyReport.WeekBar] = (0..<weekCount).map { index in
             let start = interval.start.addingTimeInterval(Double(index) * 7 * 86_400)
             let end = min(start.addingTimeInterval(7 * 86_400), interval.end)
@@ -449,7 +468,7 @@ struct MonthlyStats {
                             avgHeartRate: hr,
                             heartRateDelta: (hr != nil && previousHR != nil) ? hr! - previousHR! : nil,
                             count: inMonth.count,
-                            perWeek: Double(inMonth.count) / (Double(dayCount) / 7),
+                            perWeek: Double(inMonth.count) / (Double(perWeekDays) / 7),
                             totalDurationSec: inMonth.map(\.durationSec).reduce(0, +),
                             pacePoints: ordered.compactMap(\.paceSecPerKm),
                             heartRatePoints: ordered.compactMap(\.avgHeartRate),

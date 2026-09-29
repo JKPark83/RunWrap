@@ -70,11 +70,17 @@ struct NotificationContentTests {
         let report = WeeklyReport(dateRange: "8.3 – 8.9",
                                   distance: nil, acwr: nil, efficiency: nil,
                                   streakWeeks: 2, weekRunCount: 3)
-        // 2일 전 10km는 7일 창 안, 9일 전 10km는 창 밖 → weekKm 10
+        // 창은 6일 전 자정 ~ now (weekRunCount와 같은 창, 이슈 #75).
+        // 2일 전 10km는 창 안, 9일 전 10km는 창 밖.
+        // 8일째 날(창 시작 1분 전) 7km는 롤링 7×86_400 안이지만 창 밖 → weekKm 10
+        let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
         let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
                                durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150),
                     RunSummary(id: UUID(), start: now.addingTimeInterval(-9 * 86_400),
-                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
+                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150),
+                    RunSummary(id: UUID(), start: windowStart.addingTimeInterval(-60),
+                               durationSec: 2_100, distanceMeters: 7_000, avgHeartRate: 150)]
+        #expect(runs[2].start >= now.addingTimeInterval(-7 * 86_400))  // 전제: 롤링 7일 안
         let snapshot = ReportSnapshot.make(report: report, runs: runs, now: now)
         #expect(abs(snapshot.weekKm - 10) < 0.001)
         #expect(snapshot.runCount == 3)
