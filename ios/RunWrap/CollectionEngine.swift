@@ -5,13 +5,16 @@ import Foundation
 /// 매핑은 초안이고 **"서브3 = 백조"만 확정 축**이다. 나머지 경계는 에셋 수급과 함께
 /// 확정되므로(§12), 경계값을 `CollectionEngine.species(for:)` 한 곳에만 두고
 /// 화면·저장 어디에서도 다시 판정하지 않는다.
-enum BirdSpecies: String, Codable, CaseIterable {
+enum BirdSpecies: String, Codable, CaseIterable, Identifiable {
     case sparrow    // 참새
     case swallow    // 제비
     case falcon     // 매
     case goose      // 기러기
     case crane      // 두루미
     case swan       // 백조
+
+    /// 도감 이력 시트(`.sheet(item:)`)의 식별자 — 종 자체가 곧 식별자다
+    var id: Self { self }
 
     var label: String {
         switch self {
