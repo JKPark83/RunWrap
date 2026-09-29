@@ -67,7 +67,7 @@ struct NotificationContentTests {
 
     @Test("스냅샷 생성 — 최근 7일 거리 합과 횟수를 담는다")
     func snapshotMake() {
-        let report = WeeklyReport(dateRange: "8.3 – 8.9",
+        let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
                                   distance: nil, acwr: nil, efficiency: nil,
                                   streakWeeks: 2, weekRunCount: 3)
         // 창은 6일 전 자정 ~ now (weekRunCount와 같은 창, 이슈 #75).

@@ -18,7 +18,6 @@ struct WeeklyReport {
 
     struct DistanceCard {
         let tone: RRTone
-        let weeks: [WeekBar]       // 기록 전체 달력 주, 최소 6주 (차트용 — 가로 스크롤)
         let recent7Km: Double      // 최근 7일 — 헤더와 같은 달력 창 (판정 기준, 이슈 #75)
         let previous7Km: Double    // 그 직전 달력 7일
         let capKm: Double          // 이전 7일 × 1.1 (10% 룰 상한)
@@ -47,6 +46,9 @@ struct WeeklyReport {
     }
 
     let dateRange: String          // "8.15 – 8.21" — 최근 7일 달력 날짜 (오늘 포함)
+    /// 기록 전체 달력 주 거리, 최소 6주 (주간 거리 차트용 — 가로 스크롤). 기록이 없으면 빈 배열.
+    /// 증가율 가드(`distance` nil)와 무관하게 채운다 — 비율이 없어도 이력 차트는 보여 준다 (이슈 #91)
+    let weeks: [WeekBar]
     let distance: DistanceCard?
     let acwr: AcwrCard?
     let efficiency: EfficiencyCard?
@@ -89,7 +91,8 @@ extension ReportEngine {
         let range = "\(shortDate(day(-6))) – \(shortDate(now))"
 
         return WeeklyReport(dateRange: range,
-                            distance: distanceCard(runs, calendar: calendar, currentWeek: week),
+                            weeks: weekBars(runs, calendar: calendar, currentWeek: week),
+                            distance: distanceCard(runs),
                             acwr: acwrCard(runs),
                             efficiency: efficiencyCard(runs),
                             streakWeeks: Self.streakWeeks(runs: runs, now: now),
@@ -98,8 +101,7 @@ extension ReportEngine {
 
     // MARK: - 카드 계산
 
-    private func distanceCard(_ runs: [RunSummary], calendar: Calendar,
-                              currentWeek: DateInterval) -> WeeklyReport.DistanceCard? {
+    private func distanceCard(_ runs: [RunSummary]) -> WeeklyReport.DistanceCard? {
         // 헤더("최근 7일 · 날짜")와 같은 달력 창, 이전 7일은 그 바로 앞 달력 7일 — 두 창이
         // 맞붙어야 사이에 빠지는 기록이 없다 (이슈 #75)
         let previousStart = Calendar.current.startOfDay(for: day(-13))
@@ -108,10 +110,20 @@ extension ReportEngine {
         guard previous >= 3 else { return nil }  // ReportEngine과 동일 가드
         let change = (recent - previous) / previous * 100
 
-        // 차트: 기록 전체 달력 주 합계 (판정은 헤더와 같은 최근 7일 달력 창, 차트는 달력 주 — 라벨이 명확하다).
-        // 지난 주들은 차트의 가로 스크롤로 본다 — 최소 6주는 채워 그린다.
+        let tone: RRTone = change >= 10 ? .overload : (change < -30 ? .caution : .steady)
+        return WeeklyReport.DistanceCard(tone: tone,
+                                         recent7Km: recent, previous7Km: previous,
+                                         capKm: previous * 1.1, changePct: change)
+    }
+
+    /// 차트: 기록 전체 달력 주 합계 (판정은 헤더와 같은 최근 7일 달력 창, 차트는 달력 주 — 라벨이 명확하다).
+    /// 지난 주들은 차트의 가로 스크롤로 본다 — 최소 6주는 채워 그린다.
+    /// 증가율 가드와 따로 계산한다 — 기준 7일이 3km 미만이어도 이력은 그린다 (이슈 #91)
+    private func weekBars(_ runs: [RunSummary], calendar: Calendar,
+                          currentWeek: DateInterval) -> [WeeklyReport.WeekBar] {
+        guard !runs.isEmpty else { return [] }
         let span = Self.chartWeekSpan(runs, calendar: calendar, currentWeek: currentWeek)
-        let weeks: [WeeklyReport.WeekBar] = (0..<span).reversed().enumerated().map { index, back in
+        return (0..<span).reversed().enumerated().map { index, back in
             let start = calendar.date(byAdding: .weekOfYear, value: -back, to: currentWeek.start)!
             let end = calendar.date(byAdding: .weekOfYear, value: 1, to: start)!
             let km = runs.filter { $0.start >= start && $0.start < end }
@@ -119,11 +131,6 @@ extension ReportEngine {
             return WeeklyReport.WeekBar(label: Format.weekLabel(weekStart: start),
                                         km: km, isCurrent: back == 0, index: index)
         }
-
-        let tone: RRTone = change >= 10 ? .overload : (change < -30 ? .caution : .steady)
-        return WeeklyReport.DistanceCard(tone: tone, weeks: weeks,
-                                         recent7Km: recent, previous7Km: previous,
-                                         capKm: previous * 1.1, changePct: change)
     }
 
     private func acwrCard(_ runs: [RunSummary]) -> WeeklyReport.AcwrCard? {

@@ -55,8 +55,9 @@ struct MonthlySeries {
 }
 
 /// 거리별 최고 기록 — 5K/10K/하프/풀 (기획서 §4.7).
-/// PR 판정 (가정 — 계획서 M3): 완주 거리 ∈ [D, D×1.10]인 세션 중 (페이스 × D)의 최소값.
+/// PR 판정 (가정 — 계획서 M3): 완주 거리 ∈ [D×0.995, D×1.10]인 세션 중 (페이스 × D)의 최소값.
 /// 워치 GPS는 공인 거리보다 조금 길게 찍히는 게 보통이라 10% 상단 여유를 둔다.
+/// 하단 0.5%는 워치 표시 반올림 여유 — 5.00으로 보인 4.996km가 빠지지 않게 (약 25m@5K, 이슈 #91).
 /// 해당 거리 기록이 없으면 항목 자체를 내지 않는다.
 struct PersonalRecords {
     struct Entry {
@@ -77,7 +78,7 @@ struct PersonalRecords {
         targets.compactMap { target in
             let candidates = runs.compactMap { run -> (time: Double, run: RunSummary)? in
                 guard let km = run.distanceKm, let pace = run.paceSecPerKm,
-                      km >= target.km, km <= target.km * 1.10 else { return nil }
+                      km >= target.km * 0.995, km <= target.km * 1.10 else { return nil }
                 return (time: pace * target.km, run: run)
             }
             guard let best = candidates.min(by: { $0.time < $1.time }) else { return nil }
