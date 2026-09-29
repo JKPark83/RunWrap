@@ -394,7 +394,7 @@ final class OnboardingFlowModel: ObservableObject {
 
     /// 판정 결과·원답을 로컬에 저장한다.
     /// 재진단(`isRediagnosis`)이면 성장 사이클은 건드리지 않는다 — "성장은 되돌리지 않는다"(§5).
-    /// 설문 답(레벨·목적·주간 목표·대회 목표)은 갱신하고, 사이클 키 3종과 온보딩 시각은 보존한다.
+    /// 설문 답(레벨·목적·주간 목표·대회 목표)은 갱신하고, 사이클 키(시작 시각·최고 단계·식별자·사이클 목표)와 온보딩 시각은 보존한다.
     /// 온보딩 시각까지 지키는 이유: 사이클 시작 시각이 없는 구버전 사용자는 홈·리포트가
     /// 온보딩 시각을 사이클 시작으로 대신 쓰므로, 이걸 덮으면 XP가 0이 된다 (이슈 #44)
     func persist(isRediagnosis: Bool, now: Date = Date(), defaults: UserDefaults = .standard) {
@@ -422,6 +422,9 @@ final class OnboardingFlowModel: ObservableObject {
             defaults.set(now.timeIntervalSince1970, forKey: ProfileKey.onboardedAt)
             defaults.set(now.timeIntervalSince1970, forKey: GrowthKey.cycleStartedAt)
             defaults.set(GrowthStage.egg.rawValue, forKey: GrowthKey.maxStage)
+            // 첫 사이클의 목표를 고정한다 — 새 종류는 이 값으로 판정한다 (이슈 #110)
+            defaults.set(answers.q7Target?.rawValue ?? "", forKey: GrowthKey.cycleGoal)
+            defaults.set(answers.q8GoalSec ?? 0, forKey: GrowthKey.cycleGoalSec)
             // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
             defaults.set(UUID().uuidString, forKey: GrowthKey.cycleID)
         }

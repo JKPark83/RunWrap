@@ -141,4 +141,11 @@ enum GrowthKey {
     /// 사이클 식별자 (UUID 문자열) — CloudKit 스냅샷 병합에서 같은 사이클인지 판정한다 (이슈 #29).
     /// 온보딩·사이클 전환 때 새로 발급하고, 없으면 백업 시점에 최초 1회 만든다
     static let cycleID = "growth.cycleID"
+    /// 이번 사이클의 목표 종목 (RaceDistance rawValue, 빈 문자열 = 목표 없음) — 사이클 시작 때 고정해
+    /// 세러모니의 새 종류 판정에 쓴다 (기획서 v0.7 §5 "새 종류는 그 사이클의 목표 수준이 정한다", 이슈 #110).
+    /// 설정·재진단으로 바뀌는 `ProfileKey.raceGoal`과 분리해, 성조 직전 목표 변경으로 종을 바꾸지 못하게 한다.
+    /// 키가 없으면(도입 전 사용자) 홈이 현재 raceGoal을 한 번 복사해 저장한다
+    static let cycleGoal = "growth.cycleGoal"
+    /// 이번 사이클의 목표 기록 (초) — `cycleGoal`과 함께 고정한다. 0이면 기록 미입력
+    static let cycleGoalSec = "growth.cycleGoalSec"
 }

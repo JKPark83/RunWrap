@@ -9,7 +9,7 @@ import Foundation
 /// 이 파일은 Foundation만 알아 순수 로직으로 테스트한다.
 struct ProgressSnapshot: Codable, Equatable {
     /// 현재 스키마 버전 — 필드가 바뀌면 올리고, 병합·복원은 이 값 이하만 받는다.
-    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 기록(이슈 #108)은 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
+    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 기록(이슈 #108)·사이클 목표 필드(이슈 #110)는 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
     /// 올리면 구버전 기기가 keepServer로 백업 자체를 멈춘다
     static let currentSchemaVersion = 1
 
@@ -43,6 +43,10 @@ struct ProgressSnapshot: Codable, Equatable {
     /// 디코드된다. 복원 후에도 "바뀐 목표는 다음 주부터"가 유지되도록 함께 백업한다
     var weeklyGoalChangedAt: Date?
     var weeklyGoalBefore: Int?
+    /// 사이클 시작 때 고정한 목표 (이슈 #110) — 새 종류 판정용. nil = 이 필드가 없던 옛 스냅샷이거나
+    /// 로컬에 아직 사이클 목표 키가 없는 설치. 복원하면 raceGoal로 대체한다. #56 심박 필드와 같은 방식
+    var cycleGoalRaw: String?
+    var cycleGoalSeconds: Int?
 
     /// 내용이 같은지 — 동기화 메타(revision·updatedAt)만 다른 스냅샷은 다시 올릴 필요가 없다
     func hasSameContent(as other: ProgressSnapshot) -> Bool {
@@ -87,7 +91,11 @@ struct ProgressSnapshot: Codable, Equatable {
             restingHRManual: restingHRManual > 0 ? restingHRManual : nil,
             hrZoneMethodRaw: hrZoneMethodRaw.isEmpty ? nil : hrZoneMethodRaw,
             weeklyGoalChangedAt: weeklyGoalChangedAtRaw > 0 ? Date(timeIntervalSince1970: weeklyGoalChangedAtRaw) : nil,
-            weeklyGoalBefore: weeklyGoalChangedAtRaw > 0 ? defaults.integer(forKey: ProfileKey.weeklyGoalBefore) : nil)
+            weeklyGoalBefore: weeklyGoalChangedAtRaw > 0 ? defaults.integer(forKey: ProfileKey.weeklyGoalBefore) : nil,
+            // 빈 문자열은 "목표 없음"이라 유효한 값 — 키가 없을 때만 nil이다
+            cycleGoalRaw: defaults.string(forKey: GrowthKey.cycleGoal),
+            cycleGoalSeconds: defaults.object(forKey: GrowthKey.cycleGoalSec) == nil
+                ? nil : defaults.integer(forKey: GrowthKey.cycleGoalSec))
     }
 
     /// 스냅샷을 로컬 저장값에 적용한다 — 신규 설치 복원 경로.
@@ -102,6 +110,9 @@ struct ProgressSnapshot: Codable, Equatable {
         defaults.set(cycleID.uuidString, forKey: GrowthKey.cycleID)
         defaults.set(raceGoalRaw, forKey: ProfileKey.raceGoal)
         defaults.set(raceGoalSeconds, forKey: ProfileKey.raceGoalSec)
+        // 사이클 목표 (이슈 #110) — 옛 스냅샷(nil)은 당시 목표를 사이클 목표로 본다
+        defaults.set(cycleGoalRaw ?? raceGoalRaw, forKey: GrowthKey.cycleGoal)
+        defaults.set(cycleGoalSeconds ?? raceGoalSeconds, forKey: GrowthKey.cycleGoalSec)
         defaults.set(raceDate?.timeIntervalSince1970 ?? 0, forKey: ProfileKey.raceDate)
         // 심박 기준 (이슈 #56) — 스냅샷이 단일 원본이라 nil이면 로컬 값도 지워 미설정으로 맞춘다
         if let hrMaxManual {

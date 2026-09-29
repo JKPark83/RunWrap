@@ -34,9 +34,12 @@ struct HomeScreen: View {
     @AppStorage(ProfileKey.promotionDeclinedAt) private var promotionDeclinedAtRaw = 0.0
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(GrowthKey.maxStage) private var maxStage = GrowthStage.egg.rawValue
-    /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 정해진 값을 그대로 쓴다
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 고정한 값 (이슈 #110).
+    /// 옵셔널인 이유: 키가 없는(도입 전) 사용자를 가려 현재 목표로 한 번 보정하기 위해서다
+    @AppStorage(GrowthKey.cycleGoal) private var cycleGoalRaw: String?
+    @AppStorage(GrowthKey.cycleGoalSec) private var cycleGoalSecRaw: Int?
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
 
     @EnvironmentObject private var collection: CollectionStore
@@ -60,6 +63,7 @@ struct HomeScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear { migrateCycleGoalIfNeeded() }
         .sheet(isPresented: $showsToday) { todaySheet }
         // 구독 시점의 현재 좌표부터 흘러온다 — 첫 노출과 늦은 위치 결론(스플래시 타임아웃 경로)을 한 줄로 처리
         .onReceive(weather.$coordinate) { coordinate in
@@ -158,15 +162,14 @@ struct HomeScreen: View {
         }
     }
 
-    /// 지금 수집될 새 종 — 세러모니 표시와 실제 수집이 같은 값을 쓰도록 한 곳에서 낸다
+    /// 지금 수집될 새 종 — 세러모니 표시와 실제 수집이 같은 값을 쓰도록 한 곳에서 낸다.
+    /// 설정의 현재 목표가 아니라 사이클 시작 때 고정한 목표로 판정한다 (이슈 #110)
     private var pendingSpecies: BirdSpecies {
-        CollectionEngine.species(for: RaceDistance(rawValue: raceGoalRaw),
-                                  goalSeconds: raceGoalSec)
+        CollectionEngine.species(for: cycleGoal, goalSeconds: cycleGoalSec)
     }
 
     private var pendingGoalLabel: String {
-        CollectionEngine.goalLabel(for: RaceDistance(rawValue: raceGoalRaw),
-                                    goalSeconds: raceGoalSec)
+        CollectionEngine.goalLabel(for: cycleGoal, goalSeconds: cycleGoalSec)
     }
 
     // MARK: - 헤더
@@ -516,6 +519,22 @@ struct HomeScreen: View {
         return (Date(timeIntervalSince1970: weeklyGoalChangedAtRaw), weeklyGoalBefore)
     }
 
+    /// 이번 사이클 목표 — 키가 아직 없으면 현재 목표로 대신한다 (보정 저장 전 첫 렌더 대비)
+    private var cycleGoal: RaceDistance? {
+        RaceDistance(rawValue: cycleGoalRaw ?? raceGoalRaw)
+    }
+
+    private var cycleGoalSec: Int {
+        cycleGoalSecRaw ?? raceGoalSec
+    }
+
+    /// 사이클 목표 키가 없는 기존 사용자(이슈 #110 이전 설치·복원)는 지금의 목표를 한 번 복사해 고정한다.
+    /// 이후 설정에서 목표를 바꿔도 이번 사이클의 새 종류는 그대로다
+    private func migrateCycleGoalIfNeeded() {
+        if cycleGoalRaw == nil { cycleGoalRaw = raceGoalRaw }
+        if cycleGoalSecRaw == nil { cycleGoalSecRaw = raceGoalSec }
+    }
+
     /// 표시 단계를 최고 단계에 기록하고, 성조면 세러모니를 띄운다 — 홈 진입·단계 변화 두 곳에서 부른다 (이슈 #60)
     private func syncStage(_ stage: GrowthStage) {
         // 데모(합성 데이터)는 표시만 한다 — 최고 단계·세러모니·사이클 전환을 저장하면
@@ -545,8 +564,8 @@ struct HomeScreen: View {
     /// (XP 원장을 저장하지 않는 설계라 리셋할 값이 따로 없다).
     /// - Returns: 도감 저장 성공 여부. 실패하면 사이클을 그대로 두고 알림만 띄운다 (이슈 #67)
     private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) -> Bool {
-        let saved = collection.add(CollectionEngine.collect(distance: RaceDistance(rawValue: raceGoalRaw),
-                                                             goalSeconds: raceGoalSec,
+        let saved = collection.add(CollectionEngine.collect(distance: cycleGoal,
+                                                             goalSeconds: cycleGoalSec,
                                                              cycleStartedAt: cycleStartedAt,
                                                              now: now))
         guard saved else {
@@ -555,6 +574,9 @@ struct HomeScreen: View {
         }
         raceGoalRaw = goal?.rawValue ?? ""
         raceGoalSec = goalSeconds
+        // 새 사이클의 목표를 고정한다 — 다음 새의 종류는 이 값으로 판정한다 (이슈 #110)
+        cycleGoalRaw = goal?.rawValue ?? ""
+        cycleGoalSecRaw = goalSeconds
         cycleStartedAtRaw = now.timeIntervalSince1970
         maxStage = GrowthStage.egg.rawValue
         // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
