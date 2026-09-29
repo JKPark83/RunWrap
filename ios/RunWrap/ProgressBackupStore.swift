@@ -4,10 +4,10 @@ import os
 
 /// 진행도 CloudKit 백업·복원 스토어 (이슈 #29).
 ///
-/// 로컬(UserDefaults + 도감 파일)은 오프라인 캐시로 그대로 두고, 복원에 필요한
+/// 로컬(UserDefaults + 도감·대회 기록 파일)은 오프라인 캐시로 그대로 두고, 복원에 필요한
 /// 상태를 사용자의 CloudKit private database에 **단일 스냅샷 레코드**로 저장한다.
 /// 별도 회원가입·자체 서버는 없다. 건강 데이터(운동 목록·심박·위치)는 올리지 않는다 —
-/// 스냅샷에는 성장 복원 메타데이터와 도감만 담는다(`ProgressSnapshot` 참고).
+/// 스냅샷에는 성장 복원 메타데이터와 도감, 직접 입력한 대회 기록만 담는다(`ProgressSnapshot` 참고).
 ///
 /// 원칙: iCloud 미로그인·네트워크 실패·quota 오류가 **로컬 진행도를 초기화하면 안 된다.**
 /// 백업 실패는 조용히 다음 기회로 미루고, 복원 실패는 상태로만 알려 온보딩을 연다.
@@ -80,7 +80,7 @@ final class ProgressBackupStore: ObservableObject {
 
     /// 로컬 프로필이 없을 때(신규 설치·재설치) CloudKit에서 스냅샷을 찾아 적용한다.
     ///
-    /// 반환값은 적용된 스냅샷 — 도감(`CollectionStore`) 반영은 호출부 몫이다
+    /// 반환값은 적용된 스냅샷 — 도감(`CollectionStore`)·대회 기록(`RaceRecordStore`) 반영은 호출부 몫이다
     /// (스토어끼리 결합하지 않는다). 로컬 프로필이 이미 있으면 아무것도 하지 않는다 —
     /// **오래된 스냅샷이 최신 로컬 진행도를 되돌리는 일은 구조적으로 없다.**
     func restoreOnFreshInstall() async -> ProgressSnapshot? {
@@ -116,6 +116,8 @@ final class ProgressBackupStore: ObservableObject {
             }
             snapshot.apply(to: defaults)
             try? CollectionCache.save(snapshot.collectedBirds)
+            RaceRecordCache.save(snapshot.raceRecords ?? [])
+            RaceRecordCache.saveDeletedIDs(snapshot.deletedRaceRecordIDs ?? [])
             rememberSynced(snapshot)
             restoreState = .restored
             return snapshot
@@ -144,6 +146,8 @@ final class ProgressBackupStore: ObservableObject {
         // 도감은 파일에서 읽는다 — 저장에 실패한 새는 사이클도 넘어가지 않으므로 의도적으로 올리지 않는다 (이슈 #67)
         guard var local = ProgressSnapshot.readLocal(defaults: defaults,
                                                      birds: CollectionCache.load(),
+                                                     raceRecords: RaceRecordCache.load() ?? [],
+                                                     deletedRaceRecordIDs: RaceRecordCache.loadDeletedIDs(),
                                                      now: Date()) else { return }
         if let last = lastUploaded(), last.hasSameContent(as: local) { return }
         isBackingUp = true
@@ -184,7 +188,7 @@ final class ProgressBackupStore: ObservableObject {
     }
 
     /// 스냅샷을 레코드에 실어 저장한다. 서버 본이 있으면 병합부터 —
-    /// 같은 사이클의 `maxStage`는 내려가지 않고, 도감은 합집합이다 (ProgressMergeEngine).
+    /// 같은 사이클의 `maxStage`는 내려가지 않고, 도감·대회 기록은 합집합이다 (ProgressMergeEngine).
     private func upload(local: ProgressSnapshot, onto serverRecord: CKRecord?) async throws {
         var outgoing = local
         let record: CKRecord
@@ -205,10 +209,12 @@ final class ProgressBackupStore: ObservableObject {
         rememberSynced(outgoing)
 
         // 병합이 서버 쪽 값을 살렸다면 로컬에도 반영해 둔다 (재설치 경합 같은 드문 경우).
-        // 메모리의 CollectionStore까지는 갱신하지 않는다 — 다음 실행에서 파일로 읽는다
+        // 메모리의 CollectionStore·RaceRecordStore까지는 갱신하지 않는다 — 다음 실행에서 파일로 읽는다
         if !outgoing.hasSameContent(as: local) {
             outgoing.apply(to: defaults)
             try? CollectionCache.save(outgoing.collectedBirds)
+            RaceRecordCache.save(outgoing.raceRecords ?? [])
+            RaceRecordCache.saveDeletedIDs(outgoing.deletedRaceRecordIDs ?? [])
         }
     }
 
@@ -216,36 +222,49 @@ final class ProgressBackupStore: ObservableObject {
 
     /// "이전 기록 불러오기" — 서버 본을 로컬에 적용한다. 방금 온보딩에서 정한 레벨·목표는 서버 값으로 바뀐다.
     ///
-    /// 도감은 합집합으로 붙인다 — 수집 이력은 잃을 이유가 없다(merge와 같은 원칙).
-    /// 반환값은 적용된 도감 — 메모리의 `CollectionStore` 반영은 호출부 몫이다.
-    func acceptRestoreCandidate() -> [CollectedBird]? {
+    /// 도감·대회 기록은 합집합으로 붙인다 — 수집 이력·입력한 기록은 잃을 이유가 없다(merge와 같은 원칙).
+    /// 반환값은 적용된 도감·대회 기록 — 메모리의 `CollectionStore`·`RaceRecordStore` 반영은 호출부 몫이다.
+    func acceptRestoreCandidate() -> (birds: [CollectedBird], raceRecords: [RaceRecord])? {
         guard let server = restoreCandidate else { return nil }
         var applied = server
         applied.collectedBirds = ProgressMergeEngine.unionBirds(CollectionCache.load(),
                                                                 server.collectedBirds)
+        let deleted = ProgressMergeEngine.unionDeletedIDs(RaceRecordCache.loadDeletedIDs(),
+                                                          server.deletedRaceRecordIDs ?? [])
+        let raceRecords = ProgressMergeEngine.unionRaceRecords(RaceRecordCache.load() ?? [],
+                                                               server.raceRecords ?? [], deleted: deleted)
         applied.apply(to: defaults)
         try? CollectionCache.save(applied.collectedBirds)
+        RaceRecordCache.save(raceRecords)
+        RaceRecordCache.saveDeletedIDs(deleted)
         // 동기화 기준은 서버에 실제로 있는 본 — 합집합으로 늘어난 새가 있으면 다음 백업이 올린다
         rememberSynced(server)
         restoreCandidate = nil
         Task { await backupIfChanged() }
-        return applied.collectedBirds
+        return (applied.collectedBirds, raceRecords)
     }
 
     /// "새로 시작" — 지금의 새 사이클을 유지하고 서버 본을 덮는다.
     ///
-    /// 서버 쪽 도감은 먼저 로컬 파일에 합쳐 둔다 — 업로드가 실패해도 "도감의 새는 그대로 남아요"가
-    /// 지켜진다. 이후 업로드는 기존 병합 규칙(다른 사이클 → 최신인 로컬이 이김, 도감은 합집합)을 탄다.
-    /// 반환값은 합쳐진 도감 — 메모리의 `CollectionStore` 반영은 호출부 몫이다.
-    func declineRestoreCandidate() -> [CollectedBird] {
+    /// 서버 쪽 도감·대회 기록은 먼저 로컬 파일에 합쳐 둔다 — 업로드가 실패해도 "도감의 새는 그대로 남아요"가
+    /// 지켜진다. 이후 업로드는 기존 병합 규칙(다른 사이클 → 최신인 로컬이 이김, 도감·대회 기록은 합집합)을 탄다.
+    /// 반환값은 합쳐진 도감·대회 기록 — 메모리의 `CollectionStore`·`RaceRecordStore` 반영은 호출부 몫이다.
+    func declineRestoreCandidate() -> (birds: [CollectedBird], raceRecords: [RaceRecord]) {
         let local = CollectionCache.load()
-        guard let server = restoreCandidate else { return local }
+        let localRecords = RaceRecordCache.load() ?? []
+        guard let server = restoreCandidate else { return (local, localRecords) }
         let birds = ProgressMergeEngine.unionBirds(local, server.collectedBirds)
+        let deleted = ProgressMergeEngine.unionDeletedIDs(RaceRecordCache.loadDeletedIDs(),
+                                                          server.deletedRaceRecordIDs ?? [])
+        let raceRecords = ProgressMergeEngine.unionRaceRecords(localRecords, server.raceRecords ?? [],
+                                                               deleted: deleted)
         try? CollectionCache.save(birds)
+        RaceRecordCache.save(raceRecords)
+        RaceRecordCache.saveDeletedIDs(deleted)
         defaults.set(true, forKey: SyncKey.restoreChoiceMade)
         restoreCandidate = nil
         Task { await backupIfChanged() }
-        return birds
+        return (birds, raceRecords)
     }
 
     #if DEBUG

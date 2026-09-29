@@ -6,7 +6,8 @@ import Testing
 ///
 /// 검증 축: ① 오래된 스냅샷이 최신 진행도를 되돌리지 않는다
 /// ② 같은 사이클에서 maxStage는 절대 낮아지지 않는다 ③ 도감은 항상 합집합
-/// ④ 미래 스키마는 건드리지 않는다 ⑤ 로컬 읽기/쓰기 왕복이 무손실이다.
+/// ④ 미래 스키마는 건드리지 않는다 ⑤ 로컬 읽기/쓰기 왕복이 무손실이다
+/// ⑥ 직접 입력한 대회 기록도 도감처럼 합집합으로 백업된다 (이슈 #118).
 @Suite("진행도 스냅샷 병합·복원")
 struct ProgressSnapshotTests {
 
@@ -25,7 +26,9 @@ struct ProgressSnapshotTests {
         levelRaw: String = "intermediate",
         weeklyGoal: Int = 3,
         maxStage: Int = 2,
-        birds: [CollectedBird] = []
+        birds: [CollectedBird] = [],
+        raceRecords: [RaceRecord]? = nil,
+        deletedRaceRecordIDs: [UUID]? = nil
     ) -> ProgressSnapshot {
         ProgressSnapshot(
             schemaVersion: schemaVersion,
@@ -41,12 +44,18 @@ struct ProgressSnapshotTests {
             raceGoalRaw: "full",
             raceGoalSeconds: 4 * 3_600,
             raceDate: date("2026-11-01T00:00:00Z"),
-            collectedBirds: birds)
+            collectedBirds: birds,
+            raceRecords: raceRecords,
+            deletedRaceRecordIDs: deletedRaceRecordIDs)
     }
 
     private static func makeBird(id: UUID, collectedAt: Date) -> CollectedBird {
         CollectedBird(id: id, species: .sparrow, goalLabel: "주 3회 습관",
                       collectedAt: collectedAt, cycleDays: 27)
+    }
+
+    private static func makeRecord(id: UUID, race: RaceDistance = .half, date: Date) -> RaceRecord {
+        RaceRecord(id: id, race: race, timeSec: 6_300, date: date)
     }
 
     /// 테스트 격리용 UserDefaults — 도메인을 비우고 시작한다
@@ -131,6 +140,119 @@ struct ProgressSnapshotTests {
         #expect(merged.collectedBirds.map(\.id) == [shared.id, serverOnly.id, localOnly.id])
     }
 
+    // MARK: - 대회 기록 (이슈 #118)
+
+    @Test("대회 기록 합집합 — id 기준 중복 제거 후 대회 날짜 최신순")
+    func raceRecordsUnionDedupesAndSorts() {
+        let shared = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000001")!,
+                                     date: Self.date("2026-04-12T00:00:00Z"))
+        let lhsOnly = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000002")!,
+                                      race: .tenK, date: Self.date("2025-10-19T00:00:00Z"))
+        let rhsOnly = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000003")!,
+                                      race: .full, date: Self.date("2026-06-07T00:00:00Z"))
+
+        let union = ProgressMergeEngine.unionRaceRecords([shared, lhsOnly], [rhsOnly, shared])
+        // 공통 1 + 왼쪽 1 + 오른쪽 1 = 3건, 최신순 (2026-06-07 → 2026-04-12 → 2025-10-19)
+        #expect(union.map(\.id) == [rhsOnly.id, shared.id, lhsOnly.id])
+    }
+
+    @Test("대회 기록 병합 — 어느 쪽이 최신이든 양쪽 기록이 모두 남고, 옛 서버 본(nil)도 로컬 기록을 지우지 않는다")
+    func mergeKeepsRaceRecordsFromBothSides() throws {
+        let localRecord = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000004")!,
+                                          date: Self.date("2026-05-10T00:00:00Z"))
+        let serverRecord = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000005")!,
+                                           race: .tenK, date: Self.date("2026-03-01T00:00:00Z"))
+        // 서버가 최신(8/10)이라 스칼라는 서버 쪽이 이기지만 대회 기록은 합집합이다
+        let local = Self.makeSnapshot(updatedAt: Self.date("2026-08-05T09:00:00Z"),
+                                      raceRecords: [localRecord])
+        let server = Self.makeSnapshot(updatedAt: Self.date("2026-08-10T09:00:00Z"),
+                                       raceRecords: [serverRecord])
+        guard case .upload(let merged) = ProgressMergeEngine.merge(local: local, server: server) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        // 최신순: 로컬 5/10 → 서버 3/1
+        #expect(merged.raceRecords == [localRecord, serverRecord])
+
+        // 이 필드가 없던 옛 서버 본(nil)이 최신이어도 로컬 기록은 살아남는다
+        let legacyServer = Self.makeSnapshot(updatedAt: Self.date("2026-08-10T09:00:00Z"))
+        guard case .upload(let mergedLegacy) = ProgressMergeEngine.merge(local: local,
+                                                                         server: legacyServer) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        #expect(mergedLegacy.raceRecords == [localRecord])
+    }
+
+    @Test("대회 기록 인코딩 왕복 — JSON으로 무손실 보존되고, 필드가 없는 옛 JSON은 nil로 디코드된다")
+    func raceRecordsCodableRoundTrip() throws {
+        let record = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000006")!,
+                                     date: Self.date("2026-05-10T00:00:00Z"))
+        let snapshot = Self.makeSnapshot(raceRecords: [record])
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self,
+                                               from: JSONEncoder().encode(snapshot))
+        #expect(decoded == snapshot)
+        #expect(decoded.raceRecords == [record])
+
+        // nil 옵셔널은 synthesized 인코딩에서 키가 빠진다 — 이슈 #118 이전 본과 같은 JSON
+        let legacyData = try JSONEncoder().encode(Self.makeSnapshot())
+        let object = try #require(try JSONSerialization.jsonObject(with: legacyData) as? [String: Any])
+        #expect(object["raceRecords"] == nil)
+        let legacy = try JSONDecoder().decode(ProgressSnapshot.self, from: legacyData)
+        #expect(legacy.raceRecords == nil)
+    }
+
+    @Test("대회 기록 내용 비교 — 기록이 추가되면 다른 내용으로 보고 다시 올린다")
+    func raceRecordsAffectSameContent() {
+        let record = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000007")!,
+                                     date: Self.date("2026-05-10T00:00:00Z"))
+        let before = Self.makeSnapshot(raceRecords: [])
+        let after = Self.makeSnapshot(revision: 2, raceRecords: [record])
+        #expect(!before.hasSameContent(as: after))
+    }
+
+    @Test("대회 기록 삭제 표식 — 한 기기에서 지운 기록은 서버 본에 남아 있어도 병합에서 되살아나지 않는다")
+    func deletedRaceRecordStaysDeletedAfterMerge() throws {
+        let deletedRecord = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000008")!,
+                                            date: Self.date("2026-05-10T00:00:00Z"))
+        let kept = Self.makeRecord(id: UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000009")!,
+                                   race: .tenK, date: Self.date("2026-03-01T00:00:00Z"))
+        // 로컬: 지운 뒤(기록 없음, 표식 있음). 서버: 지우기 전 본(기록 둘, 표식 없음)이 더 최신
+        let local = Self.makeSnapshot(updatedAt: Self.date("2026-08-05T09:00:00Z"),
+                                      raceRecords: [kept], deletedRaceRecordIDs: [deletedRecord.id])
+        let server = Self.makeSnapshot(updatedAt: Self.date("2026-08-10T09:00:00Z"),
+                                       raceRecords: [deletedRecord, kept])
+        guard case .upload(let merged) = ProgressMergeEngine.merge(local: local, server: server) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        #expect(merged.raceRecords == [kept])
+        // 표식은 병합본에도 남아 다른 기기의 합집합에서도 걸러진다
+        #expect(merged.deletedRaceRecordIDs == [deletedRecord.id])
+
+        // 반대 방향: 서버 표식이 로컬 기록을 지운다 (다른 기기에서 지운 경우)
+        let localStale = Self.makeSnapshot(raceRecords: [deletedRecord, kept])
+        let serverDeleted = Self.makeSnapshot(raceRecords: [kept], deletedRaceRecordIDs: [deletedRecord.id])
+        guard case .upload(let merged2) = ProgressMergeEngine.merge(local: localStale, server: serverDeleted) else {
+            Issue.record("upload여야 한다")
+            return
+        }
+        #expect(merged2.raceRecords == [kept])
+    }
+
+    @Test("대회 기록 삭제 표식 파일 — remove가 남긴 id를 저장·로드하고, 파일이 없으면 빈 목록")
+    func raceRecordTombstoneFileRoundTrip() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tombstones-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        #expect(RaceRecordCache.loadDeletedIDs(from: dir) == [])
+        let id = UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000010")!
+        RaceRecordCache.saveDeletedIDs([id], in: dir)
+        #expect(RaceRecordCache.loadDeletedIDs(from: dir) == [id])
+    }
+
     // MARK: - 병합: 스키마·revision
 
     @Test("미래 스키마 서버 본 — 덮어쓰지 않고 keepServer로 보류한다")
@@ -181,19 +303,22 @@ struct ProgressSnapshotTests {
     func applyReadLocalRoundTrip() throws {
         let defaults = Self.freshDefaults("roundTrip")
         let bird = Self.makeBird(id: UUID(), collectedAt: Self.date("2026-07-10T00:00:00Z"))
-        var original = Self.makeSnapshot(birds: [bird])
+        let record = Self.makeRecord(id: UUID(), date: Self.date("2026-05-10T00:00:00Z"))
+        // readLocal은 대회 기록·삭제 표식을 항상 배열로 채우므로 기준본도 빈 표식 배열로 만든다 (이슈 #118)
+        var original = Self.makeSnapshot(birds: [bird], raceRecords: [record], deletedRaceRecordIDs: [])
         // apply는 nil 사이클 목표를 raceGoal로 채우므로, 무손실 왕복을 보려면 값을 넣어 둔다 (이슈 #110)
         original.cycleGoalRaw = "full"
         original.cycleGoalSeconds = 4 * 3_600
 
         original.apply(to: defaults)
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [bird], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [bird], raceRecords: [record], now: Self.date("2026-08-20T00:00:00Z")))
 
         // revision·updatedAt은 동기화 메타라 왕복 대상이 아니다 — 내용만 비교한다
         #expect(read.hasSameContent(as: original))
         #expect(read.cycleID == original.cycleID)
         #expect(read.raceDate == original.raceDate)
+        #expect(read.raceRecords == [record])
     }
 
     @Test("readLocal — 대회 날짜 없음(0)은 nil로 읽힌다")
@@ -204,7 +329,7 @@ struct ProgressSnapshotTests {
         snapshot.apply(to: defaults)
 
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(read.raceDate == nil)
     }
 
@@ -212,7 +337,7 @@ struct ProgressSnapshotTests {
     func readLocalNilBeforeOnboarding() throws {
         let defaults = Self.freshDefaults("beforeOnboarding")
         #expect(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")) == nil)
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")) == nil)
     }
 
     @Test("심박 기준 왕복 — 수동 최대·안정 심박·존 방식이 apply→readLocal로 보존되고, 0/빈 값은 nil로 읽힌다")
@@ -225,7 +350,7 @@ struct ProgressSnapshotTests {
         snapshot.apply(to: defaults)
 
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(read.hrMaxManual == 185)
         #expect(read.restingHRManual == 48)
         #expect(read.hrZoneMethodRaw == "karvonen")
@@ -234,7 +359,7 @@ struct ProgressSnapshotTests {
         let unset = Self.freshDefaults("heartRateUnset")
         Self.makeSnapshot().apply(to: unset)
         let readUnset = try #require(ProgressSnapshot.readLocal(
-            defaults: unset, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: unset, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(readUnset.hrMaxManual == nil)
         #expect(readUnset.restingHRManual == nil)
         #expect(readUnset.hrZoneMethodRaw == nil)
@@ -271,7 +396,7 @@ struct ProgressSnapshotTests {
         snapshot.apply(to: defaults)
 
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(read.weeklyGoalChanges == history)
         let reencoded = try JSONDecoder().decode(ProgressSnapshot.self, from: JSONEncoder().encode(snapshot))
         #expect(reencoded.weeklyGoalChanges == history)
@@ -286,7 +411,7 @@ struct ProgressSnapshotTests {
         // 스냅샷이 단일 원본 — 이력 없는 본을 적용하면 로컬 이력도 지워져 readLocal이 nil로 읽는다
         decoded.apply(to: defaults)
         let readCleared = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(readCleared.weeklyGoalChanges == nil)
     }
 
@@ -348,7 +473,7 @@ struct ProgressSnapshotTests {
         #expect(defaults.string(forKey: GrowthKey.cycleGoal) == "half")
         #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 6_300)
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(read.cycleGoalRaw == "half")
         #expect(read.cycleGoalSeconds == 6_300)
         #expect(read.raceGoalRaw == "full")
@@ -363,7 +488,7 @@ struct ProgressSnapshotTests {
         let defaults = Self.freshDefaults("cycleGoalNone")
         snapshot.apply(to: defaults)
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(read.cycleGoalRaw == "")
         #expect(read.cycleGoalSeconds == 0)
     }
@@ -396,7 +521,7 @@ struct ProgressSnapshotTests {
         defaults.set("full", forKey: ProfileKey.raceGoal)
 
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-08-20T00:00:00Z")))
         #expect(read.cycleGoalRaw == nil)
         #expect(read.cycleGoalSeconds == nil)
     }
@@ -410,7 +535,7 @@ struct ProgressSnapshotTests {
         Self.makeSnapshot(cycleID: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!,
                           maxStage: 1).apply(to: defaults)
         let local = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-09-29T09:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-09-29T09:00:00Z")))
         // 서버: 이전 설치의 사이클 A, 4단계, 8/5 백업
         let server = Self.makeSnapshot(updatedAt: Self.date("2026-08-05T09:00:00Z"), maxStage: 4)
 
@@ -465,7 +590,7 @@ struct ProgressSnapshotTests {
 
         server.apply(to: defaults)
         let read = try #require(ProgressSnapshot.readLocal(
-            defaults: defaults, birds: [], now: Self.date("2026-09-29T10:00:00Z")))
+            defaults: defaults, birds: [], raceRecords: [], now: Self.date("2026-09-29T10:00:00Z")))
 
         #expect(read.cycleID == server.cycleID)
         #expect(read.maxStage == 4)

@@ -90,12 +90,15 @@ struct RootView: View {
             if let candidate = backup.restoreCandidate {
                 RestoreChoiceSheet(candidate: candidate,
                                    onAccept: {
-                                       if let birds = backup.acceptRestoreCandidate() {
-                                           collection.replace(with: birds)
+                                       if let applied = backup.acceptRestoreCandidate() {
+                                           collection.replace(with: applied.birds)
+                                           raceRecords.replace(with: applied.raceRecords)
                                        }
                                    },
                                    onDecline: {
-                                       collection.replace(with: backup.declineRestoreCandidate())
+                                       let merged = backup.declineRestoreCandidate()
+                                       collection.replace(with: merged.birds)
+                                       raceRecords.replace(with: merged.raceRecords)
                                    })
                     // 둘 중 하나를 골라야 백업이 풀린다 — 스와이프로 닫아 미정 상태로 두지 않는다
                     .interactiveDismissDisabled()
@@ -110,6 +113,7 @@ struct RootView: View {
                 // 성공하면 레벨 저장값이 채워져 onChange(levelRaw)가 데이터 로딩을 이어받는다
                 if let snapshot = await backup.restoreOnFreshInstall() {
                     collection.replace(with: snapshot.collectedBirds)
+                    raceRecords.replace(with: snapshot.raceRecords ?? [])
                 }
             } else {
                 // 온보딩을 마친 사용자는 바로 조회 (권한 시트는 이미 설문 끝에서 지났다)
