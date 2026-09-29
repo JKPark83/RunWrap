@@ -14,8 +14,9 @@ struct CeremonyScreen: View {
     let cycleStartedAt: Date
 
     /// 수집 확정 — 도감 수록과 사이클 초기화를 호출부(홈)가 실행한다.
-    /// 전환 부작용을 화면이 직접 저지르지 않게 하려고 클로저로 올린다
-    let onFinish: (_ newGoal: RaceDistance?, _ newGoalSeconds: Int) -> Void
+    /// 전환 부작용을 화면이 직접 저지르지 않게 하려고 클로저로 올린다.
+    /// false(도감 저장 실패)면 닫지 않고 남아 다시 누를 수 있게 한다 (이슈 #67)
+    let onFinish: (_ newGoal: RaceDistance?, _ newGoalSeconds: Int) -> Bool
 
     @Environment(\.dismiss) private var dismiss
 
@@ -197,7 +198,7 @@ struct CeremonyScreen: View {
     }
 
     private func finish() {
-        onFinish(pickedDistance, pickedSeconds)
+        guard onFinish(pickedDistance, pickedSeconds) else { return }
         dismiss()
     }
 
