@@ -72,7 +72,8 @@ HEALTH DATA (Guideline 5.1.3)
        CDN, or a news/portal image host (e.g. Naver, Kakao) that covered the
        race. Hosts vary per race.
     5. iCloud (CloudKit private database) — one progress snapshot per user
-       (level, goals, growth stage, bird collection) so progress survives a
+       (level, goals, growth stage, bird collection, and past race results the
+       user typed in by hand — distance, finish time, date) so progress survives a
        reinstall. No health data; the developer cannot read it; skipped when
        the user is not signed in to iCloud.
     6. Apple Maps (MapKit) — map tiles for the course/session maps and the

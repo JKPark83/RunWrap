@@ -29,10 +29,13 @@ struct RaceRecord: Codable, Equatable, Identifiable {
 }
 
 /// Application Support/RunWrap/race-records.json — PBBaselineCache와 같은 패턴 (atomic write,
-/// 백업 제외). 사용자가 직접 입력한 소량 데이터라 잃어도 다시 입력할 수 있고,
-/// 운동 기록이라 iCloud에 두지 않는 쪽이 심사 지침 5.1.3(ii)에 안전하다.
+/// 기기 백업 제외). HealthKit 건강 데이터가 아니라 사용자 입력값이라 CloudKit 진행도 스냅샷에
+/// 함께 백업한다(이슈 #118) — 재설치·기기 이전 때의 원본은 스냅샷이다(`ProgressSnapshot.raceRecords`).
 enum RaceRecordCache {
     static let filename = "race-records.json"
+    /// 지운 기록의 id 목록 (이슈 #118) — 스냅샷 합집합 병합에서 되살아나지 않게 하는 삭제 표식.
+    /// 기록 파일과 분리한 이유: race-records.json은 `[RaceRecord]` 배열이라 모양을 바꾸면 옛 버전 앱이 못 읽는다(#66)
+    static let deletedFilename = "race-record-tombstones.json"
 
     static func save(_ records: [RaceRecord], in directory: URL? = nil) {
         guard let url = fileURL(in: directory),
@@ -55,6 +58,20 @@ enum RaceRecordCache {
         // 원본을 먼저 옮겨야 다음 save가 덮어쓰지 않는다. 옮기지 못하면 원본을 건드리지 않는다
         if quarantine(url, now: now) { save(records, in: directory) }
         return records
+    }
+
+    static func saveDeletedIDs(_ ids: [UUID], in directory: URL? = nil) {
+        guard let url = fileURL(in: directory, name: deletedFilename),
+              let data = try? JSONEncoder().encode(ids) else { return }
+        try? data.write(to: url, options: .atomic)
+        excludeFromBackup(url)
+    }
+
+    /// 파일이 없거나 깨졌으면 빈 목록 — 표식이 사라져도 기록이 되살아날 뿐 잃는 것은 없다
+    static func loadDeletedIDs(from directory: URL? = nil) -> [UUID] {
+        guard let url = fileURL(in: directory, name: deletedFilename),
+              let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([UUID].self, from: data)) ?? []
     }
 
     /// 원소 하나의 디코딩 실패를 삼키는 래퍼 — 배열 디코딩이 통째로 실패하지 않게 한다
@@ -81,13 +98,13 @@ enum RaceRecordCache {
     }
 
     /// directory 주입은 테스트용 — 기본은 Application Support/RunWrap (없으면 만든다)
-    private static func fileURL(in directory: URL?) -> URL? {
-        if let directory { return directory.appendingPathComponent(filename) }
+    private static func fileURL(in directory: URL?, name: String = filename) -> URL? {
+        if let directory { return directory.appendingPathComponent(name) }
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory,
                                                   in: .userDomainMask).first else { return nil }
         let dir = base.appendingPathComponent("RunWrap", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(filename)
+        return dir.appendingPathComponent(name)
     }
 }
 
@@ -107,8 +124,21 @@ final class RaceRecordStore: ObservableObject {
         RaceRecordCache.save(records)
     }
 
+    /// 지운 id는 삭제 표식으로 남긴다 (이슈 #118) — 다음 백업의 합집합 병합에서 서버 본이 되살리지 못하게
     func remove(_ record: RaceRecord) {
         records.removeAll { $0.id == record.id }
+        RaceRecordCache.save(records)
+        var deleted = RaceRecordCache.loadDeletedIDs()
+        if !deleted.contains(record.id) {
+            deleted.append(record.id)
+            RaceRecordCache.saveDeletedIDs(deleted)
+        }
+    }
+
+    /// 복원·병합된 목록으로 통째로 교체한다 (이슈 #118) — CollectionStore.replace와 같은 역할.
+    /// 입력은 이미 최신순이다(스냅샷·unionRaceRecords가 그 순서로 준다)
+    func replace(with records: [RaceRecord]) {
+        self.records = records
         RaceRecordCache.save(records)
     }
 }

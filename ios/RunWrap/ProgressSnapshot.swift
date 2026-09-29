@@ -4,12 +4,12 @@ import Foundation
 ///
 /// XP 숫자는 넣지 않는다 — 복원된 `cycleStartedAt`과 HealthKit 이력으로
 /// `GrowthEngine`이 결정론적으로 재계산한다(기획서 §5의 "XP 원장을 저장하지 않는다").
-/// 여기 담는 것은 재계산이 불가능한 값들뿐이다: 프로필·사이클 경계·최고 단계·도감.
+/// 여기 담는 것은 재계산이 불가능한 값들뿐이다: 프로필·사이클 경계·최고 단계·도감·직접 입력한 대회 기록.
 /// 저장처는 사용자의 CloudKit private database(`ProgressBackupStore`)이고,
 /// 이 파일은 Foundation만 알아 순수 로직으로 테스트한다.
 struct ProgressSnapshot: Codable, Equatable {
     /// 현재 스키마 버전 — 필드가 바뀌면 올리고, 병합·복원은 이 값 이하만 받는다.
-    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 이력(이슈 #108, #116)·사이클 목표 필드(이슈 #110)는 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
+    /// 심박 기준 필드(이슈 #56)·주간 목표 변경 이력(이슈 #108, #116)·사이클 목표 필드(이슈 #110)·대회 기록(이슈 #118)은 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
     /// 올리면 구버전 기기가 keepServer로 백업 자체를 멈춘다
     static let currentSchemaVersion = 1
 
@@ -47,6 +47,12 @@ struct ProgressSnapshot: Codable, Equatable {
     /// 로컬에 아직 사이클 목표 키가 없는 설치. 복원하면 raceGoal로 대체한다. #56 심박 필드와 같은 방식
     var cycleGoalRaw: String?
     var cycleGoalSeconds: Int?
+    /// 직접 입력한 대회 기록 (이슈 #118) — HealthKit 건강 데이터가 아닌 사용자 입력값이라 함께 백업한다.
+    /// nil = 이 필드가 없던 옛 스냅샷. readLocal은 항상 배열(빈 배열 포함)로 채운다. #56 심박 필드와 같은 방식
+    var raceRecords: [RaceRecord]?
+    /// 지운 대회 기록의 id(삭제 표식, 이슈 #118) — 합집합 병합은 삭제를 전파하지 못해 한 기기에서 지운
+    /// 기록이 서버 본에서 되살아난다. 지운 id를 함께 백업해 `unionRaceRecords`가 걸러 낸다. nil = 옛 스냅샷
+    var deletedRaceRecordIDs: [UUID]?
 
     /// 내용이 같은지 — 동기화 메타(revision·updatedAt)만 다른 스냅샷은 다시 올릴 필요가 없다
     func hasSameContent(as other: ProgressSnapshot) -> Bool {
@@ -59,11 +65,12 @@ struct ProgressSnapshot: Codable, Equatable {
         return lhs == rhs
     }
 
-    // MARK: - 로컬 상태 읽기/쓰기 (UserDefaults + 도감 배열)
+    // MARK: - 로컬 상태 읽기/쓰기 (UserDefaults + 도감·대회 기록 배열)
 
     /// 현재 로컬 상태를 스냅샷으로 접는다. 온보딩 전(레벨 없음)이면 nil —
     /// 백업할 진행도 자체가 없다. revision은 동기화 메타라 스토어가 채운다(여기서는 0).
     static func readLocal(defaults: UserDefaults, birds: [CollectedBird],
+                          raceRecords: [RaceRecord], deletedRaceRecordIDs: [UUID] = [],
                           now: Date) -> ProgressSnapshot? {
         guard let levelRaw = defaults.string(forKey: ProfileKey.levelV2),
               !levelRaw.isEmpty else { return nil }
@@ -94,11 +101,13 @@ struct ProgressSnapshot: Codable, Equatable {
             // 빈 문자열은 "목표 없음"이라 유효한 값 — 키가 없을 때만 nil이다
             cycleGoalRaw: defaults.string(forKey: GrowthKey.cycleGoal),
             cycleGoalSeconds: defaults.object(forKey: GrowthKey.cycleGoalSec) == nil
-                ? nil : defaults.integer(forKey: GrowthKey.cycleGoalSec))
+                ? nil : defaults.integer(forKey: GrowthKey.cycleGoalSec),
+            raceRecords: raceRecords,
+            deletedRaceRecordIDs: deletedRaceRecordIDs)
     }
 
     /// 스냅샷을 로컬 저장값에 적용한다 — 신규 설치 복원 경로.
-    /// 도감 파일 쓰기는 호출부(스토어) 몫이다: 이 함수는 UserDefaults만 알아 테스트가 쉽다.
+    /// 도감·대회 기록 파일 쓰기는 호출부(스토어) 몫이다: 이 함수는 UserDefaults만 알아 테스트가 쉽다.
     func apply(to defaults: UserDefaults) {
         defaults.set(levelRaw, forKey: ProfileKey.levelV2)
         defaults.set(purposesRaw, forKey: ProfileKey.purposes)
@@ -175,6 +184,8 @@ extension ProgressSnapshot {
         hrZoneMethodRaw = try container.decodeIfPresent(String.self, forKey: .hrZoneMethodRaw)
         cycleGoalRaw = try container.decodeIfPresent(String.self, forKey: .cycleGoalRaw)
         cycleGoalSeconds = try container.decodeIfPresent(Int.self, forKey: .cycleGoalSeconds)
+        raceRecords = try container.decodeIfPresent([RaceRecord].self, forKey: .raceRecords)
+        deletedRaceRecordIDs = try container.decodeIfPresent([UUID].self, forKey: .deletedRaceRecordIDs)
 
         weeklyGoalChanges = try container.decodeIfPresent([WeeklyGoalChange].self, forKey: .weeklyGoalChanges)
         if weeklyGoalChanges == nil {
@@ -212,6 +223,7 @@ enum ProgressMergeEngine {
     ///   "성장은 되돌리지 않는다"(§5)를 기기 간에도 지킨다.
     /// - 다른 cycleID: 사이클 전환은 원자적 사건이라 최신 `updatedAt` 쪽이 통째로 이긴다.
     /// - 도감: 어느 경우든 합집합 — 수집 이력은 잃을 이유가 없다.
+    /// - 대회 기록(이슈 #118): 어느 경우든 합집합이되 양쪽의 삭제 표식에 걸린 기록은 뺀다 — `unionRaceRecords` 참고.
     static func merge(local: ProgressSnapshot, server: ProgressSnapshot) -> ProgressMergeResult {
         guard server.schemaVersion <= ProgressSnapshot.currentSchemaVersion else {
             return .keepServer
@@ -221,6 +233,10 @@ enum ProgressMergeEngine {
             merged.maxStage = max(local.maxStage, server.maxStage)
         }
         merged.collectedBirds = unionBirds(local.collectedBirds, server.collectedBirds)
+        let deleted = unionDeletedIDs(local.deletedRaceRecordIDs ?? [], server.deletedRaceRecordIDs ?? [])
+        merged.raceRecords = unionRaceRecords(local.raceRecords ?? [], server.raceRecords ?? [],
+                                              deleted: deleted)
+        merged.deletedRaceRecordIDs = deleted
         merged.schemaVersion = ProgressSnapshot.currentSchemaVersion
         // 서버 revision보다 커야 이 병합이 최신본으로 남는다 — 단조 증가 보장
         merged.revision = max(local.revision, server.revision) + 1
@@ -255,5 +271,23 @@ enum ProgressMergeEngine {
         return (lhs + rhs)
             .filter { seen.insert($0.id).inserted }
             .sorted { $0.collectedAt < $1.collectedAt }
+    }
+
+    /// 대회 기록 합집합 (이슈 #118) — id 기준 중복 제거, 대회 날짜 최신순(RaceRecordStore의 저장 순서와 동일).
+    ///
+    /// `deleted`에 든 id는 뺀다. 합집합만으로는 삭제가 전파되지 않아, 한 기기(iCloud 사용 중인 단일 기기
+    /// 포함)에서 지운 기록이 서버 본과 합쳐질 때마다 되살아났다 — 지운 id를 삭제 표식으로 함께 들고
+    /// 다닌다. 표식은 사용자가 지운 횟수만큼만 늘어 크기 걱정은 없다
+    static func unionRaceRecords(_ lhs: [RaceRecord], _ rhs: [RaceRecord],
+                                 deleted: [UUID] = []) -> [RaceRecord] {
+        var seen = Set<UUID>(deleted)
+        return (lhs + rhs)
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.date > $1.date }
+    }
+
+    /// 삭제 표식 합집합 (이슈 #118) — 순서는 의미 없지만 `hasSameContent` 비교가 안정되게 정렬한다
+    static func unionDeletedIDs(_ lhs: [UUID], _ rhs: [UUID]) -> [UUID] {
+        Array(Set(lhs).union(rhs)).sorted { $0.uuidString < $1.uuidString }
     }
 }

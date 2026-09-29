@@ -19,6 +19,8 @@ struct SettingsScreen: View {
     @State private var isRediagnosing = false
     /// 직접 입력한 대회 기록 (이슈 #35) — 예측 표본. 루트가 쥐고 여기서 추가·삭제한다
     @EnvironmentObject private var raceRecords: RaceRecordStore
+    /// 대회 기록은 CloudKit 진행도 스냅샷에 포함된다 (이슈 #118) — 추가·삭제 직후 백업을 예약한다
+    @EnvironmentObject private var backup: ProgressBackupStore
     @State private var isAddingRecord = false
     // 알림 (계획서 M8) — 기본값은 NotificationScheduler.rescheduleWeekly의 폴백과 같아야 한다
     @AppStorage(NotifyKey.workoutEnabled) private var workoutNotify = false
@@ -201,7 +203,10 @@ struct SettingsScreen: View {
         }
         // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
         .sheet(isPresented: $isAddingRecord) {
-            RaceRecordInputSheet { raceRecords.add($0) }
+            RaceRecordInputSheet {
+                raceRecords.add($0)
+                scheduleBackup()
+            }
         }
         // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다.
         // 끌 때는 주간 알림 캐시를 비우고 다시 예약한다 — 데모 수치가 알림 본문에 남지 않게 (이슈 #44)
@@ -413,7 +418,10 @@ struct SettingsScreen: View {
                     .foregroundStyle(RR.text2)
             }
             Spacer(minLength: 8)
-            Button { raceRecords.remove(record) } label: {
+            Button {
+                raceRecords.remove(record)
+                scheduleBackup()
+            } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(RR.text3.opacity(0.6))
@@ -422,6 +430,12 @@ struct SettingsScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    /// 대회 기록 변경 직후의 스냅샷 백업 (이슈 #118) — HomeScreen.scheduleBackup과 같은 방식.
+    /// 실패해도 다음 트리거(백그라운드 진입 등)에서 다시 올라간다
+    private func scheduleBackup() {
+        Task { await backup.backupIfChanged() }
     }
 
     /// 기록 추가 버튼 행 — 예측 표본이 되는 이유를 캡션으로 밝힌다
