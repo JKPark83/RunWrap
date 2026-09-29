@@ -143,7 +143,7 @@ struct HomeBriefingEngineTests {
     @Test("지난주 대비 증가 — 10% 룰 안(+8%)이면 시안 1f(brfN)의 '딱 좋은 증가폭' 문장")
     func growthPraiseLine() {
         // 이전 7일(daysAgo 7~14) 10km, 최근 7일(daysAgo 0~7) 10.8km → +8% (10% 룰 안이라 과부하 아님)
-        // ※ windowKm의 최근 창은 [now-7d, now) 반열림이라 daysAgo: 0(= now 정각)은 제외된다.
+        // ※ 최근 창은 [6일 전 자정, now) 반열림이라 daysAgo: 0(= now 정각)은 제외된다 (이슈 #75).
         //   경계에 걸치지 않도록 0.5일 전으로 둔다.
         let runs = [run(daysAgo: 8, km: 10),
                     run(daysAgo: 0.5, km: 3.6), run(daysAgo: 1, km: 3.6), run(daysAgo: 3, km: 3.6)]
@@ -158,7 +158,7 @@ struct HomeBriefingEngineTests {
     @Test("우선순위 ① — 증가폭이 10% 룰을 넘으면 칭찬 대신 감량 권고가 나온다")
     func distanceOverloadLine() {
         // 이전 7일 10km, 최근 7일 15km → +50% (10% 룰 초과)
-        // ※ 최근 창은 [now-7d, now) 반열림 — daysAgo: 0은 제외되므로 0.5일 전에 둔다.
+        // ※ 최근 창은 [6일 전 자정, now) 반열림 — daysAgo: 0은 제외되므로 0.5일 전에 둔다.
         let runs = [run(daysAgo: 8, km: 10),
                     run(daysAgo: 0.5, km: 5), run(daysAgo: 1, km: 5), run(daysAgo: 3, km: 5)]
         let r = report(runs)

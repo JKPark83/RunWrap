@@ -7,13 +7,14 @@ struct ReportSnapshot: Codable, Equatable {
     let generatedAt: Date
     let headline: String       // WeeklyReport.headline
     let suggestion: String?    // 다음 주 제안
-    let weekKm: Double         // 최근 7일 거리 합
+    let weekKm: Double         // 최근 7일 거리 합 (6일 전 자정 ~ 지금 — runCount와 같은 창, 이슈 #75)
     let runCount: Int          // 최근 7일 러닝 횟수
 
     /// 리포트 + 원본 기록에서 스냅샷을 만든다 (순수 함수 — 테스트 대상)
     static func make(report: WeeklyReport, runs: [RunSummary], now: Date) -> ReportSnapshot {
-        let weekAgo = now.addingTimeInterval(-7 * 86_400)
-        let weekKm = runs.filter { $0.start >= weekAgo && $0.start < now }
+        // report.weekRunCount와 같은 달력 창 — 한 문장에 나란히 실리니 창이 같아야 한다 (이슈 #75)
+        let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
+        let weekKm = runs.filter { $0.start >= windowStart && $0.start < now }
             .compactMap(\.distanceKm)
             .reduce(0, +)
         return ReportSnapshot(generatedAt: now,

@@ -35,7 +35,8 @@ enum NotificationScheduler {
     }
 
     /// 주간 본문 — 캐시 스냅샷이 있으면 횟수·거리·헤드라인, 없으면 기본 문구.
-    /// 횟수·거리 모두 롤링 최근 7일 기준이라 문구도 "최근 7일"로 맞춘다 (이슈 #21).
+    /// 횟수·거리 모두 최근 7일(6일 전 자정 ~ 지금, 리포트 헤더와 같은 창) 기준이라
+    /// 문구도 "최근 7일"로 맞춘다 (이슈 #21, #75).
     /// trigger는 알림이 실제로 울릴 시각 — 그때 스냅샷이 오래됐으면 수치 없이 기본 문구로 낸다 (이슈 #61)
     static func weeklyBody(snapshot: ReportSnapshot?, at trigger: Date) -> String {
         guard let snapshot, !isStale(snapshot, at: trigger) else {
