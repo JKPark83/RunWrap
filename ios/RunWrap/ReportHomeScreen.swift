@@ -468,7 +468,7 @@ struct ReportHomeContent: View {
                 .font(.system(size: 13.5, weight: .semibold))
                 .foregroundStyle(RR.text)
             Spacer()
-            Text(factor.detail)
+            Text(factorDetail(factor))
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(RR.text2)
             Text(factor.points > 0 ? "+\(factor.points)"
@@ -477,6 +477,18 @@ struct ReportHomeContent: View {
                 .foregroundStyle(factor.points > 0 ? RR.pos
                                  : factor.points < 0 ? RR.dang : RR.text3)
                 .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    /// 팩터 수치가 묶인 카드가 이 레벨에서 수치를 숨기면 숫자 없는 문장으로 바꾼다 (이슈 #125).
+    /// 기여 점수는 배터리 합산에 이미 들어가 있으므로 점수 표기는 그대로 둔다.
+    private func factorDetail(_ factor: BatteryReport.Factor) -> String {
+        guard let gate = factor.gate, !ReportGate.showsNumbers(gate, level: level) else {
+            return factor.detail
+        }
+        switch gate {
+        case .acwr: return "이번 주 훈련량이 몸보다 앞섰어요"
+        default: return factor.detail
         }
     }
 

@@ -94,6 +94,21 @@ struct BatteryEngineTests {
         #expect(report.level == 42)
     }
 
+    @Test("카드 게이트 — 훈련 부하 팩터만 ACWR 카드에 묶이고 나머지는 nil (이슈 #125)")
+    func onlyTrainingLoadFactorIsGatedByACWR() throws {
+        // 위 −8 케이스와 같은 기록에 오늘 3km를 더해 '오늘 훈련'(−6)도 함께 나오게 한다
+        let vitals = VitalsSnapshot(hrvMs: reading(60, 60), restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        let runs = [run(daysAgo: 0.1, km: 3), run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 5),
+                    run(daysAgo: 15, km: 5), run(daysAgo: 22, km: 5),
+                    run(daysAgo: 30, km: 5)]
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: runs, now: now))
+        let load = try #require(report.factors.first { $0.name == "훈련 부하" })
+        #expect(load.gate == .acwr)
+        #expect(report.factors.contains { $0.name == "오늘 훈련" })
+        #expect(report.factors.filter { $0.name != "훈련 부하" }.allSatisfy { $0.gate == nil })
+    }
+
     @Test("ACWR 표본 가드 — 만성 주평균 3km 미만이면 감점 없음")
     func acwrNeedsThreeKmChronic() throws {
         // 4주 이력은 있지만 창 안 거리 10km → chronic 10/4=2.5 < 3 → nil

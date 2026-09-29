@@ -38,6 +38,9 @@ struct BatteryReport: Equatable {
         let detail: String        // "55 ms · 평소 62 ms"
         let points: Int           // 기여 포인트 (충전 +, 소모 −)
         let systemImage: String
+        /// 이 요인의 수치가 묶인 카드 게이트 — nil이면 전 레벨 노출.
+        /// 엔진은 카드 종류만 표기하고, 레벨별 문구 처리는 화면이 `ReportGate`로 정한다 (이슈 #125)
+        var gate: ReportCard? = nil
     }
 
     let level: Int                // 0–100
@@ -173,7 +176,8 @@ enum BatteryEngine {
             factors.append(.init(name: "훈련 부하",
                                  detail: String(format: "부하 비율 %.2f", ratio),
                                  points: -min(15, Int(((ratio - 1.3) * 25).rounded())),
-                                 systemImage: "speedometer"))
+                                 systemImage: "speedometer",
+                                 gate: .acwr))
         }
 
         let level = max(0, min(100, 50 + factors.map(\.points).reduce(0, +)))
