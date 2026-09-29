@@ -7,7 +7,7 @@ struct RunSummary: Identifiable, Equatable {
     let durationSec: Double
     let distanceMeters: Double?
     let avgHeartRate: Double?
-    /// 세션 최고 심박(bpm) — HRmax 관찰 추정(TrainingGuideEngine.hrMax)의 재료.
+    /// 세션 최고 심박(bpm) — HRmax 관찰 추정(TrainingGuideEngine.hrMaxEstimate)의 재료.
     /// 워크아웃 통계에서 바로 읽어 추가 쿼리 비용이 없다 (이슈 #34)
     let maxHeartRate: Double?
     /// 세션 소모 칼로리(kcal) — 다이어트 카드의 주간 합계 재료 (기획서 §4.5)

@@ -11,6 +11,10 @@ struct SettingsScreen: View {
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
     // 대회 날짜 — 0이면 미설정. Date를 직접 저장할 수 없어 timeIntervalSince1970로 둔다
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
+    // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값
+    @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
+    @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
+    @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
     /// 다시 진단받기 — 온보딩 설문을 시트로 다시 띄운다 (기획서 §7)
     @State private var isRediagnosing = false
     /// 직접 입력한 대회 기록 (이슈 #35) — 예측 표본. 루트가 쥐고 여기서 추가·삭제한다
@@ -31,6 +35,15 @@ struct SettingsScreen: View {
     /// (프로젝트 runmisae-privacy). 방침을 고치면 원본과 배포본을 함께 갱신한다.
     /// App Store Connect의 개인정보 처리방침 URL에도 같은 주소를 넣는다.
     private static let privacyPolicyURL = URL(string: "https://runmisae-privacy.vercel.app/privacy.html")!
+
+    /// 실제 적용되는 심박 기준 — 존 방식 체크 표시·Karvonen 선택 가능 여부의 근거 (이슈 #56)
+    private var heartRate: HeartRateProfile {
+        TrainingGuideEngine.heartRateProfile(estimate: health.hrMaxEstimate,
+                                             manualHrMax: hrMaxManual,
+                                             manualRestingHR: restingHRManual,
+                                             measuredRestingHR: health.restingHRBpm,
+                                             zoneMethodRaw: hrZoneMethodRaw)
+    }
 
     var body: some View {
         ScrollView {
@@ -81,6 +94,42 @@ struct SettingsScreen: View {
                         ForEach(raceRecords.records) { recordRow($0) }
                         addRecordRow
                     }
+                }
+                // 심박 기준 (이슈 #56) — 존·대회 노력도·세션 상세가 모두 이 값을 쓴다. 끄면 추정값으로 돌아간다
+                section(title: "심박 기준") {
+                    toggleRow(label: "최대 심박 직접 입력",
+                              caption: "끄면 추정값 \(Int(health.hrMaxEstimate.bpm.rounded())) bpm(\(health.hrMaxEstimate.source.label))을 써요",
+                              isOn: manualHrMaxBinding)
+                    if hrMaxManual > 0 {
+                        stepperRow(title: "최대 심박 \(hrMaxManual) bpm", caption: "120~230 bpm",
+                                   value: $hrMaxManual, range: HeartRateProfile.hrMaxRange)
+                    }
+                    toggleRow(label: "안정 심박 직접 입력",
+                              caption: health.restingHRBpm.map { "끄면 건강 앱 최근값 \(Int($0.rounded())) bpm을 써요" }
+                                  ?? "건강 앱에 최근 안정 심박 기록이 없어요",
+                              isOn: manualRestingBinding)
+                    if restingHRManual > 0 {
+                        stepperRow(title: "안정 심박 \(restingHRManual) bpm", caption: "30~100 bpm",
+                                   value: $restingHRManual, range: HeartRateProfile.restingRange)
+                    }
+                }
+                // 체크는 실제 적용된 방식을 따른다 — 저장값이 Karvonen이어도 안정 심박이 없으면
+                // %HRmax에 체크가 가고, 저장값은 지우지 않아 안정 심박이 돌아오면 자동 복귀한다
+                section(title: "심박 존 방식") {
+                    optionRow(label: HeartRateZoneMethod.percentMax.label,
+                              caption: "최대 심박의 60·70·80·90%로 다섯 구간을 나눠요",
+                              isSelected: heartRate.zoneMethod == .percentMax) {
+                        hrZoneMethodRaw = HeartRateZoneMethod.percentMax.rawValue
+                    }
+                    optionRow(label: HeartRateZoneMethod.karvonen.label,
+                              caption: heartRate.restingHR == nil
+                                  ? "안정 심박이 있어야 고를 수 있어요"
+                                  : "예비 심박(최대−안정)의 50~100%로 나눠 개인차를 반영해요",
+                              isSelected: heartRate.zoneMethod == .karvonen) {
+                        hrZoneMethodRaw = HeartRateZoneMethod.karvonen.rawValue
+                    }
+                    .disabled(heartRate.restingHR == nil)
+                    .opacity(heartRate.restingHR == nil ? 0.45 : 1)
                 }
                 // 알림 — 로컬 알림 2종 (계획서 M8). 토글을 켤 때 시스템 권한을 요청한다
                 section(title: "알림") {
@@ -370,6 +419,47 @@ struct SettingsScreen: View {
                         ? Date().addingTimeInterval(8 * 7 * 86_400).timeIntervalSince1970
                         : 0
                 })
+    }
+
+    /// 최대 심박 직접 입력 토글 (이슈 #56) — 켜면 추정값(범위로 클램프)에서 시작하고,
+    /// 끄면 0(미설정)으로 되돌려 추정값을 쓴다. 대회 목표 토글과 같은 패턴
+    private var manualHrMaxBinding: Binding<Bool> {
+        Binding(get: { hrMaxManual > 0 },
+                set: { isOn in
+                    let range = HeartRateProfile.hrMaxRange
+                    let start = Int(health.hrMaxEstimate.bpm.rounded())
+                    hrMaxManual = isOn ? min(max(start, range.lowerBound), range.upperBound) : 0
+                })
+    }
+
+    /// 안정 심박 직접 입력 토글 (이슈 #56) — 켜면 건강 앱 최근값(없으면 60)에서 시작
+    private var manualRestingBinding: Binding<Bool> {
+        Binding(get: { restingHRManual > 0 },
+                set: { isOn in
+                    let range = HeartRateProfile.restingRange
+                    let start = Int((health.restingHRBpm ?? 60).rounded())
+                    restingHRManual = isOn ? min(max(start, range.lowerBound), range.upperBound) : 0
+                })
+    }
+
+    /// 숫자 입력 행 — weeklyGoalRow와 같은 모양에 범위만 받는다 (심박 기준, 이슈 #56)
+    private func stepperRow(title: String, caption: String,
+                            value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Stepper("", value: value, in: range)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     /// 대회 날짜 선택 — 오늘부터 1년 안. 지난 날짜는 고를 수 없다 (주기화가 무의미해진다)

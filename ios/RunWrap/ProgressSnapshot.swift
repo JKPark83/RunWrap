@@ -8,7 +8,9 @@ import Foundation
 /// 저장처는 사용자의 CloudKit private database(`ProgressBackupStore`)이고,
 /// 이 파일은 Foundation만 알아 순수 로직으로 테스트한다.
 struct ProgressSnapshot: Codable, Equatable {
-    /// 현재 스키마 버전 — 필드가 바뀌면 올리고, 병합·복원은 이 값 이하만 받는다
+    /// 현재 스키마 버전 — 필드가 바뀌면 올리고, 병합·복원은 이 값 이하만 받는다.
+    /// 심박 기준 필드(이슈 #56)는 옵셔널 추가라 1로 둔다 — 옛 디코더는 모르는 키를 무시하고,
+    /// 올리면 구버전 기기가 keepServer로 백업 자체를 멈춘다
     static let currentSchemaVersion = 1
 
     var schemaVersion: Int
@@ -31,6 +33,12 @@ struct ProgressSnapshot: Codable, Equatable {
     var raceDate: Date?
     var collectedBirds: [CollectedBird]
 
+    /// 심박 기준 (이슈 #56) — nil = 미설정. 이 필드가 없던 옛 스냅샷도 decodeIfPresent로
+    /// 디코드되며 미설정으로 읽힌다. 옵셔널 var라 memberwise init 기본값이 nil이다
+    var hrMaxManual: Int?
+    var restingHRManual: Int?
+    var hrZoneMethodRaw: String?
+
     /// 내용이 같은지 — 동기화 메타(revision·updatedAt)만 다른 스냅샷은 다시 올릴 필요가 없다
     func hasSameContent(as other: ProgressSnapshot) -> Bool {
         var lhs = self
@@ -51,6 +59,9 @@ struct ProgressSnapshot: Codable, Equatable {
         guard let levelRaw = defaults.string(forKey: ProfileKey.levelV2),
               !levelRaw.isEmpty else { return nil }
         let raceDateRaw = defaults.double(forKey: ProfileKey.raceDate)
+        let hrMaxManual = defaults.integer(forKey: ProfileKey.hrMaxManual)
+        let restingHRManual = defaults.integer(forKey: ProfileKey.restingHRManual)
+        let hrZoneMethodRaw = defaults.string(forKey: ProfileKey.hrZoneMethod) ?? ""
         return ProgressSnapshot(
             schemaVersion: currentSchemaVersion,
             revision: 0,
@@ -65,7 +76,10 @@ struct ProgressSnapshot: Codable, Equatable {
             raceGoalRaw: defaults.string(forKey: ProfileKey.raceGoal) ?? "",
             raceGoalSeconds: defaults.integer(forKey: ProfileKey.raceGoalSec),
             raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
-            collectedBirds: birds)
+            collectedBirds: birds,
+            hrMaxManual: hrMaxManual > 0 ? hrMaxManual : nil,
+            restingHRManual: restingHRManual > 0 ? restingHRManual : nil,
+            hrZoneMethodRaw: hrZoneMethodRaw.isEmpty ? nil : hrZoneMethodRaw)
     }
 
     /// 스냅샷을 로컬 저장값에 적용한다 — 신규 설치 복원 경로.
@@ -81,6 +95,22 @@ struct ProgressSnapshot: Codable, Equatable {
         defaults.set(raceGoalRaw, forKey: ProfileKey.raceGoal)
         defaults.set(raceGoalSeconds, forKey: ProfileKey.raceGoalSec)
         defaults.set(raceDate?.timeIntervalSince1970 ?? 0, forKey: ProfileKey.raceDate)
+        // 심박 기준 (이슈 #56) — 스냅샷이 단일 원본이라 nil이면 로컬 값도 지워 미설정으로 맞춘다
+        if let hrMaxManual {
+            defaults.set(hrMaxManual, forKey: ProfileKey.hrMaxManual)
+        } else {
+            defaults.removeObject(forKey: ProfileKey.hrMaxManual)
+        }
+        if let restingHRManual {
+            defaults.set(restingHRManual, forKey: ProfileKey.restingHRManual)
+        } else {
+            defaults.removeObject(forKey: ProfileKey.restingHRManual)
+        }
+        if let hrZoneMethodRaw {
+            defaults.set(hrZoneMethodRaw, forKey: ProfileKey.hrZoneMethod)
+        } else {
+            defaults.removeObject(forKey: ProfileKey.hrZoneMethod)
+        }
     }
 
     /// 사이클 식별자를 읽고, 없으면 만들어 저장한다 — 이 기능 도입 전 사용자의
