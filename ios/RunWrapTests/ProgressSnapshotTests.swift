@@ -212,6 +212,52 @@ struct ProgressSnapshotTests {
             defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")) == nil)
     }
 
+    @Test("심박 기준 왕복 — 수동 최대·안정 심박·존 방식이 apply→readLocal로 보존되고, 0/빈 값은 nil로 읽힌다")
+    func heartRateRoundTrip() throws {
+        let defaults = Self.freshDefaults("heartRate")
+        var snapshot = Self.makeSnapshot()
+        snapshot.hrMaxManual = 185
+        snapshot.restingHRManual = 48
+        snapshot.hrZoneMethodRaw = "karvonen"
+        snapshot.apply(to: defaults)
+
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(read.hrMaxManual == 185)
+        #expect(read.restingHRManual == 48)
+        #expect(read.hrZoneMethodRaw == "karvonen")
+
+        // 미설정 defaults(키 없음 → integer 0, string nil)는 nil 셋으로 읽힌다
+        let unset = Self.freshDefaults("heartRateUnset")
+        Self.makeSnapshot().apply(to: unset)
+        let readUnset = try #require(ProgressSnapshot.readLocal(
+            defaults: unset, birds: [], now: Self.date("2026-08-20T00:00:00Z")))
+        #expect(readUnset.hrMaxManual == nil)
+        #expect(readUnset.restingHRManual == nil)
+        #expect(readUnset.hrZoneMethodRaw == nil)
+    }
+
+    @Test("옛 스냅샷 호환 — 심박 필드가 없는 JSON도 디코드되고, 적용하면 로컬 수동값을 미설정으로 되돌린다")
+    func legacySnapshotWithoutHeartRate() throws {
+        // nil 옵셔널은 synthesized 인코딩에서 키 자체가 빠진다 — 이슈 #56 이전 본과 같은 JSON
+        let data = try JSONEncoder().encode(Self.makeSnapshot())
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["hrMaxManual"] == nil)
+        #expect(object["restingHRManual"] == nil)
+        #expect(object["hrZoneMethodRaw"] == nil)
+
+        let decoded = try JSONDecoder().decode(ProgressSnapshot.self, from: data)
+        #expect(decoded.hrMaxManual == nil)
+        #expect(decoded.restingHRManual == nil)
+        #expect(decoded.hrZoneMethodRaw == nil)
+
+        // 스냅샷이 단일 원본 — 로컬에 남은 수동값 180은 지워져 추정값으로 돌아간다
+        let defaults = Self.freshDefaults("legacyHeartRate")
+        defaults.set(180, forKey: ProfileKey.hrMaxManual)
+        decoded.apply(to: defaults)
+        #expect(defaults.integer(forKey: ProfileKey.hrMaxManual) == 0)
+    }
+
     // MARK: - 복원 선택 판정 (이슈 #44)
 
     @Test("복원 선택 — 동기화 이력 없는 설치가 서버의 다른 사이클 본을 만나면 묻는다")

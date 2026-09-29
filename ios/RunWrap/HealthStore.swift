@@ -24,9 +24,14 @@ final class HealthStore: ObservableObject {
     @Published private(set) var crossTrainings: [CrossTraining] = []
     /// 심폐 체력 카드 보조 지표용 최근 12주 심박 회복(HRR) 표본 (bpm)
     @Published private(set) var hrrTrend: [(date: Date, value: Double)] = []
-    /// 최대 심박(bpm) 추정 — 관찰 최대(최근 12주 세션 최고 심박 2번째 값)와 Tanaka 중 큰 쪽
-    /// (TrainingGuideEngine.hrMax). 대회 노력도와 세션 상세 심박 존의 공통 재료 (이슈 #34, #48)
-    @Published private(set) var hrMaxBpm: Double?
+    /// 최대 심박(bpm) 추정과 출처 — 관찰 최대(최근 12주 세션 최고 심박 2번째 값)와
+    /// Tanaka(2001) 중 큰 쪽, 둘 다 없으면 190 폴백 (TrainingGuideEngine.hrMaxEstimate).
+    /// 수동 입력은 여기서 섞지 않는다 — 스토어는 HealthKit 값만 내고, 화면이
+    /// TrainingGuideEngine.heartRateProfile로 수동값과 합친다 (이슈 #34, #48, #56)
+    @Published private(set) var hrMaxEstimate: (bpm: Double, source: HeartRateProfile.Source) =
+        (TrainingGuideEngine.fallbackHrMaxBpm, .fallback)
+    /// 안정 심박(bpm) 최근값 — 최근 28일 중 가장 최근 표본. Karvonen 존의 재료 (이슈 #56)
+    @Published private(set) var restingHRBpm: Double?
 
     private let store = HKHealthStore()
 
@@ -42,7 +47,9 @@ final class HealthStore: ObservableObject {
         vo2Max = DemoData.vo2Max
         crossTrainings = DemoData.crossTrainings
         hrrTrend = DemoData.hrrTrend
-        hrMaxBpm = TrainingGuideEngine.hrMax(runs: DemoData.runs, now: Date(), birthYear: nil)
+        hrMaxEstimate = TrainingGuideEngine.hrMaxEstimate(runs: DemoData.runs, now: Date(), birthYear: nil)
+        // 시뮬레이터에서도 Karvonen 존을 고를 수 있게 합성 활력징후의 안정 심박을 그대로 쓴다
+        restingHRBpm = DemoData.vitals.restingHR?.today
     }
 
     /// 최초 연결: 권한 요청 → 바로 조회
@@ -88,11 +95,14 @@ final class HealthStore: ObservableObject {
             for (index, workout) in workouts.enumerated() where workout.startDate >= cadenceCutoff {
                 summaries[index].cadenceSpm = await cadenceSpm(of: workout)
             }
-            state = .loaded(summaries)
             // HRmax — 관찰 최대 우선, 폴백은 생년 기반 Tanaka (읽기 권한은 core에 이미 있다)
-            hrMaxBpm = TrainingGuideEngine.hrMax(
+            hrMaxEstimate = TrainingGuideEngine.hrMaxEstimate(
                 runs: summaries, now: Date(),
                 birthYear: (try? store.dateOfBirthComponents())?.year)
+            // 안정 심박은 목록을 띄우기 전에 받는다 — 첫 실행에 목록이 먼저 뜨면 그 사이 연
+            // 세션 상세가 안정 심박 없이 %HRmax로 존을 굳힌다(상세는 한 번만 로드). 이슈 #56
+            restingHRBpm = await latestRestingHR()
+            state = .loaded(summaries)
             vitals = await fetchVitals()
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
@@ -178,6 +188,16 @@ final class HealthStore: ObservableObject {
     }
 
     // MARK: - 활력징후 (체력 배터리)
+
+    /// 안정 심박 최근값 (이슈 #56) — vitals.restingHR.today는 기준선이 있어야 나와서 따로 본다.
+    /// 28일 창 밖은 침묵(nil). 권한은 HealthPermissions.recovery에 이미 있다
+    private func latestRestingHR(now: Date = .now) async -> Double? {
+        let samples = (try? await quantitySamples(HKQuantityType(.restingHeartRate),
+                                                  from: now.addingTimeInterval(-28 * 86_400),
+                                                  to: now)) ?? []
+        return samples.max { $0.startDate < $1.startDate }?
+            .quantity.doubleValue(for: HKUnit.count().unitDivided(by: .minute()))
+    }
 
     /// 최근 28일 활력징후를 모아 스냅샷으로 만든다 — 없는 항목은 nil로 남긴다
     private func fetchVitals(now: Date = .now) async -> VitalsSnapshot {

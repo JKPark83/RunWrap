@@ -304,22 +304,35 @@ struct RaceOutlookEngineTests {
         #expect(abs(p.riegelSec - 15_886.1) < 2)
     }
 
-    @Test("HRmax 추정 — 관찰 최대(2번째 값)와 Tanaka 중 큰 쪽, 둘 다 없으면 nil")
+    @Test("HRmax 추정 — 관찰 최대(2번째 값)와 Tanaka 중 큰 쪽과 그 출처, 둘 다 없으면 190 폴백")
     func hrMaxSources() throws {
         // 관찰: 세션 최고 심박 [190, 186, 178] → 이상치 방어로 2번째 값 186.
         // Tanaka(1990년생, now 2026년): 208 − 0.7×36 = 182.8 → 관찰 186이 이긴다
-        let runs = [190.0, 186, 178].enumerated().map { index, maxHR in
-            RunSummary(id: UUID(), start: now.addingTimeInterval(-Double(index + 1) * 86_400),
-                       durationSec: 3_600, distanceMeters: 10_000, avgHeartRate: 150,
-                       maxHeartRate: maxHR)
+        func runs(_ peaks: [Double]) -> [RunSummary] {
+            peaks.enumerated().map { index, maxHR in
+                RunSummary(id: UUID(), start: now.addingTimeInterval(-Double(index + 1) * 86_400),
+                           durationSec: 3_600, distanceMeters: 10_000, avgHeartRate: 150,
+                           maxHeartRate: maxHR)
+            }
         }
-        #expect(TrainingGuideEngine.hrMax(runs: runs, now: now, birthYear: 1990) == 186)
+        let observed = TrainingGuideEngine.hrMaxEstimate(runs: runs([190, 186, 178]),
+                                                         now: now, birthYear: 1990)
+        #expect(observed.bpm == 186)
+        #expect(observed.source == .observed)
+        // 관찰 [180, 178, 170] → 178 < Tanaka 182.8 → 큰 쪽인 Tanaka (이슈 #56 출처 표기)
+        let tanakaWins = TrainingGuideEngine.hrMaxEstimate(runs: runs([180, 178, 170]),
+                                                           now: now, birthYear: 1990)
+        #expect(abs(tanakaWins.bpm - 182.8) < 0.01)
+        #expect(tanakaWins.source == .tanaka)
         // 관찰 표본 3개 미만 → Tanaka 폴백
-        let tanaka = try #require(TrainingGuideEngine.hrMax(runs: Array(runs.prefix(2)),
-                                                            now: now, birthYear: 1990))
-        #expect(abs(tanaka - 182.8) < 0.01)
-        // 둘 다 없으면 nil — 노력도 환산 전체가 꺼진다
-        #expect(TrainingGuideEngine.hrMax(runs: [], now: now, birthYear: nil) == nil)
+        let tanaka = TrainingGuideEngine.hrMaxEstimate(runs: runs([190, 186]),
+                                                       now: now, birthYear: 1990)
+        #expect(abs(tanaka.bpm - 182.8) < 0.01)
+        #expect(tanaka.source == .tanaka)
+        // 둘 다 없으면 190 폴백 — 노력도는 reliableHrMax(nil)로 꺼진다
+        let fallback = TrainingGuideEngine.hrMaxEstimate(runs: [], now: now, birthYear: nil)
+        #expect(fallback.bpm == 190)
+        #expect(fallback.source == .fallback)
     }
 
     @Test("아웃룩 구간 — 빠른 끝만 목표 안이면 steady")

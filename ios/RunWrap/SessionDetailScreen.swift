@@ -12,6 +12,19 @@ struct SessionDetailScreen: View {
     @StateObject private var store = WorkoutDetailStore()
     @Environment(\.dismiss) private var dismiss
     @State private var showShare = false
+    // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
+    @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
+    @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
+    @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
+
+    /// 존·노력도·세션 상세가 공유하는 심박 기준 — 수동 > 추정 우선순위는 엔진이 정한다 (이슈 #56)
+    private var heartRate: HeartRateProfile {
+        TrainingGuideEngine.heartRateProfile(estimate: health.hrMaxEstimate,
+                                             manualHrMax: hrMaxManual,
+                                             manualRestingHR: restingHRManual,
+                                             measuredRestingHR: health.restingHRBpm,
+                                             zoneMethodRaw: hrZoneMethodRaw)
+    }
 
     var body: some View {
         ScrollView {
@@ -77,9 +90,9 @@ struct SessionDetailScreen: View {
         .task {
             // 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4)
             if case .loaded(let all) = health.state {
-                await store.load(run: run, others: all, hrMaxBpm: health.hrMaxBpm)
+                await store.load(run: run, others: all, heartRate: heartRate)
             } else {
-                await store.load(run: run, hrMaxBpm: health.hrMaxBpm)
+                await store.load(run: run, heartRate: heartRate)
             }
         }
         .sheet(isPresented: $showShare) {
@@ -369,21 +382,35 @@ struct SessionDetailScreen: View {
             ZoneBarView(fractions: zones)
                 .padding(.top, 14)
 
-            VStack(alignment: .leading, spacing: 5) {
-                // 세션 최고 심박 — HRmax 대비 %로 강도를 한눈에 (제안 문서 A4)
-                if let peak = detail.maxHeartRateBpm, let hrMax = detail.hrMaxBpm, hrMax > 0 {
-                    Text("최고 심박 \(Int(peak.rounded())) bpm · \(detail.hrMaxEstimated ? "추정 " : "")HRmax의 \(Int((peak / hrMax * 100).rounded()))%")
+            if let hr = detail.heartRate {
+                VStack(alignment: .leading, spacing: 5) {
+                    // 세션 최고 심박 — HRmax 대비 %로 강도를 한눈에 (제안 문서 A4).
+                    // 직접 입력한 HRmax면 "추정"을 뗀다 (이슈 #56)
+                    if let peak = detail.maxHeartRateBpm {
+                        Text("최고 심박 \(Int(peak.rounded())) bpm · \(hr.hrMaxSource == .manual ? "" : "추정 ")HRmax의 \(Int((peak / hr.hrMax * 100).rounded()))%")
+                    }
+                    // 존 방식·HRmax 출처 — 어떤 기준으로 나눈 존인지 밝힌다 (이슈 #56)
+                    Text(zoneBasisLine(hr))
+                    if hr.hrMaxSource == .fallback {
+                        Text("건강 앱에 생년월일을 넣거나 설정에서 최대 심박을 입력하면 더 정확해져요")
+                    }
                 }
-                if detail.hrMaxEstimated {
-                    Text("최대 심박 190 bpm 추정 기준 · 건강 앱에 생년월일을 넣으면 더 정확해져요")
-                }
+                .font(.system(size: 11))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
             }
-            .font(.system(size: 11))
-            .foregroundStyle(RR.text3)
-            .padding(.top, 12)
         }
         .padding(18)
         .rrCard()
+    }
+
+    /// "Karvonen(HRR) 기준 · HRmax 186 bpm(관찰 최대) · 안정 53 bpm"
+    private func zoneBasisLine(_ hr: HeartRateProfile) -> String {
+        var line = "\(hr.zoneMethod.label) 기준 · HRmax \(Int(hr.hrMax.rounded())) bpm(\(hr.hrMaxSource.label))"
+        if hr.zoneMethod == .karvonen, let rest = hr.restingHR {
+            line += " · 안정 \(Int(rest.rounded())) bpm"
+        }
+        return line
     }
 
     // MARK: 주법 (러닝 다이내믹스) — 기획서 §4.8, 계획서 M4

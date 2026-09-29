@@ -17,6 +17,10 @@ struct ReportHomeScreen: View {
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @State private var tab: ReportTab = .myState
+    // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
+    @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
+    @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
+    @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
 
     /// 리포트 탭 세그먼트 (이슈 #21) — 내 상태(최근 7일) / 이번달(월간) / 나의 성장기(장기 추이)
     enum ReportTab: String, CaseIterable {
@@ -29,6 +33,15 @@ struct ReportHomeScreen: View {
             case .growth: "나의 성장기"
             }
         }
+    }
+
+    /// 존·노력도·세션 상세가 공유하는 심박 기준 — 수동 > 추정 우선순위는 엔진이 정한다 (이슈 #56)
+    private var heartRate: HeartRateProfile {
+        TrainingGuideEngine.heartRateProfile(estimate: health.hrMaxEstimate,
+                                             manualHrMax: hrMaxManual,
+                                             manualRestingHR: restingHRManual,
+                                             measuredRestingHR: health.restingHRBpm,
+                                             zoneMethodRaw: hrZoneMethodRaw)
     }
 
     var body: some View {
@@ -66,7 +79,8 @@ struct ReportHomeScreen: View {
                                                   ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                                               runs: runs,
                                               now: Date(),
-                                              hrMaxBpm: health.hrMaxBpm,
+                                              // 폴백 190은 노력도 근거가 아니다 — nil로 넘겨 Riegel 유지
+                                              hrMaxBpm: heartRate.reliableHrMax,
                                               vo2MaxSamples: health.vo2Max,
                                               raceRecords: raceRecords.records),
                                           segment: segment)
