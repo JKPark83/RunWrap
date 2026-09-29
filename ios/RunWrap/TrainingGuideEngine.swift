@@ -399,14 +399,14 @@ struct TrainingGuideEngine {
 
     /// HRmax 추정 — ① 관찰 최대: 최근 12주 세션별 최고 심박 중 2번째 값
     /// (1건뿐인 이상 스파이크 방어), 표본 3개 이상일 때만.
-    /// ② Tanaka(2001) 208 − 0.7×나이 — WorkoutDetailStore.heartRateMax와 같은 공식.
+    /// ② Tanaka(2001) 208 − 0.7×나이. 세션 상세 심박 존도 이 값을 주입받는다 (이슈 #48).
     /// 관찰 최대는 "HRmax가 이보다 낮을 수는 없다"는 하한 증거라 Tanaka와 **큰 쪽**을 쓴다
     /// — 이지런만 한 러너의 관찰 최대는 HRmax를 크게 밑돈다. 둘 다 없으면 nil
     static func hrMax(runs: [RunSummary], now: Date, birthYear: Int?) -> Double? {
         let cutoff = now.addingTimeInterval(-84 * 86_400)
         let peaks = runs.filter { $0.start >= cutoff && $0.start <= now }
             .compactMap(\.maxHeartRate)
-            .filter { (120...230).contains($0) }   // 밖은 착용 불량·이상치
+            .filter { plausiblePeakBpm.contains($0) }   // 밖은 착용 불량·이상치
             .sorted(by: >)
         let observed: Double? = peaks.count >= 3 ? peaks[1] : nil
         let tanaka: Double? = birthYear.flatMap { year in
@@ -419,6 +419,45 @@ struct TrainingGuideEngine {
         case let (nil, t?): return t
         default: return nil
         }
+    }
+
+    // MARK: - 심박 존 (세션 상세, 이슈 #48)
+
+    /// 세션 최고 심박으로 믿을 수 있는 범위 — 밖은 착용 불량·이상치 (hrMax 관찰 표본 필터와 공용)
+    static let plausiblePeakBpm: ClosedRange<Double> = 120...230
+
+    /// HRmax 추정치(관찰 최대·Tanaka)가 둘 다 없을 때 존 계산에 쓰는 폴백
+    static let fallbackHrMaxBpm = 190.0
+
+    /// 존 계산용 HRmax — hrMax 결과를 그대로 쓰고, 없을 때만 190 폴백(추정 표기)
+    static func zoneHrMax(_ estimate: Double?) -> (bpm: Double, estimated: Bool) {
+        estimate.map { ($0, false) } ?? (fallbackHrMaxBpm, true)
+    }
+
+    /// 세션 최고 심박 — 230 초과 스파이크(착용 불량)만 버린다. 하한은 두지 않는다:
+    /// 120 아래로만 달린 쉬운 조깅에서도 최고 심박 줄은 유효하다. 남는 값이 없으면 nil
+    static func sessionPeakBpm(_ bpms: [Double]) -> Double? {
+        bpms.filter { $0 <= plausiblePeakBpm.upperBound }.max()
+    }
+
+    /// 심박 샘플 → Z1~Z5 시간 비율 (경계 0.6/0.7/0.8/0.9 × HRmax).
+    /// 샘플 간격(≤15초 캡)으로 가중하고 마지막 샘플은 5초로 친다.
+    static func heartRateZones(samples: [(time: Date, bpm: Double)], hrMax: Double) -> [Double] {
+        var seconds = [Double](repeating: 0, count: 5)
+        for (i, sample) in samples.enumerated() {
+            let weight: Double
+            if i + 1 < samples.count {
+                weight = min(samples[i + 1].time.timeIntervalSince(sample.time), 15)
+            } else {
+                weight = 5
+            }
+            let ratio = sample.bpm / hrMax
+            let zone = ratio < 0.6 ? 0 : ratio < 0.7 ? 1 : ratio < 0.8 ? 2 : ratio < 0.9 ? 3 : 4
+            seconds[zone] += max(weight, 0)
+        }
+        let total = seconds.reduce(0, +)
+        guard total > 0 else { return [0, 0, 0, 0, 0] }
+        return seconds.map { $0 / total }
     }
 
     // MARK: - 현재 기력 (Daniels VDOT)

@@ -365,4 +365,71 @@ struct TrainingGuideEngineTests {
         #expect(today.reason == .qualityDue)
         #expect(today.distanceKm == 4.0)   // 5 × 800m 본훈련 합계
     }
+
+    // MARK: - 심박 존 (세션 상세, 이슈 #48)
+
+    @Test("심박 존 — 관찰 최대·Tanaka·190 폴백 세 경로가 같은 샘플을 서로 다른 존으로 나눈다")
+    func heartRateZonesByHrMaxSource() throws {
+        // 샘플 bpm [112, 129, 150, 166]을 0/10/20/30초에 둔다 → 가중 10·10·10·5(마지막은 5초), 합 35
+        let samples: [(time: Date, bpm: Double)] = [112.0, 129, 150, 166].enumerated().map {
+            (time: now.addingTimeInterval(Double($0.offset) * 10), bpm: $0.element)
+        }
+        func expectZones(_ zones: [Double], _ expected: [Double]) {
+            #expect(zones.count == 5)
+            for (a, b) in zip(zones, expected) { #expect(abs(a - b) < 1e-9) }
+        }
+
+        // ① 관찰 최대: 세션 최고 심박 [190, 186, 178] → 2번째 값 186 (생년월일 없음)
+        //    경계 111.6/130.2/148.8/167.4 → 112·129는 Z2, 150·166은 Z4
+        let runs = [190.0, 186, 178].enumerated().map { index, maxHR in
+            RunSummary(id: UUID(), start: now.addingTimeInterval(-Double(index + 1) * 86_400),
+                       durationSec: 3_600, distanceMeters: 10_000, avgHeartRate: 150,
+                       maxHeartRate: maxHR)
+        }
+        let observed = TrainingGuideEngine.zoneHrMax(
+            TrainingGuideEngine.hrMax(runs: runs, now: now, birthYear: nil))
+        #expect(observed.bpm == 186)
+        #expect(!observed.estimated)
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, hrMax: observed.bpm),
+                    [0, 20.0 / 35, 0, 15.0 / 35, 0])
+
+        // ② Tanaka: 1990년생, now 2026년 → 208 − 0.7×36 = 182.8
+        //    경계 109.68/127.96/146.24/164.52 → 112 Z2, 129 Z3(0.706), 150 Z4, 166 Z5(0.908)
+        let tanaka = TrainingGuideEngine.zoneHrMax(
+            TrainingGuideEngine.hrMax(runs: [], now: now, birthYear: 1990))
+        #expect(abs(tanaka.bpm - 182.8) < 0.01)
+        #expect(!tanaka.estimated)
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, hrMax: tanaka.bpm),
+                    [0, 10.0 / 35, 10.0 / 35, 10.0 / 35, 5.0 / 35])
+
+        // ③ 폴백: 관찰 표본도 생년월일도 없음 → hrMax nil → 190(추정 표기)
+        //    경계 114/133/152/171 → 112 Z1(0.589), 129 Z2, 150 Z3, 166 Z4
+        let fallback = TrainingGuideEngine.zoneHrMax(
+            TrainingGuideEngine.hrMax(runs: [], now: now, birthYear: nil))
+        #expect(fallback.bpm == 190)
+        #expect(fallback.estimated)
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, hrMax: fallback.bpm),
+                    [10.0 / 35, 10.0 / 35, 10.0 / 35, 5.0 / 35, 0])
+    }
+
+    @Test("세션 최고 심박 — 230 초과 스파이크만 빼고, 쉬운 조깅 값은 남기며, 비면 nil")
+    func sessionPeakFiltersSpikes() {
+        // 245는 착용 불량 스파이크 → 빠지고 188이 최고
+        #expect(TrainingGuideEngine.sessionPeakBpm([150, 188, 245]) == 188)
+        // 120 아래로만 달린 쉬운 조깅도 최고 심박 줄은 유지한다
+        #expect(TrainingGuideEngine.sessionPeakBpm([80, 110]) == 110)
+        // 남는 값이 없으면 nil — 화면에 내지 않는다
+        #expect(TrainingGuideEngine.sessionPeakBpm([240]) == nil)
+        #expect(TrainingGuideEngine.sessionPeakBpm([]) == nil)
+    }
+
+    @Test("존 HRmax — 추정치가 있으면 그대로 쓰고 추정 표기를 끄며, 없으면 190 폴백과 추정 표기")
+    func zoneHrMaxFallback() {
+        let given = TrainingGuideEngine.zoneHrMax(182.8)
+        #expect(given.bpm == 182.8)
+        #expect(!given.estimated)
+        let missing = TrainingGuideEngine.zoneHrMax(nil)
+        #expect(missing.bpm == 190)
+        #expect(missing.estimated)
+    }
 }

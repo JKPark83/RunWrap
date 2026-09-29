@@ -77,9 +77,9 @@ struct SessionDetailScreen: View {
         .task {
             // 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4)
             if case .loaded(let all) = health.state {
-                await store.load(run: run, others: all)
+                await store.load(run: run, others: all, hrMaxBpm: health.hrMaxBpm)
             } else {
-                await store.load(run: run)
+                await store.load(run: run, hrMaxBpm: health.hrMaxBpm)
             }
         }
         .sheet(isPresented: $showShare) {

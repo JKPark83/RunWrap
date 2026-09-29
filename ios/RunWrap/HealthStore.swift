@@ -24,8 +24,8 @@ final class HealthStore: ObservableObject {
     @Published private(set) var crossTrainings: [CrossTraining] = []
     /// 심폐 체력 카드 보조 지표용 최근 12주 심박 회복(HRR) 표본 (bpm)
     @Published private(set) var hrrTrend: [(date: Date, value: Double)] = []
-    /// 최대 심박(bpm) 추정 — 대회 노력도(EF) 환산의 재료 (이슈 #34).
-    /// 관찰 최대(최근 12주 세션 최고 심박) 우선, 없으면 Tanaka 공식 (TrainingGuideEngine.hrMax)
+    /// 최대 심박(bpm) 추정 — 관찰 최대(최근 12주 세션 최고 심박 2번째 값)와 Tanaka 중 큰 쪽
+    /// (TrainingGuideEngine.hrMax). 대회 노력도와 세션 상세 심박 존의 공통 재료 (이슈 #34, #48)
     @Published private(set) var hrMaxBpm: Double?
 
     private let store = HKHealthStore()
