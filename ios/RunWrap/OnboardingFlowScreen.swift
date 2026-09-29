@@ -651,7 +651,7 @@ private struct OptionButton: View {
                         .overlay {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(RR.onBrand)
                         }
                 }
             }
@@ -678,7 +678,7 @@ struct PrimaryButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 16, weight: .heavy))
-                .foregroundStyle(.white)
+                .foregroundStyle(RR.onBrand)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
                 .background(RR.brand, in: RoundedRectangle(cornerRadius: 10, style: .continuous))

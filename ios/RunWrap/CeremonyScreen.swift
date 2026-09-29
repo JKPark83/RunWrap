@@ -99,7 +99,7 @@ struct CeremonyScreen: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
                     .background(RR.brand, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(RR.onBrand)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
@@ -152,7 +152,7 @@ struct CeremonyScreen: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 15)
                     .background(RR.brand, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(RR.onBrand)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
@@ -183,7 +183,7 @@ struct CeremonyScreen: View {
                 Spacer()
                 Text(resulting.label)
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(isPicked ? .white : RR.text2)
+                    .foregroundStyle(isPicked ? RR.onBrand : RR.text2)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(isPicked ? RR.brand : RR.surface2, in: Capsule())

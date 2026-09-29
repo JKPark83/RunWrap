@@ -628,7 +628,7 @@ private struct PBCongratsSheet: View {
             } label: {
                 Text("계속 달리기")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(RR.onBrand)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
                     .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -916,7 +916,7 @@ private struct PromotionCard: View {
                 Button(action: onAccept) {
                     Text("좋아요, 승급할게요")
                         .font(.system(size: 13.5, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(RR.onBrand)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(RR.brand, in: RoundedRectangle(cornerRadius: 9, style: .continuous))

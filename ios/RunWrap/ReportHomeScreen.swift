@@ -213,7 +213,7 @@ struct ReportHomeContent: View {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 12, weight: .bold))
                         }
-                        .foregroundStyle(.white)
+                        .foregroundStyle(RR.onBrand)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(
@@ -976,7 +976,7 @@ struct EmptyReportScreen: View {
                     } label: {
                         Text("샘플 리포트 둘러보기")
                             .font(.system(size: 14.5, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(RR.onBrand)
                             .padding(.horizontal, 22)
                             .padding(.vertical, 13)
                             .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

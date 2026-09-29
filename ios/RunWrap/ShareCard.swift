@@ -149,6 +149,7 @@ struct PhotoCardView: View {
             .frame(width: 360, height: 640)
             .clipped()
 
+            // 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (이 카드의 흰 글자·검정 그라데이션 전부)
             // 수치 가독용 어둡기 오버레이 — 위·아래만 진하게, 가운데는 사진 그대로
             LinearGradient(stops: [
                 .init(color: .black.opacity(0.5), location: 0),
