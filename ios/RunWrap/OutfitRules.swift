@@ -46,8 +46,9 @@ enum OutfitRules {
     static let sunProtectionUV = 3.0
 
     static func outfit(apparentC: Double, humidityPct: Double, windMs: Double,
-                       precipitationMm: Double, uvIndex: Double?, now: Date) -> [OutfitItem] {
-        let raining = precipitationMm > 0
+                       precipitationMm: Double, weatherCode: Int?, uvIndex: Double?,
+                       now: Date) -> [OutfitItem] {
+        let raining = WeatherAdviceRules.isRaining(code: weatherCode, precipitationMm: precipitationMm)
         var items: [OutfitItem]
 
         switch apparentC {

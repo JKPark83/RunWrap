@@ -357,6 +357,7 @@ struct TodayScreen: View {
                                        humidityPct: weather.humidityPct,
                                        windMs: weather.windMs,
                                        precipitationMm: weather.precipitationMm,
+                                       weatherCode: weather.weatherCode,
                                        uvIndex: weather.uvIndex,
                                        now: Date())
         return VStack(alignment: .leading, spacing: 0) {
