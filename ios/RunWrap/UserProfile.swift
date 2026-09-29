@@ -186,4 +186,8 @@ enum GrowthKey {
     static let cycleGoal = "growth.cycleGoal"
     /// 이번 사이클의 목표 기록 (초) — `cycleGoal`과 함께 고정한다. 0이면 기록 미입력
     static let cycleGoalSec = "growth.cycleGoalSec"
+    /// 백업 대상 값이 로컬에서 마지막으로 바뀐 시각 (timeIntervalSince1970) — 스냅샷 `updatedAt`의 원천 (이슈 #130).
+    /// 업로드 시각을 쓰면 오래된 백업을 복원한 기기가 뒤늦게 올릴 때 서버의 더 새 진행도를 이긴다.
+    /// 쓰기는 `ProgressSnapshot.markLocalChanged`로만 한다. 서버 본을 적용할 때는 그 본의 `updatedAt`을 기록한다
+    static let localChangedAt = "progress.localChangedAt"
 }

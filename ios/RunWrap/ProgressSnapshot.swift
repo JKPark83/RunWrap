@@ -69,6 +69,8 @@ struct ProgressSnapshot: Codable, Equatable {
 
     /// 현재 로컬 상태를 스냅샷으로 접는다. 온보딩 전(레벨 없음)이면 nil —
     /// 백업할 진행도 자체가 없다. revision은 동기화 메타라 스토어가 채운다(여기서는 0).
+    /// `updatedAt`은 로컬 변경 시각(`GrowthKey.localChangedAt`)이다 — 병합이 "최신 변경"을 가리게 (이슈 #130).
+    /// 키가 없으면(이 키 도입 전 설치의 첫 백업) `now`로 대신한다
     static func readLocal(defaults: UserDefaults, birds: [CollectedBird],
                           raceRecords: [RaceRecord], deletedRaceRecordIDs: [UUID] = [],
                           now: Date) -> ProgressSnapshot? {
@@ -79,10 +81,11 @@ struct ProgressSnapshot: Codable, Equatable {
         let restingHRManual = defaults.integer(forKey: ProfileKey.restingHRManual)
         let hrZoneMethodRaw = defaults.string(forKey: ProfileKey.hrZoneMethod) ?? ""
         let weeklyGoalChanges = WeeklyGoalChangeLog.load(defaults: defaults)
+        let localChangedAt = defaults.double(forKey: GrowthKey.localChangedAt)
         return ProgressSnapshot(
             schemaVersion: currentSchemaVersion,
             revision: 0,
-            updatedAt: now,
+            updatedAt: localChangedAt > 0 ? Date(timeIntervalSince1970: localChangedAt) : now,
             cycleID: ensureCycleID(defaults: defaults),
             levelRaw: levelRaw,
             purposesRaw: defaults.string(forKey: ProfileKey.purposes) ?? "",
@@ -140,6 +143,14 @@ struct ProgressSnapshot: Codable, Equatable {
         }
         // 주간 목표 변경 이력 (이슈 #108, #116) — 심박 기준과 같이 nil이면 로컬 이력도 지운다
         WeeklyGoalChangeLog.save(weeklyGoalChanges ?? [], defaults: defaults)
+        // 서버 본을 반영한 것이지 로컬 변경이 아니다 — 그 본의 변경 시각을 그대로 이어받는다 (이슈 #130)
+        defaults.set(updatedAt.timeIntervalSince1970, forKey: GrowthKey.localChangedAt)
+    }
+
+    /// 백업 대상 값(프로필·사이클·도감·대회 기록·심박 기준·주간 목표 이력)이 로컬에서 바뀌었음을 기록한다 (이슈 #130).
+    /// 다음 `readLocal`의 `updatedAt`이 이 시각이 되어, 병합은 업로드 시각이 아니라 실제 변경 시각으로 최신을 가린다
+    static func markLocalChanged(defaults: UserDefaults, now: Date) {
+        defaults.set(now.timeIntervalSince1970, forKey: GrowthKey.localChangedAt)
     }
 
     /// 사이클 식별자를 읽고, 없으면 만들어 저장한다 — 이 기능 도입 전 사용자의
@@ -321,7 +332,7 @@ enum ProgressMergeEngine {
     /// 첫 업로드 전에 사용자에게 "이전 기록 불러오기 / 새로 시작"을 물어야 하는지 (이슈 #44).
     ///
     /// 복원이 일시 실패(네트워크·iCloud 미로그인·타임아웃)한 설치는 새 온보딩으로 새 사이클을
-    /// 만들고, `readLocal`이 `updatedAt`을 지금으로 채우므로 `merge`의 "다른 사이클은 최신이
+    /// 만들고, `readLocal`의 `updatedAt`이 방금 한 온보딩 시각(로컬 변경 시각)이므로 `merge`의 "다른 사이클은 최신이
     /// 통째로 이긴다" 규칙에서 항상 이긴다 — 서버의 이전 진행도가 조용히 사라진다.
     /// 그래서 이 설치가 **한 번도 동기화한 적 없고**(업로드·복원 이력 없음) 서버에
     /// **다른 사이클의 복원 가능한 본**이 있으면 덮어쓰기 전에 묻는다.

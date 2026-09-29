@@ -481,6 +481,7 @@ struct HomeScreen: View {
 
     private func accept(_ level: RunnerLevel) {
         levelRaw = level.rawValue
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
         // 수락했으면 거절 기록은 의미가 없다 — 지워 둔다
         promotionDeclinedAtRaw = 0
         scheduleBackup()
@@ -542,6 +543,7 @@ struct HomeScreen: View {
     private func syncMaxStage(_ stage: GrowthStage) {
         if stage.rawValue > maxStage {
             maxStage = stage.rawValue
+            ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
             scheduleBackup()
         }
     }
@@ -571,6 +573,7 @@ struct HomeScreen: View {
         maxStage = GrowthStage.egg.rawValue
         // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
         UserDefaults.standard.set(UUID().uuidString, forKey: GrowthKey.cycleID)
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: now)
         scheduleBackup()
         return true
     }
