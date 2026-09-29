@@ -59,6 +59,21 @@ struct GPXParserTests {
         """))
         #expect(points == [GeoPoint(lat: 37.5, lon: 127.0)])
     }
+
+    @Test("범위 밖·비유한 좌표 — lat 120·nan, lon inf는 버리고 정상 포인트만 남긴다 (감사 M12)")
+    func dropsOutOfRangeCoordinates() {
+        let points = GPXParser.parse(gpx("""
+        <trk><trkseg>
+          <trkpt lat="120" lon="127.0"/>
+          <trkpt lat="nan" lon="127.0"/>
+          <trkpt lat="37.5" lon="inf"/>
+          <trkpt lat="37.5" lon="127.0"/>
+          <trkpt lat="-90" lon="180"/>
+        </trkseg></trk>
+        """))
+        // 경계값(±90, ±180)은 유효 범위라 남는다
+        #expect(points == [GeoPoint(lat: 37.5, lon: 127.0), GeoPoint(lat: -90, lon: 180)])
+    }
 }
 
 /// 코스 보급 매칭 엔진 — 수선 거리·누적 km·반경·정렬·미노출 가드 (계획서 M12-2)
@@ -122,6 +137,25 @@ struct CourseSupplyEngineTests {
         // 0.0009° × 111,195 = 100.1m < 500m
         let short = [GeoPoint(lat: 37.5, lon: 127.0), GeoPoint(lat: 37.5009, lon: 127.0)]
         #expect(CourseSupplyEngine.analyze(course: short, pois: []) == nil)
+    }
+
+    @Test("범위 밖 위도 — lat 120→121 코스는 트랩 없이 nil (감사 M12)")
+    func outOfRangeLatitudeReturnsNil() {
+        // 중앙 위도 120.5°의 cos < 0 → 경도 축척 음수. 가드가 없으면 lonPad가 음수가 되어
+        // 경도 고정 코스의 bbox가 127.0053...126.9947(하한 > 상한)로 만들어지며 트랩한다
+        let course = [GeoPoint(lat: 120, lon: 127.0), GeoPoint(lat: 121, lon: 127.0)]
+        #expect(CourseSupplyEngine.analyze(course: course,
+                                           pois: [poi(lat: 37.5, lon: 127.0)]) == nil)
+    }
+
+    @Test("비유한 좌표 — inf 위도·경도가 섞인 코스는 트랩 없이 nil (감사 M12)")
+    func infiniteCoordinatesReturnNil() {
+        // 위도 inf → 중앙 위도 inf → cos NaN → 축척 가드에서 nil
+        let infLat = [GeoPoint(lat: .infinity, lon: 127.0), GeoPoint(lat: 37.5, lon: 127.02)]
+        #expect(CourseSupplyEngine.analyze(course: infLat, pois: []) == nil)
+        // 경도 inf → 누적 거리 inf → 총거리 isFinite 가드에서 nil
+        let infLon = [GeoPoint(lat: 37.5, lon: 127.0), GeoPoint(lat: 37.5, lon: .infinity)]
+        #expect(CourseSupplyEngine.analyze(course: infLon, pois: []) == nil)
     }
 
     @Test("bbox 1차 필터 — 코스에서 아주 먼 POI가 있어도 결과는 같다")

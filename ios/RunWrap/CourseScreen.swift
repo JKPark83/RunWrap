@@ -96,8 +96,14 @@ struct CourseScreen: View {
         }
         .task {
             await store.load()
-            restoreLastCourse()
+            let restored = restoreLastCourse()
             analyze()
+            // 되살린 코스가 분석되지 않으면 저장본을 지운다 — 재진입마다 같은 실패를 되풀이하지 않게 (감사 M12).
+            // POI 로드 실패로 분석을 못 한 경우는 코스 탓이 아니니 남긴다
+            if restored, result == nil, case .loaded = store.state {
+                try? FileManager.default.removeItem(at: Self.lastCourseURL)
+                lastCourseName = ""
+            }
             // 코스가 복원됐다면 주변 검색은 건너뛴다 — 화면에 안 쓸 위치를 굳이 받지 않는다
             if result == nil {
                 location.request()
@@ -302,9 +308,12 @@ struct CourseScreen: View {
         notice = nil
         course = points
         courseName = name
+        analyze()
+        // 분석에 성공한 코스만 저장한다 — 실패한 파일을 남기면 탭 재진입마다 되살아난다 (감사 M12).
+        // POI가 아직 로드 중이면 분석이 미뤄진 것뿐이니(위 .task가 로드 뒤 다시 분석) 코스 탓으로 보지 않는다
+        if case .loaded = store.state, result == nil { return }
         try? data.write(to: Self.lastCourseURL)
         lastCourseName = name
-        analyze()
     }
 
     private func analyze() {
@@ -319,12 +328,14 @@ struct CourseScreen: View {
         }
     }
 
-    private func restoreLastCourse() {
-        guard course.isEmpty, let data = try? Data(contentsOf: Self.lastCourseURL) else { return }
+    /// 저장된 마지막 코스를 되살린다 — 되살렸으면 true
+    private func restoreLastCourse() -> Bool {
+        guard course.isEmpty, let data = try? Data(contentsOf: Self.lastCourseURL) else { return false }
         let points = GPXParser.parse(data)
-        guard !points.isEmpty else { return }
+        guard !points.isEmpty else { return false }
         course = points
         courseName = lastCourseName
+        return true
     }
 
     /// 올린 코스를 지우고 현재 위치 모드로 돌아간다 — 캐시 파일까지 지워야 재진입 시 안 살아난다
