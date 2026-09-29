@@ -57,6 +57,9 @@ struct SessionDetailScreen: View {
                     if let heat = heatAdjustment {
                         heatCard(heat)
                     }
+                    if store.loadFailed {
+                        loadFailedCard
+                    }
                     if let detail = store.detail, detail.splits.count >= 3 {
                         splitsCard(detail)
                     }
@@ -87,14 +90,7 @@ struct SessionDetailScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .topLeading) { backButton }
-        .task {
-            // 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4)
-            if case .loaded(let all) = health.state {
-                await store.load(run: run, others: all, heartRate: heartRate)
-            } else {
-                await store.load(run: run, heartRate: heartRate)
-            }
-        }
+        .task { await load() }
         .onChange(of: health.state) { _, state in
             // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
             guard case .loaded(let all) = state else { return }
@@ -106,6 +102,30 @@ struct SessionDetailScreen: View {
                            route: store.detail?.route ?? [],
                            weeklySummary: weeklySummaryLine)
         }
+    }
+
+    // MARK: 조회 실패
+
+    /// 세부 기록 조회 실패 — 경로·스플릿·존 카드 자리에 다시 시도를 띄운다 (이슈 #102).
+    /// 버튼 스타일은 다른 화면의 안내 카드(.bordered)와 같다
+    private var loadFailedCard: some View {
+        VStack(spacing: 10) {
+            Text("세부 기록을 불러오지 못했어요")
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(RR.text2)
+            Button {
+                Task { await load() }
+            } label: {
+                Label("다시 시도", systemImage: "arrow.clockwise")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
+            .disabled(store.isLoading)
+        }
+        .padding(16)
+        .rrCard()
     }
 
     // MARK: 지도 헤더
@@ -127,7 +147,8 @@ struct SessionDetailScreen: View {
                             Image(systemName: "map")
                                 .font(.system(size: 24))
                                 .foregroundStyle(RR.text3)
-                            Text(store.isLoading ? "경로를 불러오는 중" : "경로 기록이 없어요")
+                            Text(store.isLoading ? "경로를 불러오는 중"
+                                 : store.loadFailed ? "경로를 불러오지 못했어요" : "경로 기록이 없어요")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(RR.text3)
                         }
@@ -573,6 +594,16 @@ struct SessionDetailScreen: View {
         .buttonStyle(.plain)
         // 경로 로딩 중에 열면 카드에 경로가 빠진다 — 불러오는 동안은 막는다 (이슈 #84)
         .disabled(store.isLoading)
+    }
+
+    /// 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4).
+    /// 진입 시와 조회 실패 뒤 다시 시도가 같은 경로를 탄다 (이슈 #102)
+    private func load() async {
+        if case .loaded(let all) = health.state {
+            await store.load(run: run, others: all, heartRate: heartRate)
+        } else {
+            await store.load(run: run, heartRate: heartRate)
+        }
     }
 
     /// 카드 하단 주간 요약 — 이 세션 기준 7일 러닝 횟수·거리 (기획서 §4.4, 이슈 #92)

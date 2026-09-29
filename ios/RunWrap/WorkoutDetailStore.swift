@@ -34,6 +34,9 @@ struct WorkoutDetail {
 final class WorkoutDetailStore: ObservableObject {
     @Published private(set) var detail: WorkoutDetail?
     @Published private(set) var isLoading = false
+    /// 워크아웃 조회 자체가 실패했는지 — '데이터 없음'(빈 detail)과 구분해 다시 시도를 띄운다.
+    /// 실패하면 detail을 nil로 둬 load() 재호출이 guard에 막히지 않는다 (이슈 #102)
+    @Published private(set) var loadFailed = false
     /// 주법 기준선 재료 — 세션 직전 28일 야외 세션들의 다이내믹스 스냅샷 (계획서 M4)
     @Published private(set) var formSnapshots: [FormSnapshot] = []
     /// 스냅샷 조회 중 — 이 동안 표본 부족 안내 대신 로딩 문구를 띄운다 (이슈 #92)
@@ -50,6 +53,7 @@ final class WorkoutDetailStore: ObservableObject {
     func load(run: RunSummary, others: [RunSummary] = [], heartRate: HeartRateProfile) async {
         guard detail == nil, !isLoading else { return }
         isLoading = true
+        loadFailed = false
         defer { isLoading = false }
         // detail 조회 동안 목록이 로드돼 화면이 reloadSnapshots를 이미 불렀다면
         // 진입 시점의 (비어 있을 수 있는) others로 그 조회를 덮지 않는다 (이슈 #92)
@@ -59,6 +63,7 @@ final class WorkoutDetailStore: ObservableObject {
             detail = Self.synthetic(for: run, heartRate: heartRate)
         } else {
             detail = await fetch(run: run, heartRate: heartRate)
+            loadFailed = detail == nil
         }
         guard snapshotGeneration == startGeneration else { return }
         await reloadSnapshots(others: others, excluding: run)
@@ -80,10 +85,18 @@ final class WorkoutDetailStore: ObservableObject {
 
     // MARK: - 실기기: HealthKit 조회
 
-    private func fetch(run: RunSummary, heartRate: HeartRateProfile) async -> WorkoutDetail {
+    /// 워크아웃 조회가 에러로 실패하면 nil — 워크아웃은 있는데 경로·스플릿이 없는 정상 케이스
+    /// (실내 등)는 빈 detail을 돌려준다. 둘을 섞으면 실패가 '기록 없음'으로 굳는다 (이슈 #102)
+    private func fetch(run: RunSummary, heartRate: HeartRateProfile) async -> WorkoutDetail? {
         var detail = WorkoutDetail()
-        guard HKHealthStore.isHealthDataAvailable(),
-              let workout = try? await fetchWorkout(id: run.id) else { return detail }
+        guard HKHealthStore.isHealthDataAvailable() else { return detail }
+        let workout: HKWorkout
+        do {
+            guard let found = try await fetchWorkout(id: run.id) else { return detail }
+            workout = found
+        } catch {
+            return nil
+        }
 
         // 실내(트레드밀) 세션에는 경로·고도가 없다 — 쿼리 자체를 생략한다 (계획서 M1)
         if !run.isIndoor {
@@ -288,10 +301,22 @@ final class WorkoutDetailStore: ObservableObject {
         return ActiveTimeline.gapPauses(distanceSamples)
     }
 
-    // MARK: - 데모 모드: 합성 데이터 (run.id 시드 — 같은 세션은 항상 같은 모양)
+    // MARK: - 데모 모드: 합성 데이터 (syntheticSeed — 같은 세션은 항상 같은 모양)
+
+    /// 합성 시드 — run.id.hashValue는 프로세스마다 달라져(Hasher 무작위 시드) 쓰지 않는다.
+    /// uuid 16바이트 + 시작 시각 비트 패턴을 FNV-1a(64비트)로 섞는다 (이슈 #102)
+    static func syntheticSeed(for run: RunSummary) -> UInt64 {
+        let idBytes = withUnsafeBytes(of: run.id.uuid) { Array($0) }
+        let startBytes = withUnsafeBytes(of: run.start.timeIntervalSince1970.bitPattern.littleEndian) { Array($0) }
+        var hash: UInt64 = 0xCBF2_9CE4_8422_2325          // FNV-1a 64비트 오프셋 basis
+        for byte in idBytes + startBytes {
+            hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01B3  // FNV 64비트 소수
+        }
+        return hash
+    }
 
     static func synthetic(for run: RunSummary, heartRate: HeartRateProfile) -> WorkoutDetail {
-        var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)))
+        var rng = SplitMix64(seed: syntheticSeed(for: run))
         var detail = WorkoutDetail()
 
         let km = run.distanceKm ?? 8
@@ -376,7 +401,7 @@ final class WorkoutDetailStore: ObservableObject {
     static func syntheticDynamics(for run: RunSummary)
         -> (cadenceSpm: Double, oscillationCm: Double?, contactMs: Double?,
             strideM: Double?, powerW: Double?) {
-        var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)) &+ 0x51DE)
+        var rng = SplitMix64(seed: syntheticSeed(for: run) &+ 0x51DE)
         let cadence = 163 + rng.unit() * 14
         guard !run.isIndoor else {
             return (cadenceSpm: cadence, oscillationCm: nil, contactMs: nil,
