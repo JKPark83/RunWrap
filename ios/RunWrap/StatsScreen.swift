@@ -167,7 +167,7 @@ struct StatsScreen: View {
             tile(label: "러닝 횟수",
                  value: "\(stats.count)",
                  unit: "회",
-                 delta: (String(format: "주 %.1f회", stats.perWeek), RR.text3),
+                 delta: stats.perWeek.map { (String(format: "주 %.1f회", $0), RR.text3) },
                  spark: nil)
 
             tile(label: "누적 시간",

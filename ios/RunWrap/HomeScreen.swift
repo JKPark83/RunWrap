@@ -472,12 +472,12 @@ struct HomeScreen: View {
     }
 
     /// 승급 근거가 된 세션 — 카드 본문의 "지난주 10km를 59분에" 자리를 실제 값으로 채운다.
-    /// LevelEngine의 판정 조건(최근 4주 · 10km 이상 · 60분 이내)과 같은 창을 본다.
+    /// LevelEngine의 판정 조건(최근 4주 · 10km 이상 · 60분 이내 · 페이스 가드 통과)과 같은 창을 본다.
     private func promotionEvidence(runs: [RunSummary], now: Date) -> RunSummary? {
         let fourWeeksAgo = now.addingTimeInterval(-28 * 86_400)
         return runs
             .filter { $0.start >= fourWeeksAgo && $0.start <= now }
-            .filter { ($0.distanceKm ?? 0) >= 10 && $0.durationSec <= 3_600 }
+            .filter { ($0.distanceKm ?? 0) >= 10 && $0.durationSec <= 3_600 && $0.paceSecPerKm != nil }
             .max { $0.start < $1.start }
     }
 

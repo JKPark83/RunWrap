@@ -160,6 +160,21 @@ struct ReportMetricsTests {
         #expect(stats.deltaCaption == "지난달 1–10일 대비")
     }
 
+    @Test("월간 통계 — 0초·비현실 페이스 기록은 평균 페이스의 분자·분모 모두에서 뺀다 (이슈 #78)")
+    func monthlyAvgPaceSkipsInvalidPace() throws {
+        // 8.9 10km 60분(360초/km) + 8.5 0초 5.2km 임포트.
+        // 가드가 없으면 3_600 ÷ 15.2km ≈ 237초/km로 과하게 빨라졌다 → 가드 후 3_600 ÷ 10km = 360
+        let zeroDuration = RunSummary(id: UUID(), start: now.addingTimeInterval(-5 * 86_400),
+                                      durationSec: 0, distanceMeters: 5_200, avgHeartRate: nil)
+        let runs = [run(daysAgo: 1, km: 10), zeroDuration]
+        let month = Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 1))!
+        let stats = MonthlyStats.compute(runs: runs, month: month, now: now)
+        let pace = try #require(stats.avgPaceSec)
+        #expect(abs(pace - 360) < 0.01)
+        #expect(stats.count == 2)                       // 횟수·거리 집계는 그대로
+        #expect(abs(stats.totalKm - 15.2) < 0.01)
+    }
+
     @Test("월간 통계 — 진행 중인 달은 지난달 후반 기록을 비교에서 뺀다")
     func currentMonthIgnoresLaterDaysOfPreviousMonth() {
         // now = 8.10. 7.26 롱런은 '같은 날짜까지' 밖이라 비교 대상이 아니다.
@@ -185,10 +200,10 @@ struct ReportMetricsTests {
         #expect(stats.deltaPct != nil && abs(stats.deltaPct! - 25) < 0.01)  // 16→20km
     }
 
-    @Test("월간 통계 — 진행 중인 달의 '주 N회'는 지난 날수로 나눈다 (이슈 #75)")
+    @Test("월간 통계 — 진행 중인 달이 7일 미만 경과면 '주 N회'를 내지 않는다 (이슈 #75·#86)")
     func currentMonthPerWeekUsesElapsedDays() {
-        // now = 9.3 09:00(로컬), 9.1·9.3 기록 2회 → 경과 3일(오늘 포함) → 2 ÷ (3/7) ≈ 4.67
-        // 월 전체 30일로 나누면 2 ÷ (30/7) ≈ 0.47로 과소 표시됐다.
+        // now = 9.3 09:00(로컬), 9.1·9.3 기록 2회 → 경과 3일(오늘 포함) < 7 → nil.
+        // #75에서는 2 ÷ (3/7) ≈ 4.67로 외삽했지만 표본 부족이라 미노출로 결정했다 (#86).
         // 로컬 달력으로 만들어 시간대와 무관하게 9월 안에 둔다
         let calendar = Calendar.current
         let september3 = calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9))!
@@ -199,11 +214,26 @@ struct ReportMetricsTests {
         let month = calendar.dateInterval(of: .month, for: september3)!.start
         let stats = MonthlyStats.compute(runs: runs, month: month, now: september3)
         #expect(stats.count == 2)
-        #expect(abs(stats.perWeek - 2 / (3.0 / 7)) < 0.05)
+        #expect(stats.perWeek == nil)
+    }
+
+    @Test("월간 통계 — 진행 중인 달이 7일째면 '주 N회'를 경과 일수로 계산한다 (이슈 #86)")
+    func currentMonthPerWeekFromSeventhDay() throws {
+        // now = 9.7 09:00(로컬), 9.1·9.7 기록 2회 → 경과 7일(오늘 포함) → 2 ÷ (7/7) = 2.0
+        let calendar = Calendar.current
+        let september7 = calendar.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 9))!
+        let runs = [calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 9))!,
+                    calendar.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 7))!]
+            .map { RunSummary(id: UUID(), start: $0, durationSec: 1_800,
+                              distanceMeters: 5_000, avgHeartRate: 150) }
+        let month = calendar.dateInterval(of: .month, for: september7)!.start
+        let stats = MonthlyStats.compute(runs: runs, month: month, now: september7)
+        let perWeek = try #require(stats.perWeek)
+        #expect(abs(perWeek - 2.0) < 0.05)
     }
 
     @Test("월간 통계 — 끝난 달의 '주 N회'는 월 전체 일수로 나눈다 (기존 동작 유지)")
-    func pastMonthPerWeekUsesWholeMonth() {
+    func pastMonthPerWeekUsesWholeMonth() throws {
         // now = 8.10에 6월(30일)을 본다 — 8회 ÷ (30/7) ≈ 1.87
         let june = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 1))!
         let runs = (0..<8).map { index in
@@ -212,7 +242,8 @@ struct ReportMetricsTests {
         }
         let stats = MonthlyStats.compute(runs: runs, month: june, now: now)
         #expect(stats.count == 8)
-        #expect(abs(stats.perWeek - 8 / (30.0 / 7)) < 0.05)
+        let perWeek = try #require(stats.perWeek)
+        #expect(abs(perWeek - 8 / (30.0 / 7)) < 0.05)
     }
 
     @Test("월 목록 — 모든 기록이 다음 달이어도 이번 달 하나는 돌려준다 (이슈 #68)")

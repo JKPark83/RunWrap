@@ -356,7 +356,7 @@ struct MonthlyStats {
     let avgHeartRate: Double?
     let heartRateDelta: Double?
     let count: Int
-    let perWeek: Double
+    let perWeek: Double?              // 진행 중인 달이 7일 미만 경과면 nil (표본 부족)
     let totalDurationSec: Double
     let pacePoints: [Double]          // 러닝별 페이스 (오래된 → 최신, 스파크라인)
     let heartRatePoints: [Double]
@@ -417,12 +417,14 @@ struct MonthlyStats {
         func totalKm(_ list: [RunSummary]) -> Double {
             list.compactMap(\.distanceKm).reduce(0, +)
         }
-        /// 시간 가중 평균 페이스 = 총 시간 ÷ 총 거리
+        /// 시간 가중 평균 페이스 = 총 시간 ÷ 총 거리.
+        /// 페이스 가드(paceSecPerKm)를 통과한 기록만 분자·분모 모두에 넣는다 — 0초 5.2km 임포트가
+        /// 거리만 더해 월 평균을 과하게 빠르게 만들지 않게 (이슈 #78)
         func avgPace(_ list: [RunSummary]) -> Double? {
-            let km = totalKm(list)
+            let valid = list.filter { $0.paceSecPerKm != nil }
+            let km = totalKm(valid)
             guard km > 0.1 else { return nil }
-            let sec = list.filter { $0.distanceKm != nil }.map(\.durationSec).reduce(0, +)
-            return sec / km
+            return valid.map(\.durationSec).reduce(0, +) / km
         }
         func avgHR(_ list: [RunSummary]) -> Double? {
             let samples = list.compactMap(\.avgHeartRate)
@@ -437,8 +439,10 @@ struct MonthlyStats {
         let dayCount = calendar.range(of: .day, in: .month, for: month)!.count
         let weekCount = Int(ceil(Double(dayCount) / 7))
         // '주 N회' 분모 — 진행 중인 달은 지난 날수만 센다. 월 전체 일수로 나누면 월초일수록
-        // 과소 표시된다 (이슈 #75: 9.3에 2회 → 0.5회가 아니라 4.7회)
-        let perWeekDays = elapsedDays.map { max(1, $0) } ?? dayCount
+        // 과소 표시된다 (이슈 #75: 9.10에 4회 → 0.9회가 아니라 2.8회)
+        let perWeekDays = elapsedDays ?? dayCount
+        // 7일 미만 경과면 내지 않는다 — 월 1일에 1회면 "주 7.0회"로 외삽된다 (이슈 #86, 표본 부족 가드)
+        let perWeek: Double? = perWeekDays >= 7 ? Double(inMonth.count) / (Double(perWeekDays) / 7) : nil
         let weeks: [WeeklyReport.WeekBar] = (0..<weekCount).map { index in
             let start = interval.start.addingTimeInterval(Double(index) * 7 * 86_400)
             let end = min(start.addingTimeInterval(7 * 86_400), interval.end)
@@ -468,7 +472,7 @@ struct MonthlyStats {
                             avgHeartRate: hr,
                             heartRateDelta: (hr != nil && previousHR != nil) ? hr! - previousHR! : nil,
                             count: inMonth.count,
-                            perWeek: Double(inMonth.count) / (Double(perWeekDays) / 7),
+                            perWeek: perWeek,
                             totalDurationSec: inMonth.map(\.durationSec).reduce(0, +),
                             pacePoints: ordered.compactMap(\.paceSecPerKm),
                             heartRatePoints: ordered.compactMap(\.avgHeartRate),

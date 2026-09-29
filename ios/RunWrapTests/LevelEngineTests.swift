@@ -103,6 +103,17 @@ struct LevelEngineTests {
         #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now) == nil)
     }
 
+    @Test("0초·비현실 페이스 10km 기록은 승급 후보 아님 — 정상 10km 55분은 후보 (이슈 #78)")
+    func noPromotionFromZeroDurationTenK() {
+        // 8일 전 0초 10km 임포트 — durationSec 0 ≤ 3_600이지만 paceSecPerKm == nil이라 근거가 아니다
+        let zeroDuration = RunSummary(id: UUID(), start: now.addingTimeInterval(-8 * 86_400),
+                                      durationSec: 0, distanceMeters: 10_000, avgHeartRate: nil)
+        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: [zeroDuration], now: now) == nil)
+        // 같은 창의 정상 10km 55분(330초/km)이 있으면 후보
+        let runs = [zeroDuration, run(daysAgo: 8, km: 10, minPerKm: 5.5)]
+        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now) == .intermediate)
+    }
+
     @Test("빠른 10km 기록이 4주보다 오래됐으면 승급 후보 아님")
     func noPromotionWhenFastRunTooOld() {
         // 30일 전 — 4주(28일) 관측 창을 벗어난다
