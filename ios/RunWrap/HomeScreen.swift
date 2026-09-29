@@ -453,11 +453,14 @@ struct HomeScreen: View {
         return "\(Format.km(km))km · \(Format.paceKm(pace))"
     }
 
+    /// 주간 목표 칩 횟수 — 성장 엔진 주간 목표 판정과 같은 1km 이상 기준
     private func weekRunCount(runs: [RunSummary], now: Date) -> Int {
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = .current
         guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return 0 }
-        return runs.filter { $0.start >= week.start && $0.start <= now }.count
+        return runs.filter {
+            $0.start >= week.start && $0.start <= now && GrowthEngine.countsAsCompletedRun($0)
+        }.count
     }
 
     // MARK: - 승급 제안 (기획서 §3, 시안 1h)
@@ -956,22 +959,8 @@ private struct PromotionCard: View {
             return AttributedString("최근 기록을 보니 한 단계 올려도 되겠어요. 리포트를 ")
                 + level + AttributedString(" 수준으로 올려드릴까요?")
         }
-        let period = relativePeriod(of: run)
+        let period = Format.relativeWeek(of: run.start, now: .now)
         let lead = "\(period) \(Format.km(km))km를 \(Format.duration(run.durationSec))에 달리셨더라고요. 리포트를 "
         return AttributedString(lead) + level + AttributedString(" 수준으로 올려드릴까요?")
-    }
-
-    /// "지난주" / "이번 주" / "3주 전" — 근거 세션이 언제였는지 앞머리
-    private func relativePeriod(of run: RunSummary) -> String {
-        var calendar = Calendar(identifier: .iso8601)
-        calendar.timeZone = .current
-        let weeks = calendar.dateComponents([.weekOfYear],
-                                            from: calendar.startOfDay(for: run.start),
-                                            to: calendar.startOfDay(for: .now)).weekOfYear ?? 0
-        switch weeks {
-        case ..<1: return "이번 주"
-        case 1: return "지난주"
-        default: return "\(weeks)주 전"
-        }
     }
 }

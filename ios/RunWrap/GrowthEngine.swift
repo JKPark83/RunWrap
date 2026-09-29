@@ -150,9 +150,16 @@ enum GrowthEngine {
         }
     }
 
+    /// 러닝 1회 완료 인정 기준 — 1km 이상 (기획서 §5 '러닝 1회 완료(1km 이상)').
+    /// 세션 XP·주간 목표 판정·홈 주간 목표 칩·브리핑 횟수가 모두 이 한 곳을 공유한다
+    static func countsAsCompletedRun(_ run: RunSummary) -> Bool {
+        guard let km = run.distanceKm else { return false }
+        return km >= 1.0
+    }
+
     /// 러닝 1회 XP — 1km 미만은 0(완료 인정 안 함). 그 외 기본 10 + km당 1(세션당 21 상한)
     private static func xp(for run: RunSummary) -> Int {
-        guard let km = run.distanceKm, km >= 1.0 else { return 0 }
+        guard countsAsCompletedRun(run), let km = run.distanceKm else { return 0 }
         let distanceBonus = min(perSessionDistanceCap, Int(km.rounded(.down)) * perKmXp)
         return baseXp + distanceBonus
     }
@@ -168,8 +175,10 @@ enum GrowthEngine {
             return 0
         }
 
+        // 세션 XP와 같은 기준 — 1km 미만 러닝은 주간 횟수에도 세지 않는다
         let countsByWeek: [Date: Int] = Dictionary(
-            grouping: runs.compactMap { calendar.dateInterval(of: .weekOfYear, for: $0.start)?.start },
+            grouping: runs.filter(countsAsCompletedRun)
+                .compactMap { calendar.dateInterval(of: .weekOfYear, for: $0.start)?.start },
             by: { $0 }
         ).mapValues(\.count)
 

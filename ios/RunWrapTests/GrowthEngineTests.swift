@@ -63,6 +63,17 @@ struct GrowthEngineTests {
         #expect(state.xp == 26 + 30)
     }
 
+    @Test("주간 목표 — 1km 미만 러닝은 횟수에 세지 않아 0.5km 3회로는 목표 3회를 달성하지 못한다")
+    func subKmRunsDoNotCountTowardWeeklyGoal() {
+        // 지난주(완결)에 0.5km 3회 — 세션 XP 0, 1km 기준으로 세면 0회 → 보너스 없음
+        let runs = [run(daysAgo: 8, km: 0.5), run(daysAgo: 7, km: 0.5), run(daysAgo: 6, km: 0.5)]
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 3, now: now)
+        #expect(state.xp == 0)
+        #expect(!GrowthEngine.countsAsCompletedRun(run(daysAgo: 1, km: 0.5)))
+        #expect(GrowthEngine.countsAsCompletedRun(run(daysAgo: 1, km: 1)))
+    }
+
     @Test("4주 연속 달성 — 완결된 4주 각각 목표 채우면 주당 +30 네 번 + 연속 보너스 +50")
     func fourWeekStreakBonus() {
         // cycleStartedAt을 4주 전 월요일로 맞추고, 그 이후 완결된 4개 ISO 주 각각에

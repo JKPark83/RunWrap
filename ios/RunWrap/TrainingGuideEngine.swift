@@ -770,7 +770,8 @@ struct TrainingGuideEngine {
 
         let week = Self.weekRuns(runs, now: now)
         let weekKm = week.compactMap(\.distanceKm).reduce(0, +)
-        let remainSessions = min(weeklyGoal - week.count, Self.daysLeftInWeek(now))
+        let doneCount = week.filter(GrowthEngine.countsAsCompletedRun).count  // 1km 미만은 횟수로 안 셈 (홈 칩과 동일 기준)
+        let remainSessions = min(weeklyGoal - doneCount, Self.daysLeftInWeek(now))
         guard remainSessions > 0 else {
             return TodayWorkout(kind: .doneCount, reason: .none, distanceKm: nil, paceSecPerKm: nil)
         }

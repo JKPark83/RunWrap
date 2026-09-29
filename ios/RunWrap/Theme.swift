@@ -251,4 +251,21 @@ enum Format {
         let label = "\(month)월 \(ordinal)째주"
         return withYear ? "\(calendar.component(.year, from: thursday))년 \(label)" : label
     }
+
+    /// "이번 주" / "지난주" / "3주 전" — 달력 주(ISO 8601, 월요일 시작) 기준 상대 표기.
+    /// 두 날짜 사이의 7일 묶음 수가 아니라 **각자 속한 주의 시작일끼리** 비교한다 —
+    /// 그래야 월요일에 본 지난주 일요일 세션이 "이번 주"가 아니라 "지난주"가 된다.
+    static func relativeWeek(of date: Date, now: Date) -> String {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = .current
+        guard let dateWeek = calendar.dateInterval(of: .weekOfYear, for: date)?.start,
+              let nowWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.start
+        else { return "이번 주" }
+        let weeks = calendar.dateComponents([.weekOfYear], from: dateWeek, to: nowWeek).weekOfYear ?? 0
+        switch weeks {
+        case ..<1: return "이번 주"
+        case 1: return "지난주"
+        default: return "\(weeks)주 전"
+        }
+    }
 }
