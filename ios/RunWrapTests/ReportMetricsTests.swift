@@ -140,6 +140,17 @@ struct ReportMetricsTests {
         #expect(Format.relativeWeek(of: threeAgo, now: now) == "3주 전")
     }
 
+    @Test("날짜·시각 표기 — 기기 로케일과 무관하게 '9월 30일 오후 3:12', 오전·자정도 12시간제")
+    func monthDayTimeFormat() {
+        let calendar = Calendar.current
+        // 2026-09-30 15:12 → 오후 3:12 (시 앞자리 0 없음)
+        let afternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 15, minute: 12))!
+        #expect(Format.monthDayTime(afternoon) == "9월 30일 오후 3:12")
+        // 2026-01-05 00:07 → 자정은 오전 12:07
+        let midnight = calendar.date(from: DateComponents(year: 2026, month: 1, day: 5, hour: 0, minute: 7))!
+        #expect(Format.monthDayTime(midnight) == "1월 5일 오전 12:07")
+    }
+
     @Test("거리 카드 차트 — 가장 오래된 기록의 주까지 전체 주를 그린다 (스크롤용)")
     func distanceCardFullSpanWeeks() throws {
         // now = 8.10(월). 56일 전 = 6.15(월) 주 → 6.15…8.10 주가 9개

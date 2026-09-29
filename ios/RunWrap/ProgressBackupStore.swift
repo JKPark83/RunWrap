@@ -46,6 +46,9 @@ final class ProgressBackupStore: ObservableObject {
         case heldNewerSchema   // 서버 레코드가 더 새 스키마 — 디코드 전에 보류
         case heldUndecodable   // 서버 payload를 읽을 수 없거나 모르는 새가 있다 — 덮으면 지워지니 보류
     }
+    /// 마지막으로 서버와 맞춘(업로드·복원 성공) 시각 — 설정 화면 캡션용 (이슈 #129).
+    /// 운영 스키마 미배포 같은 설정 오류가 있으면 이 시각이 갱신되지 않아 드러난다
+    @Published private(set) var lastBackupAt: Date?
 
     /// CloudKit 컨테이너 — project.yml의 icloud-container-identifiers와 짝
     private static let containerID = "iCloud.com.jkpark.runwrap"
@@ -55,6 +58,10 @@ final class ProgressBackupStore: ObservableObject {
     /// 신규 설치 복원 대기 상한 — 이보다 늦으면 실패로 보고 온보딩을 연다.
     /// 백업 경로에는 시한이 없다 (백그라운드라 기다려도 해가 없다)
     private static let restoreTimeout: TimeInterval = 10
+    /// 실패 진단 로그 (이슈 #129) — CKError 코드와 단계 이름만 남긴다.
+    /// 스냅샷 내용·개인 데이터는 절대 싣지 않는다 (개인정보 처리방침)
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "RunWrap",
+                                       category: "cloud-backup")
 
     private enum RecordField {
         static let payload = "payload"          // 스냅샷 전체 JSON — 스키마 변화에 유연하다
@@ -71,6 +78,8 @@ final class ProgressBackupStore: ObservableObject {
         static let lastUploaded = "cloud.lastUploadedSnapshot"
         /// 복원 선택 시트에서 "새로 시작"을 골랐는지 — 그 뒤 업로드가 실패해도 다시 묻지 않는다 (이슈 #44)
         static let restoreChoiceMade = "cloud.restoreChoiceMade"
+        /// 마지막 동기화 성공 시각(timeIntervalSince1970) — 표시용이라 스냅샷에는 넣지 않는다 (이슈 #129)
+        static let lastBackupAt = "cloud.lastBackupAt"
     }
 
     private let defaults: UserDefaults
@@ -79,6 +88,8 @@ final class ProgressBackupStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let backedUpAt = defaults.double(forKey: SyncKey.lastBackupAt)
+        lastBackupAt = backedUpAt > 0 ? Date(timeIntervalSince1970: backedUpAt) : nil
         #if DEBUG
         // 시뮬레이터 확인용 — CloudKit 계정이 없고 데모 가드가 백업 경로를 막아
         // 실제로는 복원 선택 시트에 닿을 수 없다. 실행 인자로 후보를 주입해 화면을 본다
@@ -137,6 +148,7 @@ final class ProgressBackupStore: ObservableObject {
             RaceRecordCache.save(snapshot.raceRecords ?? [])
             RaceRecordCache.saveDeletedIDs(snapshot.deletedRaceRecordIDs ?? [])
             rememberSynced(snapshot)
+            Self.logger.debug("restore 성공")
             restoreState = .restored
             return snapshot
         } catch let error as CKError where error.code == .unknownItem {
@@ -146,6 +158,7 @@ final class ProgressBackupStore: ObservableObject {
             restoreState = .unavailable
             return nil
         } catch {
+            Self.logFailure(stage: "restore", error)
             restoreState = .failed
             return nil
         }
@@ -157,7 +170,7 @@ final class ProgressBackupStore: ObservableObject {
     ///
     /// 이 기능이 없던 버전에서 올라온 기존 사용자의 **최초 1회 마이그레이션**도 이 경로다 —
     /// 업로드 이력이 없으니 "변경됨"으로 판정되어 현재 로컬 상태가 첫 스냅샷이 된다.
-    /// 실패는 조용히 삼킨다: 다음 트리거(백그라운드 진입·단계 상승·사이클 전환)에서 다시 시도한다.
+    /// 실패는 사용자에게 알리지 않고 Logger에 코드만 남긴다(이슈 #129): 다음 트리거(백그라운드 진입·단계 상승·사이클 전환)에서 다시 시도한다.
     func backupIfChanged() async {
         // 복원 선택을 기다리는 동안은 올리지 않는다 — 답하기 전에 서버 본을 덮으면 묻는 의미가 없다
         guard !DemoMode.isActive, !isBackingUp, restoreCandidate == nil else { return }
@@ -175,8 +188,15 @@ final class ProgressBackupStore: ObservableObject {
             == .available else { return }
         local.revision = defaults.integer(forKey: SyncKey.lastSyncedRevision) + 1
 
+        let serverRecord: CKRecord?
         do {
-            let serverRecord = try await fetchServerRecord()
+            serverRecord = try await fetchServerRecord()
+        } catch {
+            // 네트워크·스키마 등 — 로컬은 그대로 두고 다음 기회에 다시 올린다
+            Self.logFailure(stage: "fetch", error)
+            return
+        }
+        do {
             // 한 번도 동기화하지 않은 설치가 서버의 다른 사이클 본을 만나면 덮기 전에 묻는다 (이슈 #44).
             // 가져온 레코드를 그대로 판정에 쓴다 — 판정용으로 한 번 더 조회하지 않는다
             let server = serverRecord.flatMap(Self.decode)
@@ -190,9 +210,14 @@ final class ProgressBackupStore: ObservableObject {
         } catch let error as CKError where error.code == .serverRecordChanged {
             // 저장 경합 — 서버 최신본과 한 번 더 병합해 재시도, 또 실패하면 다음 기회로
             guard let latest = error.serverRecord else { return }
-            _ = try? await upload(local: local, onto: latest)
+            do {
+                _ = try await upload(local: local, onto: latest)
+            } catch {
+                Self.logFailure(stage: "save", error)
+            }
         } catch {
             // 네트워크·quota 등 — 로컬은 그대로 두고 다음 기회에 다시 올린다
+            Self.logFailure(stage: "save", error)
         }
     }
 
@@ -237,6 +262,7 @@ final class ProgressBackupStore: ObservableObject {
         Self.encode(outgoing, into: record)
         _ = try await database.save(record)
         rememberSynced(outgoing)
+        Self.logger.debug("save 성공")
 
         // 병합이 서버 쪽 값을 살렸다면 로컬에도 반영해 둔다 (재설치 경합 같은 드문 경우).
         // 기다리는 사이 사용자가 바꾼 값은 되돌리지 않게, 지금 로컬을 다시 읽어 바뀐 필드는 남긴다 (이슈 #128)
@@ -351,6 +377,16 @@ final class ProgressBackupStore: ObservableObject {
     private func rememberSynced(_ snapshot: ProgressSnapshot) {
         defaults.set(snapshot.revision, forKey: SyncKey.lastSyncedRevision)
         defaults.set(try? JSONEncoder().encode(snapshot), forKey: SyncKey.lastUploaded)
+        let now = Date()
+        defaults.set(now.timeIntervalSince1970, forKey: SyncKey.lastBackupAt)
+        lastBackupAt = now
+    }
+
+    /// 실패 로그 — 단계 이름과 CKError 코드 숫자만. CKError가 아니면 코드 -1 (이슈 #129).
+    /// 에러 설명 문자열은 서버 응답을 담을 수 있어 남기지 않는다
+    private static func logFailure(stage: String, _ error: Error) {
+        let code = (error as? CKError)?.code.rawValue ?? -1
+        logger.error("\(stage, privacy: .public) 실패 — CKError \(code, privacy: .public)")
     }
 
     private func lastUploaded() -> ProgressSnapshot? {

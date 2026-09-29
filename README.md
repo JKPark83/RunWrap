@@ -15,6 +15,7 @@
 - `docs/기능-산식-정리.html` — 화면별 기능과 지표 산식 정리
 - `docs/appstore/` — 앱스토어 제출 자료: 스토어 문안·심사 노트·TestFlight 테스트 정보·6.9인치 스크린샷 6장
 - `docs/privacy.html` — 개인정보 처리방침 (https://runmisae-privacy.vercel.app/privacy.html 로 호스팅)
+- [`docs/release-checklist.md`](docs/release-checklist.md) — 릴리스 체크리스트 (CloudKit 운영 스키마 배포 확인 등)
 - `ios/` — SwiftUI 앱 (xcodegen 프로젝트, 외부 의존성 없음)
 - `tools/` — 데이터 파이프라인: `race-info`(대회 크롤러) · `course-poi`(급수·화장실·편의점 POI 빌드)
 - `.github/workflows/race-info.yml` — 매일 05:00 KST 대회 정보 크롤 → `ios/RunWrap/Races.json` 갱신
