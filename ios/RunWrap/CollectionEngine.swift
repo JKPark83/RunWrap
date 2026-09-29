@@ -137,10 +137,15 @@ enum CollectionEngine {
         case .half: return (.full, 0)
         case .full:
             // 종목은 끝 — 기록을 당긴다. 미입력이면 우선 sub-4를 제안하고,
-            // 이미 목표가 있으면 30분씩 당기되 서브3 아래로는 내리지 않는다.
-            guard goalSeconds > 0 else { return (.full, sub4Seconds) }
+            // 이미 목표가 있으면 30분씩 당기되 서브3 바로 아래에서 멈춘다.
+            // species()는 경계를 배타(<)로 가르므로 정확히 4:00:00·3:00:00은 한 칸 위 종이 아니다 —
+            // 추천값을 경계 1분 아래(3:59:00·2:59:00)로 둬야 추천대로 달성했을 때 종이 오른다.
+            guard goalSeconds > 0 else { return (.full, sub4Seconds - 60) }
+            // 이미 서브3(백조) 목표면 더 올릴 종이 없다
+            guard goalSeconds >= sub3Seconds else { return nil }
             let tightened = goalSeconds - 30 * 60
-            guard tightened >= sub3Seconds else { return nil }
+            // 서브3 경계 이하로 당겨지면 nil 대신 서브3 바로 아래로 맞춘다
+            guard tightened > sub3Seconds else { return (.full, sub3Seconds - 60) }
             return (.full, tightened)
         }
     }

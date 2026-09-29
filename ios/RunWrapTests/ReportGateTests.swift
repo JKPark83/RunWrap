@@ -173,6 +173,18 @@ struct WalkRunEngineTests {
         #expect(twentieth.runMinutes == eighth.runMinutes)
     }
 
+    @Test("이번 주 횟수는 1km 이상만 센다 — 0.5km 3회는 0회 (홈 칩과 동일 기준)")
+    func subKmRunsDoNotCountAsDone() throws {
+        // now(목요일) 기준 같은 ISO 주 안의 러닝 3개: 0.5km 두 개 + 1.2km 하나 → 1회
+        let runs = [(0.0, 0.5), (1.0, 0.5), (2.0, 1.2)].map { daysAgo, km in
+            RunSummary(id: UUID(), start: now.addingTimeInterval(-daysAgo * 86_400),
+                       durationSec: km * 360, distanceMeters: km * 1000, avgHeartRate: 150)
+        }
+        let plan = try #require(WalkRunEngine.plan(cycleStartedAt: start(weeksAgo: 1),
+                                                   weeklyGoal: 3, runs: runs, now: now))
+        #expect(plan.doneThisWeek == 1)
+    }
+
     @Test("미노출 가드 — 사이클 시작 시각을 모르면 처방을 내지 않는다")
     func missingCycleStartYieldsNil() {
         #expect(WalkRunEngine.plan(cycleStartedAt: nil, weeklyGoal: 3, runs: [], now: now) == nil)

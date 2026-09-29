@@ -121,6 +121,25 @@ struct ReportMetricsTests {
         #expect(Format.weekLabel(weekStart: dec28) == "12월 5째주")
     }
 
+    @Test("상대 주 표기 — 7일 묶음이 아니라 달력 주(월요일 시작) 차이로 '이번 주/지난주/N주 전'")
+    func relativeWeekLabel() {
+        let calendar = Calendar.current
+        // now = 2026-08-17(월) 09:00
+        let now = calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 9))!
+        // 어제(8.16 일)는 지난 달력 주 → 1주 차이
+        let sunday = calendar.date(from: DateComponents(year: 2026, month: 8, day: 16, hour: 7))!
+        #expect(Format.relativeWeek(of: sunday, now: now) == "지난주")
+        // 지난주 화요일(8.11)은 6일 전이라 7일 묶음으로는 0이지만 달력 주로는 지난주
+        let tuesday = calendar.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 7))!
+        #expect(Format.relativeWeek(of: tuesday, now: now) == "지난주")
+        // 같은 날 이른 시각은 이번 주
+        let earlier = calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 6))!
+        #expect(Format.relativeWeek(of: earlier, now: now) == "이번 주")
+        // 7.27(월) 주 → 3주 차이
+        let threeAgo = calendar.date(from: DateComponents(year: 2026, month: 8, day: 2, hour: 7))!
+        #expect(Format.relativeWeek(of: threeAgo, now: now) == "3주 전")
+    }
+
     @Test("거리 카드 차트 — 가장 오래된 기록의 주까지 전체 주를 그린다 (스크롤용)")
     func distanceCardFullSpanWeeks() throws {
         // now = 8.10(월). 56일 전 = 6.15(월) 주 → 6.15…8.10 주가 9개

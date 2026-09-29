@@ -78,6 +78,23 @@ struct HomeBriefingEngineTests {
         #expect(line?.contains("쉬어") == true || line?.contains("접어") == true)
     }
 
+    @Test("우선순위 ① — ACWR이 낮은 쪽 caution(<0.8)이면 감량이 아니라 복귀 독려 문장")
+    func lowAcwrCautionLine() {
+        // 30·26·19·12일 전 10km, 2일 전 5km.
+        // 급성 = 5km, 만성 = 28일 창(26·19·12·2일 전) 35km ÷ 4 = 8.75 → 5 ÷ 8.75 ≈ 0.57 → caution(낮은 쪽)
+        // 거리 카드: 이전 7일(12일 전) 10km → 최근 5km = −50% → caution이지만 overload는 아님
+        let runs = [run(daysAgo: 30, km: 10), run(daysAgo: 26, km: 10), run(daysAgo: 19, km: 10),
+                    run(daysAgo: 12, km: 10), run(daysAgo: 2, km: 5)]
+        let r = report(runs)
+        #expect(r.acwr?.tone == .caution)            // 전제 확인
+        #expect((r.acwr?.ratio ?? 1) < 0.8)
+        #expect(r.distance?.tone != .overload)
+
+        let line = HomeBriefingEngine.briefing(runs: runs, growth: growth(runs), report: r,
+                                                battery: nil, weeklyGoal: 3, now: now)
+        #expect(line == "평소보다 0.6배로 쉬어 가는 중이에요. 다시 시작할 땐 가볍게 한 번부터.")
+    }
+
     // MARK: - ② 컨디션 변화
 
     @Test("우선순위 ② — 부하가 정상이고 배터리가 주의면 배터리 문장이 나온다")
@@ -138,6 +155,16 @@ struct HomeBriefingEngineTests {
         let line = HomeBriefingEngine.briefing(runs: runs, growth: growth(runs), report: nil,
                                                 battery: nil, weeklyGoal: 3, now: now)
         #expect(line == "이번 주 2번째 러닝. 목표 3회까지 1번 남았어요.")
+    }
+
+    @Test("주간 목표 횟수는 1km 이상만 센다 — 0.5km 3회로는 목표 달성 문장을 내지 않는다")
+    func subKmRunsDoNotCountThisWeek() {
+        // 이번 주 0.5km 3회 + 5km 1회 → 1km 기준 1회
+        let runs = [run(daysAgo: 0.5, km: 0.5), run(daysAgo: 1, km: 0.5), run(daysAgo: 2, km: 0.5),
+                    run(daysAgo: 3, km: 5)]
+        let line = HomeBriefingEngine.briefing(runs: runs, growth: growth(runs), report: nil,
+                                                battery: nil, weeklyGoal: 3, now: now)
+        #expect(line == "이번 주 1번째 러닝. 목표 3회까지 2번 남았어요.")
     }
 
     @Test("지난주 대비 증가 — 10% 룰 안(+8%)이면 시안 1f(brfN)의 '딱 좋은 증가폭' 문장")

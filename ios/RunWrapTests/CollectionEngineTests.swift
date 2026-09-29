@@ -105,10 +105,11 @@ struct CollectionEngineTests {
 
     @Test("풀코스 이후는 기록 단축으로 방향을 튼다")
     func recommendationTightensTime() throws {
-        // 기록 미입력 → 우선 sub-4 제안
+        // 기록 미입력 → 우선 sub-4 제안. 종 경계가 배타(<)라 4:00:00이 아니라 3:59:00
         let first = try #require(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 0))
         #expect(first.distance == .full)
-        #expect(first.seconds == 4 * 3_600)
+        #expect(first.seconds == 4 * 3_600 - 60)
+        #expect(CollectionEngine.species(for: .full, goalSeconds: first.seconds) == .crane)
 
         // 4:00:00 → 30분 당겨 3:30:00
         let tighter = try #require(CollectionEngine.recommendedGoal(after: .full,
@@ -116,17 +117,29 @@ struct CollectionEngineTests {
         #expect(tighter.seconds == 3 * 3_600 + 30 * 60)
     }
 
-    @Test("서브3 아래로는 더 당기지 않는다 — 추천 없음")
-    func recommendationStopsAtSub3() {
-        // 3:00:00에서 30분을 당기면 2:30:00 < 서브3 → 추천하지 않는다
-        #expect(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 3 * 3_600) == nil)
-        // 이미 서브3인 경우도 마찬가지
-        #expect(CollectionEngine.recommendedGoal(after: .full,
-                                                 goalSeconds: 2 * 3_600 + 50 * 60) == nil)
-        // 3:30:00 → 3:00:00은 경계에 딱 걸려 허용된다
+    @Test("서브3 경계 이하로 당겨지면 서브3 바로 아래(2:59:00)로 맞추고, 이미 서브3이면 추천 없음")
+    func recommendationStopsAtSub3() throws {
+        // 3:00:00은 서브3(< 3:00:00)이 아니다 — 30분 당긴 2:30:00 대신 2:59:00으로 맞춘다
+        #expect(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 3 * 3_600)?.seconds
+                == 3 * 3_600 - 60)
+        // 3:30:00 → 3:00:00은 경계에 걸려 종이 오르지 않는다 → 2:59:00
         #expect(CollectionEngine.recommendedGoal(after: .full,
                                                  goalSeconds: 3 * 3_600 + 30 * 60)?.seconds
-                == 3 * 3_600)
+                == 3 * 3_600 - 60)
+        // 이미 서브3(2:59:00 이하)이면 더 올릴 종이 없다
+        #expect(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 3 * 3_600 - 60) == nil)
+        #expect(CollectionEngine.recommendedGoal(after: .full,
+                                                 goalSeconds: 2 * 3_600 + 50 * 60) == nil)
+    }
+
+    @Test("3:10:00 목표 — 30분 당기면 서브3 아래라 nil이 아니라 2:59:00(백조)을 추천한다")
+    func recommendationClampsToSub3() throws {
+        // 3:10:00 − 30분 = 2:40:00 ≤ 3:00:00 → 서브3 바로 아래 2:59:00으로 clamp
+        let next = try #require(CollectionEngine.recommendedGoal(after: .full,
+                                                                 goalSeconds: 3 * 3_600 + 10 * 60))
+        #expect(next.distance == .full)
+        #expect(next.seconds == 2 * 3_600 + 59 * 60)
+        #expect(CollectionEngine.species(for: .full, goalSeconds: next.seconds) == .swan)
     }
 }
 

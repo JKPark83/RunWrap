@@ -73,7 +73,7 @@ enum WalkRunEngine {
         calendar.timeZone = .current
         let thisWeek = calendar.dateInterval(of: .weekOfYear, for: now)
         let done = thisWeek.map { interval in
-            runs.filter { interval.contains($0.start) }.count
+            runs.filter { interval.contains($0.start) && GrowthEngine.countsAsCompletedRun($0) }.count  // 1km 미만은 '1회'로 안 셈 (기획서 §5, 홈 칩과 동일 기준)
         } ?? 0
 
         return Plan(week: week,
