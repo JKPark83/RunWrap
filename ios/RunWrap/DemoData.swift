@@ -35,7 +35,14 @@ enum DemoMode {
 /// 그 이전 22주는 시드 고정(0xC0FFEE) 생성 — 월이 지날수록 페이스가 월 −2초/km씩
 /// 완만히 향상되는 패턴을 심어 장기 추이(발전상) 화면 검증에 쓴다 (계획서 M0).
 enum DemoData {
-    static var runs: [RunSummary] { recentTuned + history }
+    /// 한 번만 만든다 — 계산 프로퍼티면 접근마다 UUID·시각이 새로 생겨, 같은 세션을 다시 열 때
+    /// 합성 상세(시드 = id·시작 시각)가 달라진다. fillWithDemoData가 여러 번 불려도 같은 목록 (이슈 #102)
+    static let runs: [RunSummary] = recentTuned + history
+
+    /// 인덱스 기반 결정적 UUID — 00000000-0000-0000-0000-000000000001 꼴 (이슈 #102)
+    static func demoID(_ index: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!
+    }
 
     /// 최근 4주(1~26일 전) — 리포트 홈 톤 시나리오에 맞춘 고정 배열.
     /// 생성 러닝이 28일 창(증가율·ACWR·EF 계산 구간)에 섞이면 톤이 바뀌므로
@@ -48,16 +55,26 @@ enum DemoData {
         [
             run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171, tempC: 28, humidityPct: 72,
                 id: pausedRunID),  // 신호 대기 정지 시나리오(pauseScenario) — 이슈 #47
-            run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170, tempC: 26, humidityPct: 65),
-            run(daysAgo: 5, km: 6.6, minPerKm: 6.0, hr: 144, indoor: true, cadence: 169),
-            run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167, tempC: 30, humidityPct: 78),
-            run(daysAgo: 10, km: 6, minPerKm: 5.8, hr: 148, cadence: 166, tempC: 22, humidityPct: 55),
-            run(daysAgo: 12, km: 4, minPerKm: 6.0, hr: 145, indoor: true, cadence: 165),
-            run(daysAgo: 16, km: 6, minPerKm: 6.1, hr: 153, cadence: 166, tempC: 27, humidityPct: 70),
-            run(daysAgo: 18, km: 5, minPerKm: 6.0, hr: 152, indoor: true, cadence: 165),
-            run(daysAgo: 20, km: 5, minPerKm: 6.2, hr: 154, cadence: 166),
-            run(daysAgo: 23, km: 6, minPerKm: 6.0, hr: 153, cadence: 165, tempC: 25, humidityPct: 68),
-            run(daysAgo: 26, km: 5, minPerKm: 6.1, hr: 155, indoor: true, cadence: 165),
+            run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170, tempC: 26, humidityPct: 65,
+                id: demoID(2)),
+            run(daysAgo: 5, km: 6.6, minPerKm: 6.0, hr: 144, indoor: true, cadence: 169,
+                id: demoID(3)),
+            run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167, tempC: 30, humidityPct: 78,
+                id: demoID(4)),
+            run(daysAgo: 10, km: 6, minPerKm: 5.8, hr: 148, cadence: 166, tempC: 22, humidityPct: 55,
+                id: demoID(5)),
+            run(daysAgo: 12, km: 4, minPerKm: 6.0, hr: 145, indoor: true, cadence: 165,
+                id: demoID(6)),
+            run(daysAgo: 16, km: 6, minPerKm: 6.1, hr: 153, cadence: 166, tempC: 27, humidityPct: 70,
+                id: demoID(7)),
+            run(daysAgo: 18, km: 5, minPerKm: 6.0, hr: 152, indoor: true, cadence: 165,
+                id: demoID(8)),
+            run(daysAgo: 20, km: 5, minPerKm: 6.2, hr: 154, cadence: 166,
+                id: demoID(9)),
+            run(daysAgo: 23, km: 6, minPerKm: 6.0, hr: 153, cadence: 165, tempC: 25, humidityPct: 68,
+                id: demoID(10)),
+            run(daysAgo: 26, km: 5, minPerKm: 6.1, hr: 155, indoor: true, cadence: 165,
+                id: demoID(11)),
         ]
     }
 
@@ -75,7 +92,8 @@ enum DemoData {
                            km: 6 + rng.unit() * 12,
                            minPerKm: basePace + (rng.unit() - 0.5) * 0.15,
                            hr: 144 + rng.unit() * 10,
-                           indoor: slot == 1)  // 주 1회꼴 실내(트레드밀) 세션
+                           indoor: slot == 1,  // 주 1회꼴 실내(트레드밀) 세션
+                           id: demoID(100 + week * 10 + slot))  // 주·슬롯 인덱스 — 최근 4주(2~11)와 겹치지 않는다
             }
         }
     }
@@ -84,7 +102,7 @@ enum DemoData {
                             hr: Double, indoor: Bool = false,
                             cadence: Double? = nil,
                             tempC: Double? = nil, humidityPct: Double? = nil,
-                            id: UUID = UUID()) -> RunSummary {
+                            id: UUID) -> RunSummary {
         RunSummary(id: id,
                    start: Date().addingTimeInterval(-daysAgo * 86_400),
                    durationSec: km * minPerKm * 60,

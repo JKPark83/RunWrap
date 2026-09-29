@@ -69,12 +69,20 @@ final class HealthStore: ObservableObject {
             state = .unavailable
             return
         }
-        state = .loading
+        // 이미 목록이 떠 있으면(재진단) 로딩으로 내리지 않는다 — 루트가 스플래시로 바뀌며
+        // 메인 탭이 재생성돼 탭 선택이 홈으로 초기화된다. load()와 같은 원칙 (이슈 #102)
+        let wasLoaded: Bool
+        if case .loaded = state, !isDemoLoaded { wasLoaded = true } else { wasLoaded = false; state = .loading }
         do {
             try await store.requestAuthorization(toShare: [], read: HealthPermissions.standard)
             await load()
         } catch {
-            state = .failed(error.localizedDescription)
+            // 떠 있던 목록은 지키고 사유만 싣는다 — load()의 실패 처리와 같다 (이슈 #58)
+            if wasLoaded {
+                lastError = error.localizedDescription
+            } else {
+                state = .failed(error.localizedDescription)
+            }
         }
     }
 
