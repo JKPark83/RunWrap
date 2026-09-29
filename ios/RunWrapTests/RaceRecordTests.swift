@@ -140,6 +140,44 @@ struct RaceRecordTests {
         #expect(outlook.tone == .improving)   // 느린 끝이 목표 안 → 달성권
     }
 
+    // MARK: - 대회 기록 열 중립 환산 (이슈 #100)
+
+    /// 7월 17일 10K 3,000초(5:00/km) 대회 기록 — 7월 평년 25.3°C/76%.
+    /// 이슬점(Magnus) ≈ 20.76°C → 열 점수 ≈ 46.06 → 보정량 8×1.5 + 0.06×3 ≈ 12.19초/km
+    /// → 중립 환산 3,000 − 12.19×10 ≈ 2,878.1초
+    private var julyTenKRecord: RaceRecord {
+        RaceRecord(id: UUID(), race: .tenK, timeSec: 3_000,
+                   date: ISO8601DateFormatter().date(from: "2026-07-17T09:00:00Z")!)
+    }
+
+    @Test("7월 대회 기록 → 10월 대회 — 기록 월 더위를 빼 예측이 원본보다 빨라진다")
+    func julyRecordNeutralizedForOctoberRace() throws {
+        // 10월 평년 15.0°C/63%는 열 점수 ≈ 23 < 38 → 대회 월 보정 0
+        let raceDate = ISO8601DateFormatter().date(from: "2026-10-18T00:00:00Z")!
+        let outlook = try #require(ready(RaceOutlookEngine.status(
+            race: .tenK, goalSec: 2_700, raceDate: raceDate, runs: [], now: now,
+            raceRecords: [julyTenKRecord])))
+        #expect(outlook.isRaceRecord)
+        #expect(abs(outlook.sampleHeatDeltaSecPerKm - 12.19) < 0.05)
+        #expect(outlook.heatDeltaSecPerKm == 0)
+        // 중립 2,878.1초 + 대회 월 보정 0 = 2,878.1초 (수정 전: 원본 3,000초 그대로)
+        #expect(abs(outlook.predictedSec - 2_878.1) < 0.5)
+    }
+
+    @Test("7월 대회 기록 → 8월 대회 — 중립화 뒤 대회 월 더위가 다시 붙어 원본에 가깝다")
+    func julyRecordNeutralizedThenAugustHeatAdded() throws {
+        // 8월 평년 26.1°C/74% → 이슬점 ≈ 21.10°C → 열 점수 ≈ 47.20 → 보정량 12 + 1.20×3 ≈ 15.60초/km
+        // 예측 = (300 − 12.19 + 15.60) × 10 ≈ 3,034.1초 — 원본 3,000초보다 8월이 조금 더 더운 만큼만 느리다
+        // (수정 전: 3,000 + 15.60×10 = 3,156초 — 7월 더위가 한 번 더 실렸다)
+        let raceDate = ISO8601DateFormatter().date(from: "2026-08-30T00:00:00Z")!
+        let outlook = try #require(ready(RaceOutlookEngine.status(
+            race: .tenK, goalSec: 3_000, raceDate: raceDate, runs: [], now: now,
+            raceRecords: [julyTenKRecord])))
+        #expect(abs(outlook.sampleHeatDeltaSecPerKm - 12.19) < 0.05)
+        #expect(abs(outlook.heatDeltaSecPerKm - 15.60) < 0.05)
+        #expect(abs(outlook.predictedSec - 3_034.1) < 0.5)
+    }
+
     // MARK: - 캐시
 
     @Test("캐시 왕복 — 저장한 기록을 그대로 복원한다")

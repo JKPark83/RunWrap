@@ -586,7 +586,9 @@ struct ReportHomeContent: View {
             caption += String(format: " · 심폐 추세 %+.0f%% 반영", fitnessPct)
         }
         if outlook.sampleHeatDeltaSecPerKm > 0 {
-            caption += String(format: " · 훈련 더위 −%.0f초/km 반영",
+            // 대회 기록은 세션 날씨 대신 기록 월 평년값으로 중립 환산한다 (이슈 #100)
+            caption += String(format: outlook.isRaceRecord ? " · 기록 월 평년 더위 −%.0f초/km 반영"
+                                                            : " · 훈련 더위 −%.0f초/km 반영",
                               outlook.sampleHeatDeltaSecPerKm)
         }
         if outlook.heatDeltaSecPerKm > 0 {

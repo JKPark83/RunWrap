@@ -61,7 +61,7 @@ struct SessionDetailScreen: View {
                         splitsCard(detail)
                     }
                     if let drift = store.detail?.drift {
-                        driftCard(drift)
+                        driftCard(drift, heat: heatAdjustment)
                     }
                     if let detail = store.detail, let zones = detail.zones {
                         zonesCard(zones, detail: detail)
@@ -290,7 +290,7 @@ struct SessionDetailScreen: View {
 
     // MARK: 심박 드리프트 (Pw:HR 디커플링, 제안 문서 A2)
 
-    private func driftCard(_ drift: DriftEngine.Result) -> some View {
+    private func driftCard(_ drift: DriftEngine.Result, heat: HeatEngine.Adjustment?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("심박 드리프트")
@@ -311,7 +311,7 @@ struct SessionDetailScreen: View {
             }
             .padding(.top, 12)
 
-            Text(driftSentence(drift))
+            Text(driftSentence(drift, heat: heat))
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(RR.text2)
@@ -321,11 +321,15 @@ struct SessionDetailScreen: View {
         .rrCard()
     }
 
-    /// 사실 먼저, 위트는 뒤 — 톤별 문장은 Friel 5% 기준을 그대로 옮긴다
-    private func driftSentence(_ drift: DriftEngine.Result) -> String {
+    /// 사실 먼저, 위트는 뒤 — 톤별 문장은 Friel 5% 기준을 그대로 옮긴다.
+    /// 열 보정 카드가 뜬 더운 날(heat non-nil)의 caution은 원인을 유산소 기반으로 단정하지 않는다 —
+    /// 더위도 후반 심박을 끌어올린다. 엔진은 날씨를 모르므로 톤은 그대로, 문장만 화면에서 바꾼다 (이슈 #100)
+    private func driftSentence(_ drift: DriftEngine.Result, heat: HeatEngine.Adjustment?) -> String {
         switch drift.tone {
         case .improving:
             "후반에 오히려 심박 효율이 좋아졌어요. 엔진이 늦게 데워지는 타입이거나 컨디션이 계속 올라왔거나 — 어느 쪽이든 좋은 신호입니다."
+        case .caution where heat != nil:
+            "후반 심박이 \(Int(drift.decouplingPct.rounded()))% 더 들었지만, 더위로 오른 몫이 섞여 있어요. 더운 날엔 흔한 일이라 유산소 기반 문제로 단정하진 않을게요 — 선선한 날 한 번 더 재 보시죠."
         case .caution:
             "같은 페이스인데 후반 심박이 \(Int(drift.decouplingPct.rounded()))% 더 들었어요. 이 거리엔 유산소 기반이 아직 덜 자랐다는 신호 — 편한 페이스 러닝을 늘리면 따라옵니다."
         default:

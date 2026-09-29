@@ -390,7 +390,10 @@ struct TrainingGuideEngine {
         // 대회 기록이라도 훈련 표본에는 없는 "전력 노력"의 증거다. 시점 차이는 VO₂max
         // 추세 배율이 보정한다. 최소 거리·3배 외삽·최대 나이 가드는 훈련 표본과 동일하다.
         // 페이스 타당성 가드(이슈 #93) — 오독·휠 실수 기록이 최솟값으로 항상 이기지 않게 한다.
-        // 대회 기록엔 세션 날씨가 없어 열 중립 환산은 자연히 원본 그대로다.
+        // 열 중립 환산(이슈 #100) — 대회 기록엔 세션 날씨가 없어 기록 월의 서울 평년값
+        // (RaceOutlookEngine.monthlyNormals)을 날씨 자리에 넣는다. 그러면 neutralTimeSec이
+        // 원본 − 보정량 × km, heatDeltaSecPerKm이 그 보정량(없으면 0)이 된다. 훈련 표본과 같은
+        // 중립 기준이어야 RaceOutlookEngine이 대회 월 더위를 더할 때 여름 기록의 더위가 두 번 실리지 않는다.
         let recordCutoff = now.addingTimeInterval(-Double(maxRaceRecordAgeDays) * 86_400)
         let record: RacePrediction? = raceRecords
             .filter { RaceRecord.isPlausible(timeSec: $0.timeSec, km: $0.race.km)
@@ -398,13 +401,17 @@ struct TrainingGuideEngine {
                 && $0.race.km >= minSampleKm
                 && goal.km / $0.race.km <= maxExtrapolationRatio }
             .map { record -> RacePrediction in
+                let month = Calendar.current.component(.month, from: record.date)
+                let normal = RaceOutlookEngine.monthlyNormals[month - 1]
                 let sample = PredictionSample(distanceKm: record.race.km,
-                                              timeSec: record.timeSec, date: record.date)
+                                              timeSec: record.timeSec, date: record.date,
+                                              weatherTempC: normal.tempC,
+                                              weatherHumidityPct: normal.humidityPct)
                 let ratio = fitnessRatio(sampleDate: record.date, now: now,
                                          vo2MaxSamples: vo2MaxSamples)
                 // 대회 기록은 정의상 전력 노력 — EF 환산(빠른 끝)을 만들지 않는다
                 return RacePrediction(sample: sample, windowDays: 0,
-                                      riegelSec: record.timeSec
+                                      riegelSec: sample.neutralTimeSec
                                           * pow(goal.km / record.race.km, 1.06) * ratio,
                                       effortSec: nil,
                                       fitnessRatio: ratio,
