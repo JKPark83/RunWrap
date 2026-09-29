@@ -41,8 +41,12 @@ struct RunWrapApp: App {
 
     /// 포그라운드 진입: 이미 로딩된 목록이 있으면 새로 고침 → 캐시 갱신 → 주간 알림 재예약.
     /// 최초 기동은 RootView의 connect/load가 담당하므로 여기서는 건드리지 않는다.
+    /// 첫 로드가 실패(.failed)로 끝났으면 포그라운드 복귀 때 다시 시도한다 (이슈 #58).
     private func refreshCacheAndReschedule() async {
-        if case .loaded = health.state { await health.load() }
+        switch health.state {
+        case .loaded, .failed: await health.load()
+        default: break
+        }
         // 데모 수치는 캐시하지 않는다 — 주간 알림 본문으로 나가면 안 된다 (이슈 #44)
         if case .loaded(let runs) = health.state, !runs.isEmpty, !DemoMode.isActive {
             let report = ReportEngine().weeklyReport(from: runs)
@@ -54,11 +58,14 @@ struct RunWrapApp: App {
     /// 옵저버 콜백(보조 경로) — 최신 세션을 요약해 즉시 알림.
     /// 등록 직후 최초 콜백·과거 기록 동기화로 중복 알림이 가지 않게
     /// 마지막으로 알린 세션 시각 + 최근 6시간 창으로 거른다.
-    /// 잠금 후 ~10분이 지나면 HK 읽기가 실패한다 — 빈 결과로 조용히 끝난다.
+    /// 잠금 후 ~10분이 지나면 기기 데이터 보호로 HK 읽기가 오류를 던진다 — 보호 데이터에
+    /// 접근할 수 없으면 읽기 자체를 건너뛴다. 그래도 실패하면 기존 목록은 유지되고
+    /// 사유만 lastError에 남는다 (이슈 #58).
     @MainActor
     private static func handleWorkoutUpdate(health: HealthStore) async {
         let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: NotifyKey.workoutEnabled) else { return }
+        guard defaults.bool(forKey: NotifyKey.workoutEnabled),
+              UIApplication.shared.isProtectedDataAvailable else { return }
         await health.load()
         guard case .loaded(let runs) = health.state, let latest = runs.first else { return }
 

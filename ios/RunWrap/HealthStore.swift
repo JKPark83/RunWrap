@@ -32,6 +32,12 @@ final class HealthStore: ObservableObject {
         (TrainingGuideEngine.fallbackHrMaxBpm, .fallback)
     /// 안정 심박(bpm) 최근값 — 최근 28일 중 가장 최근 표본. Karvonen 존의 재료 (이슈 #56)
     @Published private(set) var restingHRBpm: Double?
+    /// 이미 목록이 떠 있을 때 새로 고침이 실패한 사유 — 기존 목록을 .failed로 덮지 않으려고
+    /// 따로 싣는다. 아직 표시하는 화면은 없고, 추후 토스트 안내용으로 발행한다 (이슈 #58)
+    @Published private(set) var lastError: String?
+    /// 현재 목록이 데모 합성 데이터인지 — 데모를 끄고 처음 조회할 때 실패하면 합성 목록을
+    /// "기존 목록"으로 지켜선 안 되므로(#44의 캐시 보호가 풀린다) .failed로 보낸다 (이슈 #58)
+    private var isDemoLoaded = false
 
     private let store = HKHealthStore()
 
@@ -42,6 +48,7 @@ final class HealthStore: ObservableObject {
     }
 
     private func fillWithDemoData() {
+        isDemoLoaded = true
         state = .loaded(DemoData.runs)
         vitals = DemoData.vitals
         vo2Max = DemoData.vo2Max
@@ -81,7 +88,8 @@ final class HealthStore: ObservableObject {
             return
         }
         // 이미 목록이 떠 있으면 조용히 갱신 (.refreshable이 로딩 화면으로 튀지 않게)
-        if case .loaded = state {} else { state = .loading }
+        let wasLoaded: Bool
+        if case .loaded = state, !isDemoLoaded { wasLoaded = true } else { wasLoaded = false; state = .loading }
         do {
             // 업데이트로 읽기 항목이 늘 수 있어 매번 요청 — 이미 응답한 항목은 시트가 뜨지 않는다
             try? await store.requestAuthorization(toShare: [], read: HealthPermissions.standard)
@@ -102,13 +110,21 @@ final class HealthStore: ObservableObject {
             // 안정 심박은 목록을 띄우기 전에 받는다 — 첫 실행에 목록이 먼저 뜨면 그 사이 연
             // 세션 상세가 안정 심박 없이 %HRmax로 존을 굳힌다(상세는 한 번만 로드). 이슈 #56
             restingHRBpm = await latestRestingHR()
+            lastError = nil
+            isDemoLoaded = false
             state = .loaded(summaries)
             vitals = await fetchVitals()
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
             hrrTrend = await fetchHrrTrend()
         } catch {
-            state = .failed(error.localizedDescription)
+            // 이미 떠 있던 목록은 지키고 사유만 싣는다 — 잠금 중 백그라운드 새로 고침 한 번의
+            // 실패가 화면 전체를 오류로 바꾸면 안 된다 (이슈 #58). 목록이 없던 첫 로드만 .failed
+            if wasLoaded {
+                lastError = error.localizedDescription
+            } else {
+                state = .failed(error.localizedDescription)
+            }
         }
     }
 
