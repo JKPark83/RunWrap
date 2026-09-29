@@ -47,6 +47,9 @@ struct RunWrapApp: App {
         if case .loaded(let runs) = health.state, !runs.isEmpty, !DemoMode.isActive {
             let report = ReportEngine().weeklyReport(from: runs)
             ReportCache.save(ReportSnapshot.make(report: report, runs: runs, now: Date()))
+        } else if case .loaded(let runs) = health.state, runs.isEmpty, !DemoMode.isActive {
+            // 기록이 비었으면(삭제·권한 회수) 옛 스냅샷이 알림으로 나가지 않게 지운다 (이슈 #61)
+            ReportCache.clear()
         }
         await NotificationScheduler.rescheduleWeekly()
     }

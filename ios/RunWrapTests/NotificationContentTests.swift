@@ -28,10 +28,33 @@ struct NotificationContentTests {
         let snapshot = ReportSnapshot(generatedAt: now,
                                       headline: "안정적으로 리듬을 지킨 한 주였습니다.",
                                       suggestion: nil, weekKm: 21.4, runCount: 3)
-        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot)
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
             == "최근 7일 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
-        #expect(NotificationScheduler.weeklyBody(snapshot: nil)
+        #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: now)
             == "이번 주 러닝을 정리했어요 — 리포트를 열어보세요")
+    }
+
+    @Test("주간 본문 신선도 — 발송 시각 기준 48시간 이내 스냅샷만 수치를 싣는다 (이슈 #61)")
+    func weeklyBodyStaleness() {
+        // 스냅샷 생성 = now(2026-08-10T09:00Z)
+        let snapshot = ReportSnapshot(generatedAt: now,
+                                      headline: "안정적으로 리듬을 지킨 한 주였습니다.",
+                                      suggestion: nil, weekKm: 21.4, runCount: 3)
+        let fallback = "이번 주 러닝을 정리했어요 — 리포트를 열어보세요"
+
+        // 47h59m 뒤 발송(2026-08-12T08:59Z) → 48h 이내라 신선 → 수치 포함
+        let fresh = ISO8601DateFormatter().date(from: "2026-08-12T08:59:00Z")!
+        #expect(!NotificationScheduler.isStale(snapshot, at: fresh))
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: fresh)
+            == "최근 7일 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
+
+        // 48h01m 뒤 발송(2026-08-12T09:01Z) → 48h 초과라 오래됨 → 기본 문구
+        let stale = ISO8601DateFormatter().date(from: "2026-08-12T09:01:00Z")!
+        #expect(NotificationScheduler.isStale(snapshot, at: stale))
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: stale) == fallback)
+
+        // 스냅샷이 없으면 발송 시각과 무관하게 기본 문구
+        #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: fresh) == fallback)
     }
 
     @Test("주간 트리거 — 요일·시가 정각 DateComponents로 옮겨진다")

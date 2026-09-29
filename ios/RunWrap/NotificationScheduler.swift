@@ -35,11 +35,22 @@ enum NotificationScheduler {
     }
 
     /// 주간 본문 — 캐시 스냅샷이 있으면 횟수·거리·헤드라인, 없으면 기본 문구.
-    /// 횟수·거리 모두 롤링 최근 7일 기준이라 문구도 "최근 7일"로 맞춘다 (이슈 #21)
-    static func weeklyBody(snapshot: ReportSnapshot?) -> String {
-        guard let snapshot else { return "이번 주 러닝을 정리했어요 — 리포트를 열어보세요" }
+    /// 횟수·거리 모두 롤링 최근 7일 기준이라 문구도 "최근 7일"로 맞춘다 (이슈 #21).
+    /// trigger는 알림이 실제로 울릴 시각 — 그때 스냅샷이 오래됐으면 수치 없이 기본 문구로 낸다 (이슈 #61)
+    static func weeklyBody(snapshot: ReportSnapshot?, at trigger: Date) -> String {
+        guard let snapshot, !isStale(snapshot, at: trigger) else {
+            return "이번 주 러닝을 정리했어요 — 리포트를 열어보세요"
+        }
         return String(format: "최근 7일 %d회 · %.1f km — %@",
                       snapshot.runCount, snapshot.weekKm, snapshot.headline)
+    }
+
+    /// 스냅샷 신선도 판정 (이슈 #61) — 발송 시각 기준 maxAge(기본 48시간)를 넘겼으면 오래된 것.
+    /// 앱을 며칠 안 열면 캐시가 갱신되지 않아 "최근 7일" 수치가 실제와 어긋난다 —
+    /// 틀린 수치를 보내느니 기본 문구가 낫다. 정확히 maxAge인 경우는 아직 신선하다
+    static func isStale(_ snapshot: ReportSnapshot, at trigger: Date,
+                        maxAge: TimeInterval = 48 * 3_600) -> Bool {
+        trigger.timeIntervalSince(snapshot.generatedAt) > maxAge
     }
 
     /// 주간 트리거 시각 — 다음 (요일, 시)의 정각. repeats: false로 예약하고
@@ -94,12 +105,14 @@ enum NotificationScheduler {
         let weekday = defaults.object(forKey: NotifyKey.weeklyWeekday) as? Int ?? 1
         let hour = defaults.object(forKey: NotifyKey.weeklyHour) as? Int ?? 18
 
-        let content = UNMutableNotificationContent()
-        content.title = "주간 러닝 리포트"
-        content.body = weeklyBody(snapshot: ReportCache.load())
-        content.sound = .default
         let trigger = UNCalendarNotificationTrigger(
             dateMatching: weeklyTrigger(weekday: weekday, hour: hour), repeats: false)
+        // 신선도는 예약 시각이 아니라 실제 발송 시각 기준으로 본다 (이슈 #61)
+        let fireDate = trigger.nextTriggerDate() ?? Date()
+        let content = UNMutableNotificationContent()
+        content.title = "주간 러닝 리포트"
+        content.body = weeklyBody(snapshot: ReportCache.load(), at: fireDate)
+        content.sound = .default
         try? await center.add(UNNotificationRequest(identifier: weeklyId,
                                                     content: content, trigger: trigger))
     }
