@@ -24,6 +24,16 @@ struct RunName: Equatable {
 /// 온도 구간·풍속 하한은 복장 룰(OutfitRules)의 24/16/8/0°C·8m/s와 맞춰
 /// 두 카드가 모순된 말을 하지 않게 한다. 구간별 문장은 가정 — 사용 피드백으로 조정.
 enum WeatherAdviceRules {
+    /// 비 판정 단일 기준 — 러닝 이름·조언·복장·홈 판단 카드가 모두 이 헬퍼를 쓴다 (이슈 #109).
+    /// open-meteo는 이슬비·약한 소나기 코드인데 강수량이 0.0mm인 경우가 흔해 강수량만 보면 놓친다.
+    /// WMO 4677 코드표: 51~57 이슬비(어는 이슬비 포함), 61~67 비(어는 비 포함),
+    /// 80~82 소나기, 95~99 뇌우 — 뇌우는 비를 동반하므로 복장·노면 조언도 비 기준으로 본다.
+    static func isRaining(code: Int?, precipitationMm: Double) -> Bool {
+        let code = code ?? 0
+        return precipitationMm > 0 || (51...67).contains(code) || (80...82).contains(code)
+            || (95...99).contains(code)
+    }
+
     /// 우선순위: 뇌우 > 눈 > 비 > 체감온도 구간 — 강수는 온도보다 그날의 러닝 성격을 더 크게 바꾼다.
     /// 톤은 advice()의 같은 조건 항목과 맞춰 카드 안에서 색이 모순되지 않게 한다.
     static func runName(apparentC: Double, precipitationMm: Double,
@@ -38,7 +48,8 @@ enum WeatherAdviceRules {
             return .init(kind: .snow, tone: .caution, title: "설중런",
                          quip: "뽀드득뽀드득, 설원을 달리는 날")
         }
-        if precipitationMm > 0 || (51...67).contains(code) || (80...82).contains(code) {
+        // 뇌우도 비로 판정되지만 위에서 트밀런으로 먼저 잡힌다
+        if isRaining(code: weatherCode, precipitationMm: precipitationMm) {
             return .init(kind: .rain, tone: .caution, title: "우중런",
                          quip: "빗소리를 BGM 삼아 달리는 낭만")
         }
@@ -107,7 +118,7 @@ enum WeatherAdviceRules {
         if windMs >= OutfitRules.windbreakerMs {
             items.append(.init(tone: .caution, text: "바람이 강해요 — 맞바람 구간에서는 페이스 욕심을 버리세요"))
         }
-        if precipitationMm > 0 {
+        if isRaining(code: weatherCode, precipitationMm: precipitationMm) {
             items.append(.init(tone: .caution, text: "비가 와요 — 노면이 미끄러우니 보폭을 줄이세요"))
         }
         if let uv = uvIndex, uv >= 6 {

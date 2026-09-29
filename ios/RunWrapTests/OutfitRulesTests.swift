@@ -11,11 +11,11 @@ struct OutfitRulesTests {
 
     /// 기본값(맑음·무풍·건조하지 않은 습도 50%)으로 온도만 바꿔 호출하는 헬퍼
     private func outfit(apparentC: Double, humidityPct: Double = 50, windMs: Double = 0,
-                        precipitationMm: Double = 0, uvIndex: Double? = nil,
-                        now: Date? = nil) -> [OutfitItem] {
+                        precipitationMm: Double = 0, weatherCode: Int? = nil,
+                        uvIndex: Double? = nil, now: Date? = nil) -> [OutfitItem] {
         OutfitRules.outfit(apparentC: apparentC, humidityPct: humidityPct, windMs: windMs,
-                           precipitationMm: precipitationMm, uvIndex: uvIndex,
-                           now: now ?? spring)
+                           precipitationMm: precipitationMm, weatherCode: weatherCode,
+                           uvIndex: uvIndex, now: now ?? spring)
     }
 
     @Test("체감온도 경계 — 23.9°C는 반팔, 24.0°C부터 싱글렛")
@@ -59,6 +59,13 @@ struct OutfitRulesTests {
             == [.shortSleeve, .shorts, .waterproofCap])
         #expect(outfit(apparentC: 10, precipitationMm: 0.5)
             == [.longSleeve, .tights, .waterproofJacket])
+    }
+
+    @Test("강수 가산 — 강수량 0mm여도 소나기 코드(WMO 80)면 비로 보고 방수 캡 (이슈 #109)")
+    func rainCodeAddsWaterproof() {
+        // 코드 80(약한 소나기)·강수량 0 → 비 판정, 20°C ≥ 16 → 방수 캡
+        #expect(outfit(apparentC: 20, precipitationMm: 0, weatherCode: 80)
+            == [.shortSleeve, .shorts, .waterproofCap])
     }
 
     @Test("자외선 가산 — UV 3(WHO Moderate)부터 캡·선글라스·선크림 세트")

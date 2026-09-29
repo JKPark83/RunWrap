@@ -142,10 +142,12 @@ enum TodayVerdictEngine {
                                         humidityPct: current.humidityPct,
                                         windMs: current.windMs,
                                         precipitationMm: current.precipitationMm,
+                                        weatherCode: current.weatherCode,
                                         uvIndex: current.uvIndex,
                                         now: now)
         return WeatherParts(temperature: "체감 \(Int(current.apparentC.rounded()))°C",
-                            raining: current.precipitationMm > 0,
+                            raining: WeatherAdviceRules.isRaining(code: current.weatherCode,
+                                                                  precipitationMm: current.precipitationMm),
                             outfit: outfitPhrase(outfit))
     }
 

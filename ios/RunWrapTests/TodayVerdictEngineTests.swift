@@ -121,10 +121,18 @@ struct TodayVerdictEngineTests {
         #expect(rainy.weather.content == .value("체감 18°C · 비 · 반팔 티+반바지"))
     }
 
-    private func weather(apparentC: Double, precipitationMm: Double = 0) -> CurrentWeather {
+    @Test("날씨 조각 — 강수량 0mm여도 이슬비 코드(WMO 51)면 raining (이슈 #109)")
+    func weatherPartsRainCode() {
+        let parts = TodayVerdictEngine.weatherParts(
+            weather(apparentC: 18, weatherCode: 51), now: now)
+        #expect(parts.raining)
+    }
+
+    private func weather(apparentC: Double, precipitationMm: Double = 0,
+                         weatherCode: Int? = nil) -> CurrentWeather {
         CurrentWeather(temperatureC: apparentC, apparentC: apparentC, humidityPct: 60,
                        windMs: 2, precipitationMm: precipitationMm, forecastMaxC: nil,
-                       weatherCode: nil, uvIndex: 1)
+                       weatherCode: weatherCode, uvIndex: 1)
     }
 
     // MARK: - 오늘 권장 세션
