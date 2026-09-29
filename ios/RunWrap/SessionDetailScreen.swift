@@ -95,6 +95,11 @@ struct SessionDetailScreen: View {
                 await store.load(run: run, heartRate: heartRate)
             }
         }
+        .onChange(of: health.state) { _, state in
+            // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
+            guard case .loaded(let all) = state else { return }
+            Task { await store.reloadSnapshots(others: all, excluding: run) }
+        }
         .sheet(isPresented: $showShare) {
             ShareSheetView(run: run,
                            zones: store.detail?.zones,
@@ -429,7 +434,8 @@ struct SessionDetailScreen: View {
                                    cadenceSpm: detail.cadenceSpm ?? run.cadenceSpm,
                                    verticalOscillationCm: detail.verticalOscillationCm,
                                    groundContactMs: detail.groundContactMs)
-        let engine = FormEngine()
+        // 기준선 창은 '지금'이 아니라 세션 직전 28일 — 과거 세션을 그 이후 기록과 비교하지 않는다 (이슈 #92)
+        let engine = FormEngine(now: run.start)
         let advice = engine.baseline(of: store.formSnapshots, excluding: run.id)
             .map { engine.advice(session: session, baseline: $0) }
 
@@ -459,8 +465,14 @@ struct SessionDetailScreen: View {
                         .font(.system(size: 12.5))
                         .lineSpacing(4)
                         .foregroundStyle(RR.text2)
+                } else if store.isLoadingSnapshots {
+                    // 조회 중 빈 스냅샷으로 표본 부족 안내가 뜨지 않게 (이슈 #92)
+                    Text("주법 기준선을 불러오는 중…")
+                        .font(.system(size: 12.5))
+                        .lineSpacing(4)
+                        .foregroundStyle(RR.text3)
                 } else {
-                    Text("최근 4주 야외 러닝이 5회 모이면 내 기준선과 비교한 주법 조언이 나와요.")
+                    Text("이 러닝 전 4주 야외 러닝이 5회 모이면 내 기준선과 비교한 주법 조언이 나와요.")
                         .font(.system(size: 12.5))
                         .lineSpacing(4)
                         .foregroundStyle(RR.text3)
@@ -559,13 +571,10 @@ struct SessionDetailScreen: View {
         .disabled(store.isLoading)
     }
 
-    /// 카드 하단 주간 요약 — 최근 7일 러닝 횟수·거리 (기획서 §4.4)
+    /// 카드 하단 주간 요약 — 이 세션 기준 7일 러닝 횟수·거리 (기획서 §4.4, 이슈 #92)
     private var weeklySummaryLine: String? {
         guard case .loaded(let all) = health.state else { return nil }
-        let recent = all.filter { $0.start >= Date().addingTimeInterval(-7 * 86_400) }
-        guard !recent.isEmpty else { return nil }
-        let km = recent.compactMap(\.distanceKm).reduce(0, +)
-        return "최근 7일 \(recent.count)회 · \(Format.km(km)) km"
+        return ShareSummary.weeklyLine(runs: all, sessionStart: run.start, now: Date())
     }
 }
 

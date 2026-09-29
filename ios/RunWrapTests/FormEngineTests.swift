@@ -45,18 +45,69 @@ struct FormEngineTests {
 
     @Test("기준선 평균 — 지표별로 nil 표본은 빼고 평균낸다")
     func baselinePerMetricMean() throws {
+        // 지표별 표본 가드(이슈 #92) 이후에도 평균이 나오도록 진폭·접촉 표본을 각 5개로 맞춘다
         let snaps = [
             snap(daysAgo: 2, cadence: 160, vo: 6.0, gct: 230),
             snap(daysAgo: 5, cadence: 165, vo: 7.0, gct: 250),
             snap(daysAgo: 9, cadence: 170, vo: 8.0, gct: nil),
-            snap(daysAgo: 14, cadence: 175, vo: nil, gct: nil),
-            snap(daysAgo: 27, cadence: 180, vo: 7.0, gct: nil),
+            snap(daysAgo: 14, cadence: 175, vo: nil, gct: 240),
+            snap(daysAgo: 20, cadence: 180, vo: 7.0, gct: 230),
+            snap(daysAgo: 27, cadence: 170, vo: 7.0, gct: 250),
         ]
         let baseline = try #require(engine.baseline(of: snaps, excluding: UUID()))
-        #expect(baseline.sessionCount == 5)
-        #expect(baseline.cadenceSpm == 170)          // (160+165+170+175+180)/5
-        #expect(baseline.verticalOscillationCm == 7.0)  // (6+7+8+7)/4
-        #expect(baseline.groundContactMs == 240)     // (230+250)/2
+        #expect(baseline.sessionCount == 6)
+        #expect(baseline.cadenceSpm == 170)             // (160+165+170+175+180+170)/6
+        #expect(baseline.verticalOscillationCm == 7.0)  // (6+7+8+7+7)/5
+        #expect(baseline.groundContactMs == 240)        // (230+250+240+230+250)/5
+    }
+
+    @Test("기준선 지표별 가드 — 세션은 5회여도 지표 표본이 3개면 그 지표는 nil (이슈 #92)")
+    func baselinePerMetricGuard() throws {
+        // 케이던스 5개, 진폭·접촉은 3개뿐 (다이내믹스 미기록 세션 2회)
+        let snaps = [
+            snap(daysAgo: 2, cadence: 168, vo: 6.0, gct: 230),
+            snap(daysAgo: 5, cadence: 169, vo: 7.0, gct: 240),
+            snap(daysAgo: 9, cadence: 170, vo: 8.0, gct: 250),
+            snap(daysAgo: 14, cadence: 171, vo: nil, gct: nil),
+            snap(daysAgo: 20, cadence: 172, vo: nil, gct: nil),
+        ]
+        let baseline = try #require(engine.baseline(of: snaps, excluding: UUID()))
+        #expect(baseline.sessionCount == 5)             // 세션 수 정의는 그대로
+        #expect(baseline.cadenceSpm == 170)             // (168+169+170+171+172)/5
+        #expect(baseline.verticalOscillationCm == nil)
+        #expect(baseline.groundContactMs == nil)
+
+        // 비교할 지표가 하나도 없으면 기준선 자체를 내지 않는다 ('평소대로 유지' 오판정 방지)
+        let noCadence = snaps.map {
+            FormSnapshot(id: $0.id, start: $0.start, cadenceSpm: nil,
+                         verticalOscillationCm: $0.verticalOscillationCm,
+                         groundContactMs: $0.groundContactMs)
+        }
+        #expect(engine.baseline(of: noCadence, excluding: UUID()) == nil)
+    }
+
+    @Test("기준선 밴드 — 절대 밴드 밖 진폭·접촉 값은 평균에서 빠진다 (이슈 #92)")
+    func baselineExcludesOutOfBand() throws {
+        // 밴드: 진폭 4~10cm, 접촉 150~300ms — 6회째 값(15cm, 400ms)은 측정 오류로 본다
+        let snaps = [
+            snap(daysAgo: 2, vo: 6.0, gct: 230),
+            snap(daysAgo: 5, vo: 7.0, gct: 250),
+            snap(daysAgo: 9, vo: 8.0, gct: 240),
+            snap(daysAgo: 14, vo: 7.0, gct: 230),
+            snap(daysAgo: 20, vo: 7.0, gct: 250),
+            snap(daysAgo: 27, vo: 15.0, gct: 400),
+        ]
+        let baseline = try #require(engine.baseline(of: snaps, excluding: UUID()))
+        #expect(baseline.sessionCount == 6)
+        #expect(baseline.verticalOscillationCm == 7.0)  // (6+7+8+7+7)/5 — 15 제외 (포함 시 8.33)
+        #expect(baseline.groundContactMs == 240)        // (230+250+240+230+250)/5 — 400 제외 (포함 시 266.7)
+
+        // 밴드 밖 값을 빼서 표본이 4개가 되면 그 지표는 nil
+        let fewer = Array(snaps.dropFirst())
+        let trimmed = try #require(engine.baseline(of: fewer, excluding: UUID()))
+        #expect(trimmed.verticalOscillationCm == nil)
+        #expect(trimmed.groundContactMs == nil)
+        #expect(trimmed.cadenceSpm == 170)              // 케이던스는 밴드가 없어 5개 그대로
     }
 
     @Test("조언 — 케이던스가 기준선보다 5% 넘게 낮으면 보폭 조언")

@@ -34,8 +34,13 @@ struct WorkoutDetail {
 final class WorkoutDetailStore: ObservableObject {
     @Published private(set) var detail: WorkoutDetail?
     @Published private(set) var isLoading = false
-    /// 주법 기준선 재료 — 최근 28일 야외 세션들의 다이내믹스 스냅샷 (계획서 M4)
+    /// 주법 기준선 재료 — 세션 직전 28일 야외 세션들의 다이내믹스 스냅샷 (계획서 M4)
     @Published private(set) var formSnapshots: [FormSnapshot] = []
+    /// 스냅샷 조회 중 — 이 동안 표본 부족 안내 대신 로딩 문구를 띄운다 (이슈 #92)
+    @Published private(set) var isLoadingSnapshots = false
+    /// 스냅샷 조회 세대 — 마지막으로 시작한 조회만 결과를 반영한다.
+    /// load()는 detail 조회 중 세대가 바뀌었으면 옛 others로 재조회하지 않는다
+    private var snapshotGeneration = 0
 
     private let store = HKHealthStore()
 
@@ -46,14 +51,31 @@ final class WorkoutDetailStore: ObservableObject {
         guard detail == nil, !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
+        // detail 조회 동안 목록이 로드돼 화면이 reloadSnapshots를 이미 불렀다면
+        // 진입 시점의 (비어 있을 수 있는) others로 그 조회를 덮지 않는다 (이슈 #92)
+        let startGeneration = snapshotGeneration
         // 데모 모드에서는 HealthKit을 건드리지 않고 합성 상세를 만든다 (DemoMode)
         if DemoMode.isActive {
             detail = Self.synthetic(for: run, heartRate: heartRate)
-            formSnapshots = Self.syntheticSnapshots(others: others, excluding: run.id)
         } else {
             detail = await fetch(run: run, heartRate: heartRate)
-            formSnapshots = await fetchFormSnapshots(others: others, excluding: run.id)
         }
+        guard snapshotGeneration == startGeneration else { return }
+        await reloadSnapshots(others: others, excluding: run)
+    }
+
+    /// 기준선 스냅샷만 다시 조회한다 — 진입 시 목록이 아직 로드 전이라 빈 목록으로
+    /// 한 번 불렸을 때, 목록이 로드되면 화면이 부른다. detail은 재조회하지 않는다 (이슈 #92)
+    func reloadSnapshots(others: [RunSummary], excluding run: RunSummary) async {
+        snapshotGeneration += 1
+        let generation = snapshotGeneration
+        isLoadingSnapshots = true
+        let snapshots = DemoMode.isActive
+            ? Self.syntheticSnapshots(others: others, excluding: run)
+            : await fetchFormSnapshots(others: others, excluding: run)
+        guard generation == snapshotGeneration else { return }  // 더 새 조회가 결과를 낸다
+        formSnapshots = snapshots
+        isLoadingSnapshots = false
     }
 
     // MARK: - 실기기: HealthKit 조회
@@ -134,13 +156,14 @@ final class WorkoutDetailStore: ObservableObject {
             / Double(samples.count)
     }
 
-    /// 기준선 재료 수집 — 최근 28일 야외 세션의 케이던스·진폭·접촉시간.
+    /// 기준선 재료 수집 — 세션 직전 28일 야외 세션의 케이던스·진폭·접촉시간.
+    /// 창은 '지금'이 아니라 run.start 기준 — 과거 세션을 그 이후 기록과 비교하지 않는다 (이슈 #92).
     /// 케이던스는 목록(HealthStore)이 백필한 값을 재사용해 세션당 쿼리를 줄인다.
     private func fetchFormSnapshots(others: [RunSummary],
-                                    excluding id: UUID) async -> [FormSnapshot] {
-        let cutoff = Date().addingTimeInterval(-FormEngine.windowDays * 86_400)
+                                    excluding run: RunSummary) async -> [FormSnapshot] {
+        let cutoff = run.start.addingTimeInterval(-FormEngine.windowDays * 86_400)
         let candidates = others
-            .filter { !$0.isIndoor && $0.id != id && $0.start >= cutoff }
+            .filter { !$0.isIndoor && $0.id != run.id && $0.start >= cutoff && $0.start < run.start }
             .prefix(20)  // 쿼리 상한 — 기준선 평균에는 20회면 충분하다
         var snapshots: [FormSnapshot] = []
         for other in candidates {
@@ -368,10 +391,10 @@ final class WorkoutDetailStore: ObservableObject {
     }
 
     /// 기준선 스냅샷 합성 — 필터 기준은 실기기 fetchFormSnapshots와 동일
-    static func syntheticSnapshots(others: [RunSummary], excluding id: UUID) -> [FormSnapshot] {
-        let cutoff = Date().addingTimeInterval(-FormEngine.windowDays * 86_400)
+    static func syntheticSnapshots(others: [RunSummary], excluding run: RunSummary) -> [FormSnapshot] {
+        let cutoff = run.start.addingTimeInterval(-FormEngine.windowDays * 86_400)
         return others
-            .filter { !$0.isIndoor && $0.id != id && $0.start >= cutoff }
+            .filter { !$0.isIndoor && $0.id != run.id && $0.start >= cutoff && $0.start < run.start }
             .map { other in
                 let dynamics = syntheticDynamics(for: other)
                 return FormSnapshot(id: other.id, start: other.start,

@@ -50,16 +50,26 @@ struct FormEngine {
 
     /// 기준선 = 창 안(28일) 스냅샷의 지표별 평균. 본인 세션은 제외한다 —
     /// 이번 세션이 평균을 끌어당기면 이탈이 묽어져 조언이 둔해진다.
+    /// 지표별 가드 (이슈 #92): 진폭·접촉시간은 다이내믹스 미기록 세션에서 nil이라 세션 수만 보면
+    /// '5회 기준선'이 1~2회 평균일 수 있다 — 지표마다 표본이 minSessions 이상일 때만 평균낸다.
+    /// 절대 밴드 밖 값은 측정 오류로 보고 표본에서 뺀다 (케이던스는 밴드가 없어 표본 수만 본다).
     func baseline(of snapshots: [FormSnapshot], excluding id: UUID) -> FormBaseline? {
         let cutoff = now.addingTimeInterval(-Self.windowDays * 86_400)
         let window = snapshots.filter { $0.id != id && $0.start >= cutoff && $0.start <= now }
         guard window.count >= Self.minSessions else { return nil }
-        func mean(_ values: [Double]) -> Double? {
-            values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+        func mean(_ values: [Double], within band: ClosedRange<Double>? = nil) -> Double? {
+            let samples = band.map { band in values.filter { band.contains($0) } } ?? values
+            guard samples.count >= Self.minSessions else { return nil }
+            return samples.reduce(0, +) / Double(samples.count)
         }
-        return FormBaseline(cadenceSpm: mean(window.compactMap(\.cadenceSpm)),
-                            verticalOscillationCm: mean(window.compactMap(\.verticalOscillationCm)),
-                            groundContactMs: mean(window.compactMap(\.groundContactMs)),
+        let cadence = mean(window.compactMap(\.cadenceSpm))
+        let oscillation = mean(window.compactMap(\.verticalOscillationCm), within: Self.oscillationBandCm)
+        let contact = mean(window.compactMap(\.groundContactMs), within: Self.contactBandMs)
+        // 비교할 지표가 하나도 없으면 기준선도 없다 — 빈 기준선은 '평소대로 유지' 오판정을 낸다
+        guard cadence != nil || oscillation != nil || contact != nil else { return nil }
+        return FormBaseline(cadenceSpm: cadence,
+                            verticalOscillationCm: oscillation,
+                            groundContactMs: contact,
                             sessionCount: window.count)
     }
 
