@@ -141,6 +141,71 @@ struct CollectionEngineTests {
         #expect(next.seconds == 2 * 3_600 + 59 * 60)
         #expect(CollectionEngine.species(for: .full, goalSeconds: next.seconds) == .swan)
     }
+
+    // MARK: - 세러모니 다음 목표 초기 선택 (이슈 #127)
+
+    @Test("초기 선택 — 현재 목표가 사이클 목표와 같으면 사이클 목표 기준 추천")
+    func initialNextGoalSameAsCycle() {
+        // 10K 사이클 → 한 칸 올린 하프
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .tenK, cycleGoalSeconds: 0,
+                                                    currentGoal: .tenK, currentSeconds: 0)
+        #expect(pick.distance == .half)
+        #expect(pick.seconds == 0)
+        // 풀 4:00:00 사이클 → 30분 당긴 3:30:00 (recommendedGoal과 같은 결과)
+        let full = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 4 * 3_600,
+                                                    currentGoal: .full, currentSeconds: 4 * 3_600)
+        #expect(full.distance == .full)
+        #expect(full.seconds == 3 * 3_600 + 30 * 60)
+        // 이미 서브3이면 추천이 없어 사이클 목표를 유지한다
+        let sub3 = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 2 * 3_600 + 50 * 60,
+                                                    currentGoal: .full, currentSeconds: 2 * 3_600 + 50 * 60)
+        #expect(sub3.distance == .full)
+        #expect(sub3.seconds == 2 * 3_600 + 50 * 60)
+    }
+
+    @Test("초기 선택 — 사이클 도중 더 먼 종목으로 바꿨으면 그 목표를 그대로 둔다")
+    func initialNextGoalFartherCurrent() {
+        // 5K 사이클 중 풀 3:50:00으로 변경 → 추천(10K) 대신 풀 3:50:00
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .fiveK, cycleGoalSeconds: 0,
+                                                    currentGoal: .full, currentSeconds: 3 * 3_600 + 50 * 60)
+        #expect(pick.distance == .full)
+        #expect(pick.seconds == 3 * 3_600 + 50 * 60)
+        // 목표 없음 사이클 중 하프로 변경 → 추천(5K) 대신 하프
+        let fromNone = CollectionEngine.initialNextGoal(cycleGoal: nil, cycleGoalSeconds: 0,
+                                                        currentGoal: .half, currentSeconds: 0)
+        #expect(fromNone.distance == .half)
+    }
+
+    @Test("초기 선택 — 같은 종목에 더 빠른 기록으로 바꿨으면 그 목표를 그대로 둔다")
+    func initialNextGoalFasterCurrent() {
+        // 풀 4:00:00 사이클 중 3:45:00으로 당김 → 추천(3:30:00) 대신 3:45:00
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 4 * 3_600,
+                                                    currentGoal: .full, currentSeconds: 3 * 3_600 + 45 * 60)
+        #expect(pick.distance == .full)
+        #expect(pick.seconds == 3 * 3_600 + 45 * 60)
+        // 기록 없는 풀 완주 사이클 중 기록 4:10:00을 입력 → 추천(3:59:00) 대신 4:10:00
+        let fromFinish = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 0,
+                                                          currentGoal: .full, currentSeconds: 4 * 3_600 + 10 * 60)
+        #expect(fromFinish.seconds == 4 * 3_600 + 10 * 60)
+    }
+
+    @Test("초기 선택 — 현재 목표가 더 낮으면 사이클 목표 기준 추천")
+    func initialNextGoalLowerCurrent() {
+        // 하프 사이클 중 5K로 낮춤 → 하프 기준 추천 풀코스
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .half, cycleGoalSeconds: 0,
+                                                    currentGoal: .fiveK, currentSeconds: 0)
+        #expect(pick.distance == .full)
+        #expect(pick.seconds == 0)
+        // 풀 3:30:00 사이클 중 4:00:00으로 늦춤 → 3:30:00 기준 추천 2:59:00
+        let slower = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 3 * 3_600 + 30 * 60,
+                                                      currentGoal: .full, currentSeconds: 4 * 3_600)
+        #expect(slower.seconds == 3 * 3_600 - 60)
+        // 풀 사이클 중 목표를 지움 → 풀 기준 추천 3:59:00
+        let cleared = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 0,
+                                                       currentGoal: nil, currentSeconds: 0)
+        #expect(cleared.distance == .full)
+        #expect(cleared.seconds == 4 * 3_600 - 60)
+    }
 }
 
 /// 도감 저장 검증 — 임시 디렉터리를 주입해 실제 Application Support를 건드리지 않는다.

@@ -146,7 +146,11 @@ struct HomeScreen: View {
         .fullScreenCover(isPresented: $showsCeremony) {
             CeremonyScreen(species: pendingSpecies,
                             goalLabel: pendingGoalLabel,
-                            cycleStartedAt: cycleStartedAt) { newGoal, newSeconds in
+                            cycleStartedAt: cycleStartedAt,
+                            cycleGoal: cycleGoal,
+                            cycleGoalSeconds: cycleGoalSec,
+                            currentGoal: RaceDistance(rawValue: raceGoalRaw),
+                            currentGoalSeconds: raceGoalSec) { newGoal, newSeconds in
                 startNewCycle(goal: newGoal, goalSeconds: newSeconds, now: Date())
             }
             // 세러모니는 저장 실패 시 닫히지 않으므로 알림도 그 위에 건다 — 홈에 걸면 커버에 가려진다
