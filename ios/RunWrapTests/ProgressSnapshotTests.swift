@@ -212,6 +212,78 @@ struct ProgressSnapshotTests {
             defaults: defaults, birds: [], now: Self.date("2026-08-20T00:00:00Z")) == nil)
     }
 
+    // MARK: - 복원 선택 판정 (이슈 #44)
+
+    @Test("복원 선택 — 동기화 이력 없는 설치가 서버의 다른 사이클 본을 만나면 묻는다")
+    func differentCycleNeedsChoice() throws {
+        // 복원이 일시 실패한 뒤 새 온보딩으로 사이클 B를 연 설치. readLocal은 updatedAt을 now(9/29)로 채운다
+        let defaults = Self.freshDefaults("choiceDifferentCycle")
+        Self.makeSnapshot(cycleID: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!,
+                          maxStage: 1).apply(to: defaults)
+        let local = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-09-29T09:00:00Z")))
+        // 서버: 이전 설치의 사이클 A, 4단계, 8/5 백업
+        let server = Self.makeSnapshot(updatedAt: Self.date("2026-08-05T09:00:00Z"), maxStage: 4)
+
+        // 이 판정이 없으면 merge는 "다른 사이클은 최신이 통째로 이긴다" 규칙으로
+        // 로컬 B(9/29)를 택해 서버의 4단계를 조용히 덮는다 — 그래서 첫 업로드 전에 묻는다
+        #expect(ProgressMergeEngine.needsRestoreChoice(local: local, server: server,
+                                                       hasSyncedBefore: false))
+    }
+
+    @Test("복원 선택 — 서버 본이 없으면 묻지 않는다 (진짜 신규)")
+    func noServerNoChoice() {
+        let local = Self.makeSnapshot()
+        #expect(!ProgressMergeEngine.needsRestoreChoice(local: local, server: nil,
+                                                        hasSyncedBefore: false))
+    }
+
+    @Test("복원 선택 — 같은 사이클이면 묻지 않는다 (maxStage 최댓값 병합이 지켜 준다)")
+    func sameCycleNoChoice() {
+        let local = Self.makeSnapshot(updatedAt: Self.date("2026-09-29T09:00:00Z"), maxStage: 2)
+        let server = Self.makeSnapshot(updatedAt: Self.date("2026-08-05T09:00:00Z"), maxStage: 4)
+        #expect(!ProgressMergeEngine.needsRestoreChoice(local: local, server: server,
+                                                        hasSyncedBefore: false))
+    }
+
+    @Test("복원 선택 — 미래 스키마 서버 본은 불러올 수 없으니 묻지 않고, 병합이 keepServer로 보호한다")
+    func futureSchemaNoChoice() {
+        let local = Self.makeSnapshot(cycleID: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!)
+        let server = Self.makeSnapshot(schemaVersion: ProgressSnapshot.currentSchemaVersion + 1)
+        #expect(!ProgressMergeEngine.needsRestoreChoice(local: local, server: server,
+                                                        hasSyncedBefore: false))
+        #expect(ProgressMergeEngine.merge(local: local, server: server) == .keepServer)
+    }
+
+    @Test("복원 선택 — 이미 서버와 동기화한 설치는 묻지 않는다 (사이클 전환은 기존 병합 규칙)")
+    func syncedInstallNoChoice() {
+        let local = Self.makeSnapshot(cycleID: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!)
+        let server = Self.makeSnapshot()
+        #expect(!ProgressMergeEngine.needsRestoreChoice(local: local, server: server,
+                                                        hasSyncedBefore: true))
+    }
+
+    @Test("불러오기 — 온보딩 값 위에 서버 본을 적용하면 서버의 사이클 식별자·단계·시작 시각이 남는다")
+    func acceptAppliesServerCycle() throws {
+        let defaults = Self.freshDefaults("acceptServer")
+        // 방금 마친 온보딩: 사이클 B, 알 단계, 9/29 시작
+        var onboarding = Self.makeSnapshot(cycleID: UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!,
+                                           levelRaw: "beginner", maxStage: 1)
+        onboarding.cycleStartedAt = Self.date("2026-09-29T09:00:00Z")
+        onboarding.apply(to: defaults)
+        // 서버: 사이클 A, 4단계, 7/1 시작 (makeSnapshot 기본값)
+        let server = Self.makeSnapshot(maxStage: 4)
+
+        server.apply(to: defaults)
+        let read = try #require(ProgressSnapshot.readLocal(
+            defaults: defaults, birds: [], now: Self.date("2026-09-29T10:00:00Z")))
+
+        #expect(read.cycleID == server.cycleID)
+        #expect(read.maxStage == 4)
+        #expect(read.cycleStartedAt == Self.date("2026-07-01T00:00:00Z"))
+        #expect(read.levelRaw == "intermediate")
+    }
+
     @Test("ensureCycleID — 없으면 만들어 저장하고, 있으면 같은 값을 돌려준다")
     func ensureCycleIDIsStable() throws {
         let defaults = Self.freshDefaults("cycleID")

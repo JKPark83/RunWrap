@@ -126,19 +126,25 @@ struct SettingsScreen: View {
         .navigationTitle("설정")
         .navigationBarTitleDisplayMode(.inline)
         // 다시 진단받기 — 설문을 처음부터 다시 받는다.
-        // 이전 답을 프리필하지 않는 건 의도다: 원답은 저장하지 않고 판정 결과만 남기며,
-        // 다시 진단하는 이유는 그때와 지금이 달라졌기 때문이다 (기획서 §7)
+        // 이전 답을 프리필하지 않는 건 의도다: 다시 진단하는 이유는 그때와 지금이
+        // 달라졌기 때문이다 (기획서 §7). 설문 답은 갱신하지만 성장 사이클은 보존한다 —
+        // 재진단은 명시 파라미터로 알린다 (이슈 #44)
         .sheet(isPresented: $isRediagnosing) {
-            OnboardingFlowScreen(onFinish: { isRediagnosing = false })
+            OnboardingFlowScreen(isRediagnosis: true, onFinish: { isRediagnosing = false })
                 .environmentObject(health)
         }
         // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
         .sheet(isPresented: $isAddingRecord) {
             RaceRecordInputSheet { raceRecords.add($0) }
         }
-        // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다
-        .onChange(of: demoMode) { _, _ in
-            Task { await health.load() }
+        // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다.
+        // 끌 때는 주간 알림 캐시를 비우고 다시 예약한다 — 데모 수치가 알림 본문에 남지 않게 (이슈 #44)
+        .onChange(of: demoMode) { _, isOn in
+            if !isOn { ReportCache.clear() }
+            Task {
+                await health.load()
+                if !isOn { await NotificationScheduler.rescheduleWeekly() }
+            }
         }
         .onChange(of: workoutNotify) { _, isOn in
             if isOn { Task { _ = await NotificationScheduler.requestAuthorization() } }

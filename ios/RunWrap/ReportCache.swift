@@ -52,6 +52,13 @@ enum ReportCache {
         return try? JSONDecoder().decode(ReportSnapshot.self, from: data)
     }
 
+    /// 캐시 삭제 — 데모 모드를 끌 때 합성 수치가 알림 본문에 남지 않게 한다 (이슈 #44).
+    /// 파일이 없거나 지우지 못해도 조용히 넘어간다 (다음 저장이 덮어쓴다)
+    static func clear(in directory: URL? = nil) {
+        guard let url = fileURL(in: directory) else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
+
     /// directory 주입은 테스트용 — 기본은 Application Support/RunWrap (없으면 만든다)
     private static func fileURL(in directory: URL?) -> URL? {
         if let directory { return directory.appendingPathComponent(filename) }

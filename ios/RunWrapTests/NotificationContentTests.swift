@@ -125,4 +125,21 @@ struct NotificationContentTests {
         ReportCache.save(snapshot, in: dir)
         #expect(ReportCache.load(from: dir) == snapshot)
     }
+
+    @Test("캐시 삭제 — 데모 모드를 끄면 비운 캐시는 nil로 읽힌다 (이슈 #44)")
+    func cacheClear() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runwrap-cache-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        ReportCache.save(ReportSnapshot(generatedAt: now, headline: "데모 헤드라인",
+                                        suggestion: nil, weekKm: 30, runCount: 5), in: dir)
+        #expect(ReportCache.load(from: dir) != nil)
+
+        ReportCache.clear(in: dir)
+        #expect(ReportCache.load(from: dir) == nil)
+        // 파일이 없을 때 다시 지워도 조용히 넘어간다
+        ReportCache.clear(in: dir)
+    }
 }
