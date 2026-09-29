@@ -124,6 +124,80 @@ struct RaceRecordTests {
         #expect(RaceRecordCache.load(from: dir) == records)
     }
 
+    // 이슈 #66 — 디코딩 실패가 전체 기록 유실로 번지지 않게. 격리 파일 시각은 now 고정
+
+    private func makeTempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("race-record-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func corruptFiles(in dir: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("race-records.corrupt-") }
+    }
+
+    @Test("깨진 원소 하나는 건너뛰고 나머지 2건을 살린다 — 원본은 corrupt 파일로 격리")
+    func lenientLoadSalvagesAndQuarantines() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let records = [record(.half, timeSec: 6_330, daysAgo: 100),
+                       record(.tenK, timeSec: 2_700, daysAgo: 30)]
+        // 정상 2건 사이에 raw value가 바뀐 종목("marathon") 원소 1건을 끼운다
+        var array = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(records)) as? [Any])
+        array.insert(["id": UUID().uuidString, "race": "marathon",
+                      "timeSec": 12_000, "date": 0], at: 1)
+        let url = dir.appendingPathComponent(RaceRecordCache.filename)
+        let original = try JSONSerialization.data(withJSONObject: array)
+        try original.write(to: url)
+
+        #expect(RaceRecordCache.load(from: dir, now: now) == records)
+        // 격리 파일 = race-records.corrupt-<now ISO8601>.json, 내용은 원본 그대로
+        let corrupt = dir.appendingPathComponent("race-records.corrupt-2026-08-26T09:00:00Z.json")
+        #expect(try Data(contentsOf: corrupt) == original)
+        #expect(try corruptFiles(in: dir).count == 1)
+        // 살린 2건은 다시 저장돼 다음 실행에도 남고, 이번엔 격리가 일어나지 않는다
+        #expect(RaceRecordCache.load(from: dir, now: now.addingTimeInterval(60)) == records)
+        #expect(try corruptFiles(in: dir).count == 1)
+    }
+
+    @Test("파일 전체가 깨져도 원본을 격리한 뒤 빈 목록을 돌려준다")
+    func wholeFileCorruptionQuarantines() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let original = Data("{ not json".utf8)
+        try original.write(to: dir.appendingPathComponent(RaceRecordCache.filename))
+
+        #expect(RaceRecordCache.load(from: dir, now: now) == [])
+        let corrupt = dir.appendingPathComponent("race-records.corrupt-2026-08-26T09:00:00Z.json")
+        #expect(try Data(contentsOf: corrupt) == original)
+    }
+
+    @Test("파일이 없으면 nil — 첫 실행은 격리 파일을 만들지 않는다")
+    func missingFileReturnsNil() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(RaceRecordCache.load(from: dir, now: now) == nil)
+        #expect(try corruptFiles(in: dir).isEmpty)
+    }
+
+    @Test("모두 정상이면 그대로 읽고 격리 파일을 만들지 않는다")
+    func validFileLoadsUnchanged() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let records = [record(.fiveK, timeSec: 1_200, daysAgo: 10),
+                       record(.full, timeSec: 14_400, daysAgo: 200)]
+        RaceRecordCache.save(records, in: dir)
+        let url = dir.appendingPathComponent(RaceRecordCache.filename)
+        let before = try Data(contentsOf: url)
+
+        #expect(RaceRecordCache.load(from: dir, now: now) == records)
+        #expect(try Data(contentsOf: url) == before)   // 다시 저장하지도 않는다
+        #expect(try corruptFiles(in: dir).isEmpty)
+    }
+
     // MARK: - 자연어 해석 (RaceResultParser.interpret — 순수 로직)
 
     @Test("시·분·초 합산은 코드가 한다 — 1시간 45분 30초 = 6,330초, 105분 = 6,300초")
