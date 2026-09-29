@@ -12,6 +12,12 @@ struct CeremonyScreen: View {
     let species: BirdSpecies
     let goalLabel: String
     let cycleStartedAt: Date
+    /// 이번 사이클 목표 — 방금 수집된 새 종류를 정한 기준이라 다음 목표 추천도 여기서 한 칸 올린다 (이슈 #127)
+    let cycleGoal: RaceDistance?
+    let cycleGoalSeconds: Int
+    /// 설정의 현재 목표 — 사이클 도중 더 높게 바꿔 뒀다면 그 값을 초기 선택으로 우선한다
+    let currentGoal: RaceDistance?
+    let currentGoalSeconds: Int
 
     /// 수집 확정 — 도감 수록과 사이클 초기화를 호출부(홈)가 실행한다.
     /// 전환 부작용을 화면이 직접 저지르지 않게 하려고 클로저로 올린다.
@@ -19,9 +25,6 @@ struct CeremonyScreen: View {
     let onFinish: (_ newGoal: RaceDistance?, _ newGoalSeconds: Int) -> Bool
 
     @Environment(\.dismiss) private var dismiss
-
-    @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
-    @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
 
     /// 세러모니 단계 — 축하를 먼저 보여주고, 이어서 다음 목표를 고르게 한다
     private enum Step { case celebrate, chooseGoal }
@@ -43,17 +46,13 @@ struct CeremonyScreen: View {
             }
         }
         .onAppear {
-            // 추천 목표를 초기 선택으로 깔아 둔다 (§5 "직전 목표·최근 기록 기반")
-            let current = RaceDistance(rawValue: raceGoalRaw)
-            if let recommended = CollectionEngine.recommendedGoal(after: current,
-                                                                  goalSeconds: raceGoalSec) {
-                pickedDistance = recommended.distance
-                pickedSeconds = recommended.seconds
-            } else {
-                // 더 올릴 곳이 없다 — 직전 목표를 그대로 유지한 채 시작한다
-                pickedDistance = current
-                pickedSeconds = raceGoalSec
-            }
+            // 추천 목표를 초기 선택으로 깔아 둔다 (§5 "직전 목표·최근 기록 기반", 이슈 #127)
+            let initial = CollectionEngine.initialNextGoal(cycleGoal: cycleGoal,
+                                                           cycleGoalSeconds: cycleGoalSeconds,
+                                                           currentGoal: currentGoal,
+                                                           currentSeconds: currentGoalSeconds)
+            pickedDistance = initial.distance
+            pickedSeconds = initial.seconds
             withAnimation(.spring(response: 0.7, dampingFraction: 0.6)) { appeared = true }
         }
     }

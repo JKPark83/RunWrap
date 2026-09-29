@@ -152,4 +152,30 @@ enum CollectionEngine {
             return (.full, tightened)
         }
     }
+
+    /// 세러모니 "다음 목표"의 초기 선택 — 이번 사이클 목표(`cycleGoal`) 기준 추천을 깐다 (이슈 #127).
+    ///
+    /// 새 종류는 사이클 시작 때 고정한 목표로 정해지므로(이슈 #110) 추천도 같은 기준에서 한 칸 올린다.
+    /// 다만 사용자가 사이클 도중 설정에서 이미 더 높은 목표를 골라 뒀다면 그 의도를 되묻지 않고
+    /// 그대로 초기 선택으로 둔다. "더 높다"는 더 먼 종목, 또는 같은 종목에 더 빠른 기록이다.
+    /// 종목 순서는 `recommendedGoal`의 사다리(없음 → 5K → 10K → 하프 → 풀)와 같다 — 거리(km)로 비교한다.
+    ///
+    /// - Returns: 초기 선택 종목과 목표 기록(초, 0이면 기록 목표 없이 완주).
+    ///   추천할 곳이 없으면(이미 서브3) 사이클 목표를 그대로 유지한다
+    static func initialNextGoal(cycleGoal: RaceDistance?, cycleGoalSeconds: Int,
+                                currentGoal: RaceDistance?,
+                                currentSeconds: Int) -> (distance: RaceDistance?, seconds: Int) {
+        let cycleKm = cycleGoal?.km ?? 0
+        let currentKm = currentGoal?.km ?? 0
+        let fasterOnSameDistance = currentGoal == cycleGoal && currentSeconds > 0
+            && (cycleGoalSeconds == 0 || currentSeconds < cycleGoalSeconds)
+        if currentKm > cycleKm || fasterOnSameDistance {
+            return (currentGoal, currentSeconds)
+        }
+        guard let recommended = recommendedGoal(after: cycleGoal, goalSeconds: cycleGoalSeconds) else {
+            // 더 올릴 곳이 없다 — 직전 목표를 그대로 유지한 채 시작한다
+            return (cycleGoal, cycleGoalSeconds)
+        }
+        return (recommended.distance, recommended.seconds)
+    }
 }
