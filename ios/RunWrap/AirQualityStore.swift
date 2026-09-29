@@ -7,8 +7,13 @@ import Foundation
 /// 데이터를 내지 못하는 모든 경우(측정소 목록 없음·커버리지 밖·인증키 없음·통신장애·네트워크 실패)는
 /// unavailable 하나로 접는다 — 화면은 이때 카드를 아예 그리지 않는다 (미노출 가드).
 ///
-/// 호출량 방어: 응답을 Application Support에 1시간 캐시한다(AirQualityEngine.isFresh).
-/// 측정값 자체가 시간 단위로 갱신되므로 정보 손실이 없고, 개발계정 트래픽 한도(500건/일) 안에 남는다.
+/// 호출량 방어 (이슈 #8, #83): data.go.kr 트래픽 한도(개발계정 500건/일)는 기기당이 아니라
+/// **인증키당**이다 — 모든 사용자가 한 키를 나눠 쓰므로 사용자 수십 명이면 넘는다. 그래서 세 겹으로 막는다.
+/// 1. 응답 캐시 — Application Support에 측정 시각 기준으로 캐시한다(AirQualityEngine.isFresh:
+///    측정 정시 + 1시간 20분). 측정값 자체가 시간 단위 갱신이라 정보 손실이 없다.
+/// 2. negative cache — 한도 초과·키 오류는 다음 KST 자정까지, 그 밖의 실패는 10분 동안
+///    네트워크를 타지 않는다(AirQualityEngine.isBlocked). 실패한 키로 헛호출을 반복하지 않는다.
+/// 3. 짧은 재시도 — 5xx·타임아웃만 클라이언트가 전체 10초 안에서 최대 2회 다시 부른다(AirQualityClient).
 @MainActor
 final class AirQualityStore: ObservableObject {
     enum State: Equatable {
@@ -31,7 +36,7 @@ final class AirQualityStore: ObservableObject {
     }
 
     /// 당겨서 새로고침 — 직전 카드를 유지한 채 다시 조회한다 (loading을 거치면 카드가 깜빡인다).
-    /// 1시간 캐시는 그대로 적용되므로 잦은 새로고침이 트래픽 한도를 위협하지 않는다 —
+    /// 응답 캐시(측정 시각 기준)는 그대로 적용되므로 잦은 새로고침이 트래픽 한도를 위협하지 않는다 —
     /// 측정값 자체가 시간 단위 갱신이라 정보 손실도 없다. 위치가 바뀌어 측정소가 달라졌을 때만 네트워크를 탄다
     func refresh(latitude: Double, longitude: Double) async {
         state = await resolve(latitude: latitude, longitude: longitude)
@@ -39,7 +44,7 @@ final class AirQualityStore: ObservableObject {
 
     /// 포그라운드 복귀 갱신 (이슈 #69) — 날씨와 같은 신선도 규칙(WeatherStore.needsRefresh)으로
     /// 낡았을 때만 refresh()한다. 값이 없는 .unavailable은 바로 다시 시도한다.
-    /// 첫 조회 전·조회 중이면 홈의 load() 경로에 맡긴다. 1시간 응답 캐시는 resolve 안에서 그대로 적용된다
+    /// 첫 조회 전·조회 중이면 홈의 load() 경로에 맡긴다. 응답 캐시·negative cache는 resolve 안에서 그대로 적용된다
     func refreshIfStale(latitude: Double, longitude: Double, now: Date = Date()) async {
         switch state {
         case .idle, .loading: return
@@ -65,23 +70,46 @@ final class AirQualityStore: ObservableObject {
             return .unavailable
         }
 
-        // 같은 측정소의 1시간 안 응답이면 재조회하지 않는다 — 한도 방어의 본체
+        // 같은 측정소의 아직 만료 전 측정값이면 재조회하지 않는다 — 한도 방어의 본체
         let now = Date()
-        if let cached = Self.readCache(),
-           cached.quality.stationName == station.name,
-           AirQualityEngine.isFresh(fetchedAt: cached.fetchedAt, now: now) {
-            return .loaded(cached.quality)
+        let cached = Self.readCache()
+        if let cached, let quality = cached.quality,
+           quality.stationName == station.name,
+           AirQualityEngine.isFresh(dataTime: quality.dataTime, fetchedAt: cached.fetchedAt, now: now) {
+            return .loaded(quality)
+        }
+
+        // negative cache — 한도는 인증키 단위라 측정소와 무관하게 막는다 (이슈 #83)
+        guard !AirQualityEngine.isBlocked(blockedUntil: cached?.blockedUntil, now: now) else {
+            return .unavailable
         }
 
         guard let serviceKey = Self.serviceKey() else { return .unavailable }
 
+        // 차단 기록 — 직전 측정값은 남겨 둔다. 차단이 풀린 뒤에도 신선도 규칙이 그대로 판정한다
+        func block(quotaExceeded: Bool) {
+            Self.writeCache(Cache(
+                fetchedAt: cached?.fetchedAt ?? now, quality: cached?.quality,
+                blockedUntil: AirQualityEngine.blockedUntil(quotaExceeded: quotaExceeded, now: now)))
+        }
+
         do {
             let quality = try await client.current(stationName: station.name, serviceKey: serviceKey)
             // 통신장애 측정소는 응답은 정상인데 수치가 전부 "-"로 온다 — 지표를 내지 않는다
-            guard AirQualityEngine.hasReading(quality) else { return .unavailable }
+            // 측정 시각이 3시간 넘게 낡은 값도 "지금 공기"로 내밀지 않는다 (이슈 #83).
+            // 둘 다 곧 풀리지 않는 측정소 사정이라 10분 막는다 — 진입마다 헛호출하지 않게
+            guard AirQualityEngine.hasReading(quality),
+                  AirQualityEngine.isRecent(dataTime: quality.dataTime, now: now) else {
+                block(quotaExceeded: false)
+                return .unavailable
+            }
             Self.writeCache(Cache(fetchedAt: now, quality: quality))
             return .loaded(quality)
         } catch {
+            // 화면 이탈 등 취소는 서버 탓이 아니다 — 차단을 기록하지 않는다
+            if !Task.isCancelled {
+                block(quotaExceeded: (error as? AirQualityClient.ClientError) == .quotaExceeded)
+            }
             // 낡은 캐시로 대체하지 않는다 — 시간 단위로 변하는 값이라 "지금 공기"로 내밀 수 없다
             return .unavailable
         }
@@ -118,7 +146,10 @@ final class AirQualityStore: ObservableObject {
 
     private struct Cache: Codable {
         let fetchedAt: Date
-        let quality: AirQuality
+        /// 실패만 기록된 경우(첫 조회부터 한도 초과 등) nil
+        let quality: AirQuality?
+        /// negative cache 해제 시각 (이슈 #83) — 성공하면 nil로 지워진다. 기존 캐시 파일엔 없어서 nil로 읽힌다
+        var blockedUntil: Date? = nil
     }
 
     private nonisolated static var cacheURL: URL? {
