@@ -43,7 +43,7 @@ struct ShareCardView: View {
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .strokeBorder(RR.line))
                 } else {
-                    // 실내 세션(경로 없음)은 지도 대신 수치 강조 블록 (계획서 M5 완료 기준)
+                    // 경로 이미지가 없으면(실내·경로 숨기기·트림 후 잔여 없음) 지도 대신 수치 강조 블록 (계획서 M5 완료 기준, 이슈 #84)
                     indoorBlock
                 }
             }
@@ -101,7 +101,8 @@ struct ShareCardView: View {
 
     private var indoorBlock: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("TREADMILL RUN")
+            // 경로를 숨긴 야외 러닝도 이 블록을 쓴다 — 트레드밀로 오표기하지 않는다 (이슈 #84)
+            Text(run.isIndoor ? "TREADMILL RUN" : "OUTDOOR RUN")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .kerning(1.4)
                 .foregroundStyle(RR.text3)

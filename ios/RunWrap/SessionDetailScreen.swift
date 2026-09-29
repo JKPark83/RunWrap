@@ -554,6 +554,8 @@ struct SessionDetailScreen: View {
             .rrCard()
         }
         .buttonStyle(.plain)
+        // 경로 로딩 중에 열면 카드에 경로가 빠진다 — 불러오는 동안은 막는다 (이슈 #84)
+        .disabled(store.isLoading)
     }
 
     /// 카드 하단 주간 요약 — 최근 7일 러닝 횟수·거리 (기획서 §4.4)
@@ -585,6 +587,8 @@ private struct ShareSheetView: View {
     @State private var photo: UIImage?
     @State private var photoVersion = 0
     @State private var routeImage: UIImage?
+    /// 경로를 통째로 숨길지 — 다음 공유 때도 기억한다. 양끝 300m 트림은 켜고 끔과 무관하게 항상 적용 (이슈 #84)
+    @AppStorage("share.hidesRoute") private var hidesRoute = false
     @State private var rendered: UIImage?
     @State private var saveMessage: String?
     /// 미리보기와 렌더 이미지가 같은 모드로 그려지도록 명시적으로 주입한다
@@ -602,6 +606,12 @@ private struct ShareSheetView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 60)
+
+            // 사진 카드는 경로를 그리지 않으므로 미니멀 카드에서만 보인다
+            if style == .minimal {
+                hideRouteRow
+                    .padding(.horizontal, 40)
+            }
 
             cardPreview
                 .padding(.top, 4)
@@ -629,9 +639,11 @@ private struct ShareSheetView: View {
         .frame(maxWidth: .infinity)
         .background(RR.bg.ignoresSafeArea())
         .presentationDragIndicator(.visible)
-        .task {
+        // 시트를 연 뒤 경로가 채워져도 다시 만들도록 route.count를 id로 건다 (이슈 #84)
+        .task(id: route.count) {
             guard routeImage == nil, route.count >= 2 else { return }
-            routeImage = await RouteSnapshot.image(route: route,
+            // 집 근처가 드러나지 않게 시작·끝 300m를 잘라낸 경로만 그린다 (이슈 #84)
+            routeImage = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route),
                                                   size: CGSize(width: 360, height: 240))
         }
         .task(id: renderKey) {
@@ -648,9 +660,26 @@ private struct ShareSheetView: View {
         }
     }
 
-    /// 스타일·사진·경로 이미지가 바뀔 때만 다시 렌더한다
+    /// 스타일·사진·경로 이미지·경로 숨김이 바뀔 때만 다시 렌더한다
     private var renderKey: String {
-        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)"
+        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)-\(hidesRoute)"
+    }
+
+    private var hideRouteRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("경로 숨기기")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text("집 근처 300m는 항상 가려져요")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+            }
+            Spacer(minLength: 8)
+            Toggle("경로 숨기기", isOn: $hidesRoute)
+                .labelsHidden()
+                .tint(RR.brand)
+        }
     }
 
     @ViewBuilder
@@ -659,7 +688,8 @@ private struct ShareSheetView: View {
             switch style {
             case .minimal:
                 ShareCardView(run: run, zones: zones,
-                              routeImage: routeImage, weeklySummary: weeklySummary)
+                              routeImage: hidesRoute ? nil : routeImage,
+                              weeklySummary: weeklySummary)
             case .photo:
                 PhotoCardView(run: run, photo: photo)
             }
