@@ -1,0 +1,1946 @@
+{
+ "confirmed": [
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/ReportMetrics.swift",
+   "line": 87,
+   "title": "'최근 7일' 헤더 날짜 범위와 실제 집계 창이 하루 어긋난다",
+   "description": "헤더는 day(-6)~now를 달력 날짜 7일('8.15 – 8.21')로 표시한다. 하지만 거리·ACWR·weekRunCount의 집계 창은 [now-7×86400, now)라서 8일째 날짜의 일부 시간대까지 포함한다. 표시된 범위 밖의 러닝이 '최근 7일' 거리와 횟수에 들어간다.",
+   "failure_scenario": "now=8/21 10:00이고 8/14 18:00에 8km를 달렸다. 헤더는 'Last 7 days · 8.15 – 8.21'인데 recent7Km와 weekRunCount에는 8/14 러닝이 포함된다. 사용자가 기록을 대조해 보면 합계가 맞지 않는다. 또 같은 날 18:00이 지나면 수치가 조용히 바뀐다.",
+   "suggested_fix": "헤더를 shortDate(day(-7))로 맞추거나, 집계 창을 Calendar.startOfDay(for: day(-6)) 이후로 바꿔 달력 7일로 통일한다. ReportEngine.totalKm도 같이 맞춘다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/ReportMetrics.swift",
+   "line": 452,
+   "title": "진행 중인 달의 '주 N회'가 달 전체 일수로 나눠져 크게 과소 표시된다",
+   "description": "perWeek는 그 달 러닝 횟수를 달 전체 주 수(dayCount/7)로 나눈다. 진행 중인 달은 아직 지나지 않은 날까지 분모에 들어가 월초에는 빈도가 매우 낮게 나온다. 같은 함수가 거리 증감에는 comparisonDays로 진행 중인 달을 보정하면서, 빈도에는 보정을 적용하지 않는다. StatsScreen 169행에서 '주 %.1f회'로 노출된다.",
+   "failure_scenario": "9월 3일 기준 9/1과 9/3에 2회 달렸다. perWeek = 2/(30/7) = 0.47이라 '주 0.5회'로 표시된다. 실제 페이스는 주 4~5회 수준이다.",
+   "suggested_fix": "interval.contains(now)일 때는 분모에 경과 일수(elapsed)를 쓴다(예: max(1, elapsed)/7). 지난 달은 지금처럼 달 전체 일수를 쓴다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/ReportMetrics.swift",
+   "line": 103,
+   "title": "기준 주(이전 7일)가 3km 미만이면 전체 기록의 주간 거리 차트까지 사라진다",
+   "description": "distanceCard는 증가율 계산용 가드(previous >= 3)에 걸리면 nil을 반환한다. 그런데 같은 구조체에 기록 전체의 달력 주 막대 차트(weeks)가 들어 있어, 비율과 무관한 누적 이력 차트까지 함께 숨겨진다. ReportHomeScreen 170행은 report.distance가 nil이면 카드 전체를 그리지 않는다.",
+   "failure_scenario": "꾸준히 주 30km를 달리던 사용자가 1주 휴가로 0km를 기록하고 이번 주에 20km를 달렸다. 증가율 가드에 걸려 거리 카드가 통째로 사라지고, 수개월치 주간 막대 차트도 볼 수 없다.",
+   "suggested_fix": "주간 막대(weeks)를 DistanceCard와 분리해 WeeklyReport의 별도 필드로 둔다. 증가율·톤·capKm만 가드 아래에 두고, 화면은 차트를 가드와 무관하게 그린다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/RunSummary.swift",
+   "line": 48,
+   "title": "PB·EF 계산에 비현실적 페이스(0초 포함) 가드가 없어 잘못된 기록이 영구 PB가 된다",
+   "description": "paceSecPerKm는 거리 0.1km 초과만 확인하고 durationSec 하한이나 페이스 타당성은 보지 않는다. durationSec=0인 워크아웃(서드파티 앱 임포트, 시작=종료)은 pace=0이 된다. 그러면 PersonalRecords가 0초 기록을 최고 기록으로 잡고, EF는 60000/0=inf가 되어 평균과 변화율이 inf/NaN이 된다. 트레드밀(isIndoor)이나 자전거를 러닝으로 잘못 기록한 세션(예: 2분30초/km)도 필터 없이 PB에 들어간다. PB는 베이스라인으로 저장돼, 이 기록을 이길 수 없어 이후 갱신 축하가 영원히 뜨지 않는다.",
+   "failure_scenario": "외부 앱이 distance=5.2km, duration=0인 러닝을 HealthKit에 저장했다. 그러면 5K PB는 0:00이 되고, PBBaseline에 0이 저장되어 이후 어떤 5K도 새 PB로 감지되지 않는다. 같은 기간 EF 카드는 '+inf%'나 NaN 톤을 보인다.",
+   "suggested_fix": "paceSecPerKm에 durationSec > 0 가드를 넣고, 타당 범위(예: 150~1200초/km)를 벗어나면 nil을 반환한다. PR 후보에서 실내 세션을 제외할지도 결정한다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/ProgressStats.swift",
+   "line": 80,
+   "title": "PR 판정 하한이 정확히 D km라 5.00으로 보이는 4.99km 세션이 제외된다",
+   "description": "후보 조건이 km >= target.km로 딱 맞춰져 있다. 워치는 거리를 반올림해 표시하므로, 사용자가 '5.00'을 보고 종료해도 실제 저장값이 4,996m일 수 있다. 이 경우 5K 기록에서 빠진다. 상단 여유(×1.10)는 두었지만 하단 여유는 전혀 없다.",
+   "failure_scenario": "5K 대회에서 워치 화면이 5.00km일 때 종료했는데 저장값은 4.996km다. 그러면 5K PB에 반영되지 않고 PB 축하도 뜨지 않는다.",
+   "suggested_fix": "하한을 target.km × 0.995(또는 -20m) 정도로 완화한다. 환산 기록은 pace × D를 그대로 쓴다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/BatteryEngine.swift",
+   "line": 128,
+   "title": "배터리 '수면 질' 감점이 오래된 밤을 '가장 최근 밤'으로 쓸 수 있다",
+   "description": "qualityNights는 deepRemFraction이 있는 밤만 남긴다. 그래서 지난밤에 워치를 차지 않아 단계 데이터가 없으면(아이폰만 asleepUnspecified 기록), 며칠 전 밤이 latest가 되어 오늘 배터리에 -8점이 적용된다. HRR은 3일 신선도 가드가 있지만(HealthStore.hrrReading) 수면 질에는 날짜 확인이 없다.",
+   "failure_scenario": "최근 2주 중 10밤은 워치로 기록했고, 3일 전 밤의 깊은+렘 비율이 평소보다 25% 낮았다. 이후 이틀은 워치를 충전하느라 아이폰 수면만 있다. 오늘 배터리에 '수면 질 -8'이 계속 붙는다.",
+   "suggested_fix": "latest.date가 오늘(기상일 = startOfDay(now)) 또는 어제일 때만 감점한다. 날짜 파라미터로 now를 활용한다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 122,
+   "title": "PB 감지가 홈 onAppear에서만 돌아 앱 복귀·당겨서 새로고침 후 새 PB를 놓친다",
+   "description": "checkNewPBs는 홈 VStack의 onAppear에서만 호출된다. RunWrapApp의 scenePhase 복귀나 홈의 .refreshable로 health.load()가 다시 돌아 runs가 갱신돼도, 홈이 이미 보이는 중이면 onAppear가 다시 불리지 않는다. 러닝 직후 백그라운드의 앱으로 돌아오는 가장 흔한 경로에서 축하 팝업이 뜨지 않고, 탭을 바꿨다 돌아와야 뜬다.",
+   "failure_scenario": "홈 탭을 띄워 둔 채 앱을 백그라운드로 보내고 5K PB를 달렸다. 앱으로 돌아오면 scenePhase 훅이 health.load()로 새 러닝을 반영하지만 PB 축하 시트는 뜨지 않는다.",
+   "suggested_fix": "onChange(of: runs.count 또는 runs 마지막 id)에서도 checkNewPBs를 호출한다. 또는 health.state 변경을 구독한다.",
+   "finder": "report-engine"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/DriftEngine.swift",
+   "line": 30,
+   "title": "일시정지(오토포즈)가 전반에 있으면 심박 드리프트가 거짓 'improving'으로 기운다",
+   "description": "DriftEngine은 중앙 시각을 `start + durationSec/2`, 끝을 `start + durationSec`로 잡는데, 호출부(WorkoutDetailStore.swift:107-108)가 넘기는 `workout.duration`은 일시정지 시간을 뺀 활동 시간이다(HKWorkoutBuilder가 pause/resume 이벤트를 반영함, 코드베이스 어디에도 workoutEvents 처리 없음). 그래서 중앙 시각은 벽시계 기준, 구간 길이(firstMinutes/secondMinutes)는 활동 시간 기준으로 섞인다. 일시정지가 후반에 있으면 우연히 맞지만, 전반에 있으면 전반은 '정지 시간까지 뛴 것'으로 분모가 커지고, 후반은 endDate까지의 거리가 모두 들어가는데 분 수는 잘려서 한쪽으로만 치우친다.",
+   "failure_scenario": "활동 60분 러닝, 10분 지점 신호등 오토포즈 1분(벽시계 61분). 중앙 = 시작+30분(벽시계) → 전반 실제 활동 29분·후반 31분인데 두 구간 모두 30분으로 계산된다. 페이스 차이 약 6.5%라 10% 가드를 통과하고, 심박이 일정해도 decouplingPct ≈ (29/31−1)×100 = −6.5% → tone .improving, '후반에 오히려 심박 효율이 좋아졌어요'가 나온다. 실제 +4% 드리프트도 −2.5%로 가려진다. 도심 러닝에서 신호등 오토포즈는 흔하다.",
+   "suggested_fix": "workout.workoutEvents의 .pause/.resume(.motionPaused/.motionResumed) 구간을 받아 활동 타임라인을 만들고, 중앙 시각과 각 반쪽의 활동 분 수를 그 타임라인으로 계산한다. 최소 대응으로는 endDate − startDate − duration이 일정 기준(예: 30초)을 넘으면 nil을 반환하는 가드를 둔다. 오토포즈 케이스 테스트도 추가한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "line": 287,
+   "title": "km 스플릿 페이스에 일시정지 시간이 들어가 '후반 페이스 유지 실패' 오판",
+   "description": "splits(from:)는 km 경계를 지나는 벽시계 시각의 차이를 곧바로 스플릿 페이스로 쓴다. 일시정지 동안에는 거리 샘플이 없어 샘플 사이가 비는데, 그 빈 시간이 해당 km의 초에 그대로 더해진다. 하한(60초)만 있고 상한이나 일시정지 보정이 없다. splitsCard는 이 값으로 후반 1/4 평균과 전체 평균을 비교해 문장을 만들므로 오판이 사용자에게 바로 보인다. 상단 '평균 페이스'(활동 시간 기준)와 스플릿 평균도 서로 어긋난다.",
+   "failure_scenario": "10km 러닝, 9km 구간에서 편의점에 들러 3분 일시정지. 9번째 스플릿이 5:30 → 8:30으로 기록되고, 후반 2km 평균이 전체 평균보다 크게 느려져 splitsSentence가 '후반 2 km에서 평균보다 N초 느려졌습니다. 페이스 유지 실패 구간이 있어요'를 띄운다. 막대 차트도 한 막대만 튀어 나머지 스케일이 눌린다.",
+   "suggested_fix": "workoutEvents로 일시정지 구간을 구해 경계 사이 시간에서 빼거나, 거리 샘플 사이 간격이 샘플 길이보다 크게 벌어지면(예: 10초 이상) 그 간격을 제외하고 누적한다. 오토포즈가 섞인 샘플 배열로 테스트를 추가한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "line": 240,
+   "title": "세션 상세의 HRmax(존·최고 심박 %)가 앱 전체 HRmax와 다른 산식을 쓴다",
+   "description": "HealthStore는 TrainingGuideEngine.hrMax로 '관찰 최대(84일 2번째 피크) 우선, Tanaka와의 max'를 쓰는데, WorkoutDetailStore.heartRateMax()는 Tanaka만 쓰고 생년월일이 없으면 190 고정으로 떨어진다. 그래서 같은 사용자라도 세션 상세의 Z1~Z5 비율과 'HRmax의 N%'가 훈련 가이드와 다른 기준으로 계산된다. 최고 심박도 원시 샘플의 max(89행)라 다른 곳에서 쓰는 120~230 이상치 필터가 없다.",
+   "failure_scenario": "45세 사용자(Tanaka 176.5), 관찰 HRmax 188. 앱 전체 HRmax는 188인데 세션 상세는 176.5로 계산해 165bpm 구간이 Z5(93%)로 잡힌다(가이드 기준이면 Z4, 88%). 최고 심박 189를 기록하면 'HRmax의 107%'가 표시된다. 생년월일이 없고 관찰 HRmax가 178인 사용자는 190 폴백 때문에 존이 한 단계씩 낮게 잡힌다. 광학 센서 스파이크 225가 섞이면 'HRmax의 118%'.",
+   "suggested_fix": "세션 상세도 HealthStore.hrMaxBpm(TrainingGuideEngine.hrMax)을 받아 쓰고, 그 값이 nil일 때만 190 폴백 + 추정 표기를 한다. maxHeartRateBpm에도 (120...230) 필터를 적용한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "line": 52,
+   "title": "주법 스냅샷 로딩 중(또는 목록 미로드 진입 시) '5회 모이면 조언이 나와요'가 잘못 표시된다",
+   "description": "load()는 `detail`을 먼저 publish한 뒤 fetchFormSnapshots(최대 20세션 × 워크아웃 1 + 평균 2 = 최대 60개 순차 HK 쿼리)를 기다린다. 그동안 formCard는 formSnapshots가 비어 baseline이 nil이라 '최근 4주 야외 러닝이 5회 모이면…' 안내를 띄운다. 로딩 상태 구분이 없어 기록이 충분한 사용자도 몇 초 동안 '표본 부족' 문구를 보게 된다. 또 진입 시점에 health.state가 .loaded가 아니면 others=[]로 load되고, `guard detail == nil`이라 다시 불리지 않아 그 화면에서는 이 안내가 계속 남는다.",
+   "failure_scenario": "최근 4주 야외 러닝 15회인 사용자가 세션 상세를 연다 → 지표 그리드와 주법 카드가 먼저 뜨고 약 2~5초간 '5회 모이면 조언이 나와요'가 보였다가 조언으로 바뀐다. 앱 시작 직후 HealthStore가 로딩 중일 때 홈의 '마지막 러닝'으로 들어가면 안내가 계속 남는다.",
+   "suggested_fix": "스냅샷 로딩 여부를 별도 @Published 플래그로 두고 로딩 중에는 조언 영역을 비우거나 로딩 문구를 표시한다. health.state가 나중에 .loaded가 되면 스냅샷만 다시 불러오도록 .task(id:)나 onChange로 트리거한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/FormEngine.swift",
+   "line": 60,
+   "title": "주법 기준선이 지표별 표본 수 가드 없이 1개 표본으로도 만들어진다",
+   "description": "baseline은 창 안 세션 수(window.count ≥ 5)만 확인하고, 지표별 평균은 compactMap 결과가 1개만 있어도 만든다. 진폭·접촉시간은 다이내믹스를 기록하지 않는 앱이나 워치로 뛴 세션에서 nil이라, '5회 기준선'이라고 안내하지만 실제로는 1~2회 평균과 비교할 수 있다(기획 원칙 '표본 부족 시 미노출' 위반). 게다가 세션 쪽에서만 절대 밴드(측정 오류)를 거르고, 기준선에 섞인 밴드 밖 값(헐거운 착용)은 그대로 평균에 들어간다.",
+   "failure_scenario": "최근 28일 야외 6회 중 5회는 서드파티 앱(다이내믹스 미기록), 1회만 애플 운동 앱으로 기록. 그 1회의 진폭 7.0cm가 기준선이 되어 이번 세션 7.8cm에 '수직 진폭이 평소(7.0 cm)보다 컸어요' 조언이 나간다. 또는 헐거운 착용으로 GCT 420ms가 찍힌 세션이 기준선에 들어가 평균이 부풀어, 실제로 늘어난 접촉시간에도 조언이 억제된다.",
+   "suggested_fix": "지표별로 표본 수가 minSessions 이상일 때만 평균을 내고, 모자라면 해당 지표를 nil로 둔다. 기준선 평균을 낼 때도 oscillationBandCm/contactBandMs 밖의 값은 제외한다. 두 경우 모두 테스트를 추가한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/SessionDetailScreen.swift",
+   "line": 533,
+   "title": "과거 세션을 열면 주법 기준선과 공유 카드의 주간 요약이 '지금' 기준으로 계산된다",
+   "description": "FormEngine()의 now 기본값과 fetchFormSnapshots의 cutoff가 모두 현재 시각이라, 성장 화면(GrowthScreen:150) 등에서 몇 달 전 세션을 열면 그 세션을 '그 이후 28일' 평균과 비교해 조언한다. 공유 카드의 weeklySummaryLine도 `Date()` 기준 최근 7일이라, 과거 세션 카드에 현재 주의 횟수·거리가 찍힌다.",
+   "failure_scenario": "3월 PB 세션을 9월에 성장 화면에서 열어 공유하면, 카드에 3월 기록과 함께 '최근 7일 4회 · 32.1 km'(9월 주간)가 찍힌다. 주법 카드는 3월 세션을 9월 기준선과 비교해 '케이던스가 평소보다 낮았어요'를 낸다.",
+   "suggested_fix": "기준선 창과 주간 요약 창을 run.start 기준 [start−28일, start) / [start−7일, start]로 잡는다. FormEngine(now: run.start)를 쓰고, fetchFormSnapshots의 cutoff도 run.start 기준으로 바꾼다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/CrossTrainingEngine.swift",
+   "line": 108,
+   "title": "크로스 트레이닝 헤드라인 조사 오류('자전거이', '1시간 30분로')",
+   "description": "기본 헤드라인이 종목명 뒤에 '이', 시간 뒤에 '로'를 고정으로 붙인다. 시간 라벨은 항상 '분' 또는 '시간'(받침 ㄴ)으로 끝나서 '로'는 언제나 틀리고(→'으로'), 받침 없는 종목(자전거·요가·걷기)은 '이' 대신 '가'가 맞다. 홈 리포트 카드에 그대로 노출된다.",
+   "failure_scenario": "이번 주 자전거 90분, 러닝 감소 없음 → '그중 자전거이 1시간 30분로 제일 많았어요'가 표시된다. 근력 45분이면 '근력이 45분로'.",
+   "suggested_fix": "받침 판정 헬퍼(유니코드 (scalar − 0xAC00) % 28)로 이/가, 으로/로를 고르거나, '로' 대신 '— 1시간 30분'처럼 조사가 필요 없는 문장으로 바꾼다. 테스트에 headline 전체 문자열을 기대값으로 넣는다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/DriftEngine.swift",
+   "line": 46,
+   "title": "심박 드리프트의 정속주 가드가 전·후반 평균 페이스만 봐서 대칭 인터벌을 걸러내지 못한다",
+   "description": "문서 주석은 '인터벌·빌드업처럼 구간마다 페이스가 크게 바뀌는 러닝은 판정하지 않는다'고 하지만, 가드는 전반 평균과 후반 평균 페이스의 차이만 본다. 워밍업·쿨다운이 대칭이고 반복 구간이 고르게 퍼진 인터벌은 두 반쪽의 평균 페이스가 거의 같아서 통과하고, 심박 지연 때문에 흔들리는 EF 비교를 정속주 해석('유산소 기반이 덜 자랐다')으로 내보낸다.",
+   "failure_scenario": "45분 세션: 워밍업 10분 + (3분 빠르게/2분 천천히)×5 + 쿨다운 10분. 전·후반 평균 페이스 차이가 3%라 가드를 통과하고, 후반 반복의 심박 누적 때문에 decoupling +7% → '같은 페이스인데 후반 심박이 7% 더 들었어요. 유산소 기반이 아직 덜 자랐다는 신호'가 나간다.",
+   "suggested_fix": "1km 스플릿(또는 1분 단위 속도)의 변동계수가 일정값(예: 8%)을 넘으면 nil을 반환하는 가드를 추가한다. 스플릿은 이미 같은 거리 샘플에서 계산하므로 추가 쿼리가 필요 없다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/SessionDetailScreen.swift",
+   "line": 309,
+   "title": "더운 날의 심박 드리프트를 '유산소 기반 부족'으로만 해석한다",
+   "description": "같은 화면에 열 보정 카드(더위 몫 N초/km)를 띄우면서도, 드리프트 caution 문장은 원인을 무조건 유산소 기반 부족으로 돌린다. 고온다습한 환경의 심박 드리프트(cardiovascular drift)는 체온 상승·탈수로 흔히 5%를 넘는데, 이를 구분하지 않아 한여름 세션마다 잘못된 훈련 처방('편한 페이스 러닝을 늘리면')이 나온다.",
+   "failure_scenario": "8월 저녁, 기온 30°C·습도 75%(열 점수 약 55, 더위 몫 +39초/km)인 60분 정속주. 드리프트 +8% → 열 보정 카드 바로 아래에서 '유산소 기반이 아직 덜 자랐다는 신호'가 표시된다. 사실상 더위 영향이다.",
+   "suggested_fix": "heatAdjustment가 non-nil(열 점수 38 초과)이면 caution 문장을 '더위로 심박이 오른 몫이 섞여 있어요'로 바꾸거나, 열 점수가 높을 때는 톤을 steady로 완화한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/SessionDetailScreen.swift",
+   "line": 604,
+   "title": "경로를 불러오기 전에 공유 시트를 열면 카드에 경로가 끝까지 빠진다",
+   "description": "shareSection 버튼은 detail 로딩 중에도 누를 수 있다. ShareSheetView의 경로 스냅샷 `.task`는 id 없이 처음 나타날 때 한 번만 돌고, route가 비어 있으면 바로 return한다. 이후 부모가 다시 그려져 route가 채워져도 task가 다시 돌지 않아 routeImage는 nil로 남고, renderKey도 바뀌지 않는다.",
+   "failure_scenario": "세션 상세에 들어가자마자('경로를 불러오는 중' 상태) 공유 카드 버튼을 누른다 → 시트가 route=[]로 뜨고, 경로 로드가 끝나도 미니멀 카드에 경로 없이 렌더·저장된다. 시트를 닫았다 다시 열어야 경로가 나온다.",
+   "suggested_fix": "`.task(id: route.count)`로 바꿔 route가 채워지면 스냅샷을 다시 만들게 하거나, store.isLoading 동안에는 공유 버튼을 비활성화한다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "low",
+   "category": "privacy",
+   "file": "ios/RunWrap/SessionDetailScreen.swift",
+   "line": 88,
+   "title": "공유 카드에 경로 시작·끝(집 근처 위치)이 마스킹 없이 들어간다",
+   "description": "공유 시트에 WorkoutDetail의 원본 경로 좌표 전체가 전달되고, RouteSnapshot 지도 이미지로 스토리 카드에 그려진다. 러닝은 대개 집에서 시작·종료하므로, 인스타 스토리 같은 공개 채널에 올리면 거주지가 드러날 수 있다. 시작·끝 구간을 잘라내는 프라이버시 존이나 끄기 옵션이 없다(이미지 재렌더라 EXIF GPS는 남지 않음 — 그 부분은 문제없음).",
+   "failure_scenario": "집 앞에서 출발해 한강을 돌고 집으로 돌아온 러닝을 미니멀 카드로 스토리에 공유 → 지도 배경 위 폴리라인의 시작·끝점이 집 위치를 가리킨다.",
+   "suggested_fix": "공유용 경로는 시작·끝 200~500m를 잘라내거나(Strava 프라이버시 존 방식), 공유 시트에 '경로 숨기기' 토글을 둔다.",
+   "finder": "session-engines"
+  },
+  {
+   "severity": "high",
+   "category": "data-loss",
+   "file": "ios/RunWrap/SettingsScreen.swift",
+   "line": 132,
+   "title": "'다시 진단'할 때마다 성장 사이클이 초기화됨 (XP 0, 알로 돌아감)",
+   "description": "재진단인지는 `prefill != nil`로만 판단한다. 그런데 설정의 유일한 재진단 진입점이 prefill을 넘기지 않는다. 그래서 재진단이 늘 첫 온보딩 경로(`isRediagnosis: false`)를 타고 `cycleStartedAt=now`, `maxStage=egg`, 새 `cycleID`를 쓴다. OnboardingFlowModel.persist 주석에 적힌 '재진단이면 성장 사이클은 건드리지 않는다'는 보호가 실제로는 한 번도 작동하지 않는다. 직후 `backupIfChanged()`가 새 cycleID 스냅샷을 올리고, cycleID가 다르면 최신 쪽이 통째로 이기므로 CloudKit 사본까지 덮인다.",
+   "failure_scenario": "4개월째 '날갯짓(5단계)'인 사용자가 설정 → '다시 진단'으로 설문을 마친다 → cycleStartedAt이 지금으로 바뀌어 과거 러닝이 XP에서 빠지고 maxStage가 1이 된다 → 홈의 새가 알로 돌아간다 → 백그라운드 백업이 CloudKit 스냅샷도 덮어써서 되돌릴 방법이 없다.",
+   "suggested_fix": "재진단 여부를 prefill 유무로 추론하지 말고 명시 파라미터(예: `isRediagnosis: Bool`)로 받는다. SettingsScreen에서는 true를 넘긴다. OnboardingFlowModel.persist(isRediagnosis: true)가 cycle 키를 보존하는지 보는 테스트와, 호출 경로를 검증하는 테스트를 추가한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "medium",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressSnapshot.swift",
+   "line": 128,
+   "title": "재설치 직후 복원이 일시적으로 실패하면, 새 온보딩 백업이 CloudKit의 이전 진행도를 영구히 덮어씀",
+   "description": "복원이 네트워크 오류, 10초 타임아웃, iCloud 미로그인, 디코드 실패로 끝나면 RootView가 '일단 새로 시작할게요'를 띄우고 온보딩을 연다. 온보딩은 새 cycleID와 cycleStartedAt=now를 쓰고 곧바로 backupIfChanged를 부른다. merge는 cycleID가 다르면 updatedAt이 최신인 쪽이 통째로 이기게 되어 있다. 그런데 readLocal이 updatedAt을 '백업 시각(now)'으로 채우므로 새 온보딩 스냅샷이 항상 이긴다. 도감만 합집합으로 살아남고 이전 사이클의 cycleStartedAt·maxStage·레벨·목표는 서버에서 사라진다. 나중에 재시도하거나 복원할 경로도 없다.",
+   "failure_scenario": "기기를 새로 세팅한 직후 네트워크가 느려 record(for:)가 10초를 넘긴다 → restoreState=.failed → 사용자가 온보딩을 마친다 → backupIfChanged: 서버 스냅샷(이전 cycleID, 5단계, 3개월 전 cycleStartedAt)과 로컬(새 cycleID, 알) 병합 → 로컬 updatedAt이 최신이라 로컬이 이긴다 → 서버 진행도가 영구 소실된다.",
+   "suggested_fix": "복원 실패(.failed/.unavailable) 뒤 새로 만든 로컬 사이클은 서버에 기존 스냅샷이 있으면 덮어쓰지 않는다. 예를 들어 '복원 미확인' 플래그를 두고, 첫 업로드 전에 서버 본을 받아 사용자에게 '이전 기록 불러오기'를 묻는다. merge의 기준도 백업 시각이 아니라 실제 로컬 변경 시각이나 사이클 시작 시각으로 바꾸는 것을 검토한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "high",
+   "category": "data-loss",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 118,
+   "title": "데모 모드에서 합성 러닝으로 maxStage와 도감이 실제 저장소에 영구 기록됨",
+   "description": "실기기에서 데모 모드를 켜면 health.state가 DemoData.runs로 채워진다. HomeScreen은 이 합성 러닝을 실제 cycleStartedAt·maxStage와 섞어 GrowthEngine에 넣고, onAppear에서 syncMaxStage(성장 단계를 저장)와 세러모니를 조건 없이 실행한다. DemoData는 `Date()` 기준 상대 날짜라 날마다 앞으로 밀리므로 시간이 지날수록 사이클 시작 이후 가짜 러닝이 계속 쌓인다. maxStage는 '되돌리지 않는' 하한이라 데모를 꺼도 부풀려진 단계가 남는다. 성조에 이르면 가짜 새가 도감에 들어가고 사이클이 초기화된다. backupIfChanged는 데모 중에만 막히므로 데모를 끄면 오염된 값이 CloudKit으로 올라간다. PB 축하(checkNewPBs)만 데모를 막고 있다.",
+   "failure_scenario": "워치 기록이 없는 사용자가 온보딩 뒤 '샘플 둘러보기'로 데모를 켜고 몇 주 쓴다 → 최근 1~26일의 합성 러닝 11건(10km급)이 사이클 이후로 들어와 XP가 약 300이 된다 → maxStage가 3(부화)으로 저장된다 → 데모를 꺼도 부화로 남는다. 몇 달이면 가짜 세러모니와 도감 수록까지 일어난다.",
+   "suggested_fix": "DemoMode.isActive일 때는 syncMaxStage, 세러모니 트리거, startNewCycle을 건너뛴다. 가능하면 데모용 성장 상태를 실제 GrowthKey와 분리해 계산만 하고 저장하지 않는다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 117,
+   "title": "성조 도달 세러모니와 maxStage 동기화가 onAppear에만 걸려 있어 새로고침·포그라운드 갱신 때 누락됨",
+   "description": "syncMaxStage, 세러모니 표시, 단계 상승 백업이 content VStack의 `.onAppear`에서만 실행된다. HealthStore.load()는 이미 loaded 상태면 조용히 갱신하고(loading으로 바꾸지 않음), RunWrapApp은 포그라운드 진입이나 당겨서 새로고침 때 load만 다시 부르므로 VStack이 다시 나타나지 않는다. 그래서 홈을 보고 있는 동안 단계가 오르거나 성조에 이르러도 세러모니가 뜨지 않고 maxStage도 저장·백업되지 않는다. 탭을 바꿨다가 돌아오거나 앱을 다시 켜야 반영된다.",
+   "failure_scenario": "XP 1,790인 사용자가 홈 탭을 띄워 둔 채 앱을 백그라운드로 보내고 러닝을 마친 뒤 돌아온다 → refreshCacheAndReschedule가 load() → XP 1,810으로 '나는 새'가 표시된다 → 세러모니가 뜨지 않고 maxStage=5가 그대로 남는다. 이 상태에서 워크아웃이 지워지면 단계도 내려간다.",
+   "suggested_fix": "`.onChange(of: growth.stage)` 또는 `.task(id: growth.stage)`로 syncMaxStage와 세러모니 판정을 단계 변화마다 실행한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "medium",
+   "category": "availability",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 217,
+   "title": "복원 타임아웃이 실제로는 대기 시간을 제한하지 못함 (TaskGroup이 취소되지 않는 CloudKit 호출을 끝까지 기다림)",
+   "description": "withThrowingTaskGroup은 본문이 반환하거나 throw해도 남은 자식 태스크가 끝날 때까지 기다렸다가 빠져나간다. `CKContainer.accountStatus()`와 `CKDatabase.record(for:)`는 ObjC completion handler를 자동 브리징한 async API라 협력적 취소를 지원하지 않는다. 그래서 sleep 태스크가 10초 뒤 throw해도 CloudKit 호출이 끝날 때까지(요청 타임아웃 60초 이상일 수 있음) 그룹이 반환되지 않는다. 그동안 restoreState는 .checking이고 RootView는 스플래시를 유지한다.",
+   "failure_scenario": "재설치 뒤 첫 실행을 약한 셀룰러 환경에서 한다 → record(for:)가 응답 없이 수십 초 대기 → 10초 타임아웃 child가 throw해도 그룹은 CK 호출이 끝날 때까지 반환하지 않는다 → 사용자가 스플래시에 수십 초 갇힌다. RootView의 20초 안전망은 levelRaw가 비어 있으면 작동하지 않는다.",
+   "suggested_fix": "결과를 기다리지 않는 구조로 바꾼다. 예: withCheckedContinuation과 한 번만 resume하는 가드, 비구조 Task 두 개로 먼저 끝난 쪽만 채택. 또는 CKFetchRecordsOperation에 `configuration.timeoutIntervalForRequest`를 지정해 CloudKit 쪽에서 시간을 끊는다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 500,
+   "title": "도감 저장이 실패해도 사이클이 초기화되어 수집한 새를 잃음 (saveFailed를 확인하지 않음)",
+   "description": "startNewCycle 주석에는 '도감에 먼저 넣고 사이클을 초기화한다 — 반대로 하면 저장에 실패했을 때 새를 잃는다'고 적혀 있다. 그런데 collection.add()는 실패를 saveFailed 플래그로만 남기고, 호출부는 결과를 보지 않은 채 cycleStartedAt·maxStage를 초기화한다. backupIfChanged는 메모리가 아니라 `CollectionCache.load()`(파일)에서 새 목록을 읽으므로, 파일 저장에 실패한 새는 CloudKit에도 올라가지 않는다. saveFailed는 어떤 화면에서도 쓰이지 않는다.",
+   "failure_scenario": "저장 공간이 가득 찬 기기에서 '새 알 받기'를 누른다 → collection.json 쓰기가 실패한다 → 사이클은 초기화된다 → 앱을 다시 켜면 도감이 비어 있고, 새 사이클이라 성조를 다시 얻을 수도 없다.",
+   "suggested_fix": "add가 성공 여부(throws/Bool)를 돌려주게 하고, 실패하면 사이클을 초기화하지 않고 세러모니를 유지한 채 오류를 안내한다. 백업도 파일이 아니라 CollectionStore의 메모리 값을 원본으로 쓰는 편이 안전하다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 137,
+   "title": "새 종류가 '사이클의 목표'가 아니라 '수집 순간의 목표'로 정해져, 사이클 도중 목표를 바꾸면 종이 바뀜",
+   "description": "기획서 §5는 '새 종류는 그 사이클의 목표 수준이 정한다'고 하고, HomeScreen 주석도 '사이클 시작 때 정해진 값을 그대로 쓴다'고 적었다. 하지만 사이클 시작 시점의 목표는 따로 저장되지 않는다. 종은 세러모니 시점의 `profile.raceGoal/raceGoalSec`로 계산되는데, 이 값은 설정의 목표 레이스·시:분:초 휠이나 재진단 persist로 언제든 바뀐다. 성조 직전에 목표를 풀 2:59:00으로 바꾸면 백조를 얻는다.",
+   "failure_scenario": "5K 목표로 5개월을 키운 사용자가 성조 하루 전에 설정에서 목표를 풀코스 2:59:59로 바꾼다 → 다음 날 세러모니에서 '백조가 되었어요'가 뜨고 도감에 '풀코스 2:59:59'로 수록된다. 확정 축인 '서브3 = 백조'의 의미가 무너진다.",
+   "suggested_fix": "사이클 시작 시 목표를 `growth.cycleGoal`/`growth.cycleGoalSec` 같은 별도 키에 고정해 종 판정에 쓰고, ProgressSnapshot에도 넣는다(스키마 버전 인상). 사이클 중 목표 변경이 종에 영향을 주지 않는다는 점은 설정 화면에서 안내한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/CollectionEngine.swift",
+   "line": 141,
+   "title": "다음 목표 추천값이 종 경계와 어긋남 — 'sub-4 제안(4:00:00)'이 기러기, '서브3 제안(3:00:00)'이 두루미",
+   "description": "species()는 `goalSeconds < sub4Seconds`, `< sub3Seconds`처럼 경계를 배타적으로 판정한다. 테스트도 4:00:00은 기러기, 3:00:00은 두루미로 고정했다. 그런데 recommendedGoal은 정확히 4:00:00(sub4Seconds)을 'sub-4 제안'으로 내고, 3:00:00까지만 당긴다. 그래서 풀코스 이후의 추천은 종을 한 칸도 올리지 못하고, 백조는 추천으로 절대 도달할 수 없다. 또 3:10:00처럼 30분을 당기면 3시간 아래로 내려가는 목표에서는 nil을 돌려 '더 올릴 곳이 없다'고 판단한다. 서브3이 남아 있는데도 그렇다.",
+   "failure_scenario": "기러기(풀 완주)를 수집한 사용자의 세러모니에 추천 '풀코스 4:00:00'이 선택되어 있고 결과 배지는 다시 '기러기'다. 두루미(3:30:00) 다음 추천 3:00:00도 '두루미'다. 목표가 3:10:00이면 추천 없이 직전 목표가 유지된다.",
+   "suggested_fix": "추천값을 경계 바로 아래(sub4Seconds - 1, sub3Seconds - 1)로 내거나 species 경계를 포함(<=)으로 정의를 통일한다. tightened가 서브3 아래로 내려가면 nil 대신 서브3 목표로 맞춘다(clamp).",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 165,
+   "title": "서버 스냅샷 디코드에 실패하면 병합 없이 덮어씀 — 미래 버전의 새 종(enum case)이 구버전 기기에서 지워짐",
+   "description": "upload()는 `Self.decode(serverRecord)`가 nil이면 서버 본이 없는 것처럼 else 가지로 가서 로컬 스냅샷을 serverRecord에 그대로 싣고 저장한다. keepServer로 미래 스키마를 보호하는 장치는 디코드가 성공해야만 작동한다. BirdSpecies에 case를 추가하는 변경은 '필드 변경'이 아니어서 schemaVersion을 올리지 않기 쉽다. 그러면 구버전은 [CollectedBird] 디코드 전체가 실패하고 서버를 덮어쓴다.",
+   "failure_scenario": "v1.3에서 `.eagle` 종이 추가되고, 새 버전 기기 A가 독수리를 수집해 업로드한다 → 아직 v1.2인 기기 B가 설정을 바꾸고 백업 → 디코드 실패 → B의 스냅샷(독수리 없음)으로 서버를 덮는다 → A는 lastUploaded와 내용이 같아 다시 올리지 않는다 → A를 재설치하면 독수리가 사라진다.",
+   "suggested_fix": "serverRecord는 있는데 디코드에 실패하면 업로드를 중단한다(keepServer와 같은 처리). 레코드 필드 schemaVersion만 먼저 읽어 비교하는 방식도 있다. BirdSpecies는 알 수 없는 값을 보존하도록 디코딩한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 183,
+   "title": "기기 백업 복원 뒤 도감 파일이 비고, 병합으로 되살린 도감이 메모리에 반영되지 않아 다음 수집 때 파일이 덮임",
+   "description": "collection.json은 isExcludedFromBackup이다. iCloud 기기 백업이나 기기 이전으로 옮기면 UserDefaults(levelV2 등)만 돌아오고 도감 파일은 없다. levelV2가 있으므로 restoreOnFreshInstall은 건너뛴다. backupIfChanged의 합집합 병합이 파일은 되살리지만 CollectionStore 메모리는 그대로 빈 배열이라, 그 세션에서는 도감이 0마리로 보인다. 그 사이 세러모니로 add()하면 빈 배열 + 새 1마리로 파일을 덮어쓴다. 다음 백업에서 합집합으로 복구되긴 하지만 iCloud가 없으면 도감은 영구 소실된다.",
+   "failure_scenario": "새 아이폰으로 iCloud 백업을 복원한다 → 홈과 레벨은 그대로인데 도감이 '0마리를 키워 냈어요'로 뜬다. iCloud(CloudKit)에 로그인하지 않은 사용자라면 이전 도감이 영원히 사라진다.",
+   "suggested_fix": "병합이 도감을 바꾸면 CollectionStore.replace를 부르도록 결과를 호출부로 돌려준다(또는 NotificationCenter를 쓴다). 도감은 유일 원본이므로 기기 백업 제외 대상에서 빼는 것도 다시 검토한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/GrowthEngine.swift",
+   "line": 172,
+   "title": "XP 주간 목표 판정이 1km 미만·거리 없는 러닝까지 1회로 셈",
+   "description": "세션 XP는 '1km 이상이어야 완료로 인정'하지만 weeklyBonusXp의 주별 횟수는 모든 러닝을 센다. 기획서 §5의 '러닝 1회 완료(1km 이상)' 정의와 어긋나고, 몇백 m짜리 기록으로 주간 +30과 4주 연속 +50을 받을 수 있다.",
+   "failure_scenario": "주간 목표가 3회인 사용자가 한 주에 0.3km 기록 3건만 남긴다 → 세션 XP는 0인데 주간 보너스 +30을 받는다. 4주 반복하면 +170 XP로 '부화'에 가까워진다.",
+   "suggested_fix": "주별 횟수를 셀 때도 `xp(for:) > 0`(1km 이상)인 러닝만 센다. 홈 주간 목표 칩(weekRunCount)도 같은 기준으로 맞춘다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/GrowthEngine.swift",
+   "line": 188,
+   "title": "주간 목표를 바꾸면 과거 모든 주의 보너스가 소급 재계산되어 목표를 낮추면 XP가 부풀려짐",
+   "description": "weeklyBonusXp는 완결된 과거 주를 모두 '현재' weeklyGoal로 다시 판정한다. 목표를 올리면 게이지가 줄어들 뿐이지만(표시 단계는 maxStage가 지킴), 목표를 1로 낮추면 사이클 시작 이후 러닝이 1회 이상 있던 모든 주에 +30과 연속 보너스가 즉시 붙어 단계를 한 번에 올릴 수 있다. maxStage는 되돌리지 않으므로, 목표를 원래대로 돌려도 올라간 단계는 남는다.",
+   "failure_scenario": "주 4회 목표로 16주를 보낸 사용자(달성 주 절반)가 설정에서 주 1회로 바꾼다 → 16주 전부 달성으로 재계산되어 약 +240 XP와 연속 보너스 +200이 붙는다 → 홈 진입 시 '날갯짓'이 maxStage로 고정되고, 목표를 4로 되돌려도 유지된다.",
+   "suggested_fix": "주간 목표 변경 이력을 (시작 시각, 값) 목록으로 저장해 주마다 당시 목표로 판정한다. 최소한 목표 변경은 다음 주부터 적용한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/LevelEngine.swift",
+   "line": 48,
+   "title": "실데이터 승급 판정이 기획서 §3보다 좁음 — 런잘알→런친놈 경로와 '하프 완주' 근거가 없음",
+   "description": "기획서 §3은 '10km 60분 이내 세션' 외에 '최근 4주 월환산 200km + 풀 4:30 이내 기록'도 승급 근거로 들고, L2 기준에 '하프 이상 완주'를 포함한다. 구현은 beginner→intermediate만, 그것도 '10km 이상이면서 총 시간 60분 이하' 세션만 본다. 그래서 런잘알은 영원히 승급 제안을 받지 못한다. 15km를 5'00\"/km(75분)로 달리거나 하프를 완주한 런린이도 후보가 되지 않는다.",
+   "failure_scenario": "런잘알 사용자가 최근 4주 220km를 뛰고 풀코스를 4:10에 완주해도 승급 카드가 뜨지 않는다. 런린이가 하프를 1:55에 완주해도 제안이 없다.",
+   "suggested_fix": "intermediate→advanced 조건(28일 누적 × 30/28 ≥ 200km, 그리고 42.195km 이상 세션이 4:30 이내)을 추가한다. beginner 판정에 '10km 구간 페이스 6'00\" 이하'(총 거리 ≥10km이면서 duration/km×10 ≤ 3600)와 21.0975km 이상 완주를 넣는다. 테스트도 같이 추가한다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/CollectionScreen.swift",
+   "line": 65,
+   "title": "도감·세러모니가 종별 이미지 없이 모든 종을 같은 '나는 새'로 그리고, 같은 종의 이전 수집 이력과 소요 일수는 볼 수 없음",
+   "description": "BirdView에는 종 파라미터가 없어서 참새부터 백조까지 6칸 모두, 그리고 세러모니 화면이 같은 FlyingView를 그린다. 도감 칸에는 같은 종 가운데 가장 최근 1마리만 보이고, CollectedBird.cycleDays는 저장만 될 뿐 어떤 화면에서도 표시되지 않는다(주석의 '27일 만에' 표기가 미구현). 기획서 §5의 '성조 이미지 + 당시 목표 + 수집일' 중 종별 성조 이미지는 에셋을 기다리는 중이다(§12).",
+   "failure_scenario": "기러기와 두루미를 각각 수집해도 도감 두 칸에 똑같은 새가 그려진다. 풀코스를 두 번 완주해 기러기가 ×2가 되면 첫 번째의 목표·수집일은 볼 방법이 없다.",
+   "suggested_fix": "BirdView에 `species: BirdSpecies?`를 추가하고, 에셋이 오기 전까지는 종별 색 변주 같은 임시 구분을 둔다. 칸을 탭하면 같은 종의 수집 이력 목록(목표·수집일·cycleDays)을 보여 준다.",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "low",
+   "category": "config",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 146,
+   "title": "CloudKit 백업·복원 오류를 로깅 없이 모두 삼켜 운영 환경 스키마 미배포 같은 설정 오류를 감지할 수 없음",
+   "description": "TestFlight·App Store 빌드는 CloudKit Production 환경을 쓰는데, Production에서는 레코드 타입이 자동 생성되지 않는다. 'ProgressSnapshot' 타입이 Dashboard에서 Production으로 배포되지 않았다면 모든 save가 실패한다. backupIfChanged는 `catch {}`로 조용히 넘기고 os_log도 남기지 않아 백업이 한 번도 성공하지 않아도 알 수 없다. 이 경우 재설치하면 늘 .empty 또는 .failed가 되어 진행도가 사라진다. 저장소 안에서는 배포 여부를 확인할 수 없어 low로 둔다.",
+   "failure_scenario": "개발 빌드에서만 테스트해 Production 스키마가 비어 있다 → 출시 빌드의 모든 사용자 백업이 serverRejected 등으로 실패한다 → 아무 신호가 없다 → 사용자가 재설치하면 전원 진행도를 잃는다.",
+   "suggested_fix": "CloudKit Dashboard에서 ProgressSnapshot 스키마가 Production에 배포되었는지 확인한다. 실패 코드를 Logger(os)로 남기고 마지막 백업 성공 시각을 설정 화면에 보여 준다(개인 데이터는 넣지 않는다).",
+   "finder": "growth-gamification"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "tools/race-info/crawl.py",
+   "line": 166,
+   "title": "로드런의 잘못된 마감일(예: '9월31일')을 버려 마감 지난 대회가 대회일까지 '접수중'으로 표시됨",
+   "description": "parse_date가 datetime()의 ValueError를 받으면 None을 돌려준다. 그래서 로드런 원문에 '2026년9월31일'처럼 달력에 없는 날짜가 있으면 registerEnd가 통째로 빠진다. 앱의 RaceEngine.registerStatus는 시작일만 있고 그날이 지났으면 .open(end: nil)을 돌려주고, 이 상태는 대회 당일까지 이어진다. 실제로 origin/dev의 Races.json에서 3건이 이렇게 되어 있다. 41649 완주트레일런(10/3), 41854 당진원런(10/31), 41869 안성맞춤 전국 마라톤(11/8)이며, 원문을 curl로 받아 '~2026년9월31일'임을 확인했다.",
+   "failure_scenario": "2026-10-01 이후 목록을 열면 세 대회가 모두 초록색 '접수중' 배지로 보이고, 헤더의 '지금 접수받는 대회 N곳'에도 들어간다. 원문 기준으로는 9/30에 마감됐다. 사용자가 '참가하기'를 눌러도 접수가 이미 닫혀 있다. '접수중' 필터를 켜도 계속 남아 있다.",
+   "suggested_fix": "크롤러에서 일(day)이 그 달 말일을 넘으면 말일로 잘라 쓴다(calendar.monthrange). 앱 쪽에도 방어를 둔다. 마감일을 모르는 open은 대회일 며칠 전까지만 인정하거나 상태를 nil로 두고, 테스트 '마감일 미상 접수중'의 정책도 다시 본다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "availability",
+   "file": "tools/race-info/crawl.py",
+   "line": 288,
+   "title": "크롤 성공률 가드가 목록 대비 비율뿐이라, 목록이 줄어들면 축소된 파일이 커밋되고 앱 캐시를 덮어씀",
+   "description": "실패 판정은 ok / len(ids) >= 0.8 하나뿐이다. 목록 페이지(list.php)에서 얻은 id 수가 평소 약 270건에서 한 자릿수로 줄어도, 그 몇 건만 파싱되면 100%로 통과한다. 워크플로는 races가 바뀌었다는 이유로 그대로 커밋한다. 앱의 fetchRemote는 디코딩만 되면 캐시 파일을 무조건 덮어쓴다. 원격 원본이 dev 브랜치(origin/dev 945c225)이므로 개발 중 로컬에서 `crawl.py --limit N -o ios/RunWrap/Races.json`(docstring에 적힌 사용법)으로 만든 축소 파일을 커밋해도 곧바로 출시 앱 전체에 퍼진다.",
+   "failure_scenario": "로드런 점검 페이지나 목록 개편으로 view.php 링크가 5개만 남는다. 5건 모두 파싱돼 100%로 통과하고 dev에 커밋된다. 다음 앱 실행 때 모든 사용자의 대회 목록이 5건으로 줄고, 번들보다 generatedAt이 새로우니 로컬 캐시도 축소본으로 굳는다.",
+   "suggested_fix": "크롤러에 절대 하한(예: races ≥ 100)을 두고, 직전 커밋 대비 급감(예: 50% 이상 감소)하면 실패로 처리한다. --limit를 쓰면 기본 출력 경로에 쓰지 못하게 막는다. 앱에서도 원격 races 수가 로컬보다 크게 적으면 캐시 교체를 보류하는 방안을 검토한다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "availability",
+   "file": "ios/RunWrap/RaceStore.swift",
+   "line": 50,
+   "title": "Races.json을 전부 아니면 전무로 디코딩 — 원소 하나의 타입이 어긋나거나 스키마가 dev에서 먼저 바뀌면 출시 앱이 말없이 갱신을 멈춤",
+   "description": "RaceFile/Race는 기본 합성 Decodable이다. races 배열 중 한 건이라도 필수 필드가 빠지거나 타입이 다르면 파일 전체가 실패하고 fetchRemote는 nil을 돌려준다. 원격 URL이 dev라서, 크롤러 스키마 변경(필드 이름 변경, id 문자열화 등)이 앱 업데이트보다 먼저 모든 출시 앱에 닿는다. 실패는 조용히 삼켜지고 사용자에게도 개발자에게도 신호가 없다. 시간이 지나면 기존 대회가 모두 지난 대회로 걸러져 '지금 보여드릴 대회가 없어요'만 남는다.",
+   "failure_scenario": "크롤러가 어떤 대회의 lat을 문자열 \"37.5\"로 내보내거나(정규식 변경 등) 새 필드를 필수로 바꿔 dev에 푸시한다. 설치된 모든 앱에서 원격 디코딩이 실패하고 마지막 캐시만 보인다. 몇 주 뒤에는 목록이 비고, 당겨서 새로고침해도 아무 변화나 안내가 없다.",
+   "suggested_fix": "races를 원소 단위로 관대하게 디코딩한다(실패한 원소만 건너뛰는 래퍼). 스키마 버전 필드를 두고, 호환되지 않는 변경은 새 파일 경로로 낸다. 원격 원본을 dev 대신 릴리스용 브랜치나 별도 data 브랜치로 분리하는 방안도 고려한다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/TrainingGuideEngine.swift",
+   "line": 336,
+   "title": "직접 입력한 대회 기록에 타당성 가드가 없어, 오입력·오독 하나가 2년간 예측을 지배함",
+   "description": "대회 기록 후보는 timeSec > 0, 날짜, 최소 거리, 외삽 배율만 검사한다. EF 환산에는 세계기록보다 빠르면 버리는 가드(minGoalPaceSecPerKm = 150초/km)가 있지만 대회 기록에는 없다. 후보 중 riegelSec이 가장 작은 것이 이기므로, 비현실적으로 빠른 기록 하나가 훈련 표본을 항상 이긴다. 입력 경로는 두 가지다. ① Apple Intelligence 오독(예: '1시간 45분'을 minutes=1, seconds=45로 읽음)이 폼에 채워진 뒤 사용자가 못 보고 저장하는 경우 ② 휠을 잘못 돌린 경우. 어느 쪽이든 RaceOutlookEngine은 이 값으로 ready 상태와 improving 톤을 낸다.",
+   "failure_scenario": "하프 기록이 0:01:45(105초)로 저장된다. 목표가 풀코스면 Riegel로 약 3.7분이 예측되고, 톤은 '확실한 달성권(improving)'이 된다. 기록을 지우지 않으면 730일 동안 계속 이 값이 쓰인다. '틀린 인사이트는 없느니만 못하다'는 원칙에 어긋난다.",
+   "suggested_fix": "대회 기록 필터에 `record.timeSec / record.race.km >= minGoalPaceSecPerKm`(와 느린 상한)를 넣는다. 입력 시트의 저장 버튼도 같은 범위 밖이면 비활성화하거나 경고를 띄운다. 테스트도 추가한다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/RaceOutlookEngine.swift",
+   "line": 87,
+   "title": "대회 기록은 열 중립 환산을 하지 않는데 대회 월 더위는 더함 — #33에서 고친 비대칭이 대회 기록 경로에 남아 있음",
+   "description": "훈련 표본은 neutralTimeSec으로 세션 당시 더위를 빼지만, 대회 기록은 '세션 날씨가 없어 원본 그대로' 쓴다(TrainingGuideEngine 333행 주석). 그런데 RaceOutlookEngine은 표본 종류와 상관없이 대회 월 평년값 보정을 더한다. 기록 날짜(월)를 알고 있으니 같은 monthlyNormals로 중립화할 수 있는데 하지 않는다. 계산해 보면 서울 평년값 기준 7월은 +12.2초/km, 8월은 +15.6초/km, 9월은 0이다.",
+   "failure_scenario": "8월 하프 대회 기록 1:50:00을 입력하고 다음 목표도 8월 하프다. 기록에 이미 더위가 반영돼 있는데 15.6초/km × 21.1km ≈ 5.5분이 한 번 더 붙어 약 1:55:30으로 예측된다. 반대로 7월 기록으로 10월 대회를 예측하면 더위 페널티가 빠지지 않아 약 4.3분 느리게 나온다.",
+   "suggested_fix": "대회 기록 후보를 만들 때 기록 월의 monthlyNormals로 HeatEngine 보정량을 구해 timeSec에서 빼고(중립화), sampleHeatDeltaSecPerKm에도 그 값을 담는다. 여름 기록 → 여름 대회, 여름 기록 → 가을 대회 테스트를 추가한다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/RaceRecordStore.swift",
+   "line": 61,
+   "title": "race-records.json 디코딩이 실패하면 빈 배열로 시작하고, 다음 저장 때 기존 기록 파일을 덮어써 전부 사라짐",
+   "description": "load()는 try?로 [RaceRecord] 전체를 디코딩하고, 실패하면 nil을 돌려줘 records가 []가 된다. 이후 add나 remove가 한 번만 불려도 save()가 빈 배열이나 새 기록 1건으로 원본 파일을 원자적으로 덮어쓴다. 앞으로 RaceRecord에 옵셔널이 아닌 필드를 추가하거나 RaceDistance 케이스 이름을 바꾸면(raw value 문자열 fiveK/tenK/half/full) 업데이트 직후 이렇게 된다. 원소 하나가 깨져도 마찬가지이고, 백업에서도 제외돼 있어 복구할 수 없다.",
+   "failure_scenario": "v1.3에서 RaceRecord에 `let note: String`을 추가해 배포한다. 업데이트 후 설정에 들어가면 기록 목록이 비어 있다. 사용자가 새 기록을 1건 추가하는 순간 이전 기록 N건이 파일에서 영구히 지워진다.",
+   "suggested_fix": "디코딩 실패와 파일 없음을 구분한다. 디코딩에 실패하면 원본을 .bak으로 옮겨 둔 뒤 새로 시작한다. 새 필드는 옵셔널이나 decodeIfPresent 기본값으로 추가하는 규칙을 주석으로 남긴다. 원소 단위 관대 디코딩도 검토한다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/RaceStore.swift",
+   "line": 18,
+   "title": "대회 탭이 한 번 로드된 뒤로는 원격 갱신도 날짜 재계산도 자동으로 하지 않음(자정·며칠 뒤 복귀 시 D-day와 접수 상태가 어제 기준으로 남음)",
+   "description": "RaceListScreen은 TabView 안에서 @StateObject로 계속 살아 있다. load()는 `.loaded`이면 바로 반환하므로 앱을 며칠 백그라운드에 뒀다가 돌아와도 원격을 다시 받지 않는다. 또 entries는 body가 다시 계산될 때의 `Date()`로만 구해지고 scenePhase나 날짜 변경 트리거가 없다. 그래서 자정을 넘겨 복귀해도 D-day, 접수중/완료 판정, 지난 대회 필터가 이전 렌더 시점 그대로다. 당겨서 새로고침이 실패해도 아무 피드백이 없다.",
+   "failure_scenario": "9/30 23:55에 대회 탭을 보고 앱을 내렸다가 10/1 08:00에 돌아온다. 9/30 마감 대회가 여전히 '접수중'으로 보이고 D-day도 하루 밀려 있다. 그동안 dev에 새로 올라온 대회도 당겨서 새로고침하기 전까지는 보이지 않는다.",
+   "suggested_fix": "scenePhase가 .active로 바뀔 때나 .onReceive(NSCalendarDayChanged)에서 refresh()를 부르고 뷰를 다시 그리게 한다. load()의 조기 반환은 마지막 갱신 후 일정 시간(예: 6시간)이 지나면 무시하게 바꾼다. refresh 실패는 헤더 캡션 등으로 알린다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/RaceResultParser.swift",
+   "line": 83,
+   "title": "RaceResultParser.interpret 입력 검증이 느슨함 — 두 자리 연도, 존재하지 않는 날짜, 범위 밖 분·초, 음수·거대값",
+   "description": "① year는 범위를 검사하지 않는다. 모델이 '25년'을 year=25로 옮기면 서기 25년 날짜가 `date <= now`를 통과하고, 입력 시트는 min/max로 2년 전 하한에 조용히 맞춘다. ② 연도가 있는 경로에서 day는 1~31만 확인하므로 '9월 31일'은 Calendar.date(from:)의 관대한 정규화로 10/1이 된다. ③ minutes·seconds는 0~59 여부를, 모든 값은 음수 여부를 검사하지 않는다. hours=1, minutes=-5도 3300초로 통과한다. ④ `(hours ?? 0) * 3_600`은 오버플로 검사 없는 Int 곱셈이라 비정상적으로 큰 값이 오면 트랩(크래시)이 난다. ⑤ hours ≥ 8이면 입력 시트의 휠 범위(0..<8)를 벗어난다. 모델 출력은 폼을 채우는 데만 쓰이지만, 이렇게 틀린 값은 사용자 눈에 잘 띄지 않는다.",
+   "failure_scenario": "'25년 10월 춘천 하프 1시간 45분'을 입력한다. year=25가 나오면 날짜 필드가 2024-09-29(2년 하한)로 채워지고, 사용자가 이를 못 보고 저장하면 VO₂max 배율이 엉뚱한 시점으로 계산된다. 이 기록은 곧 730일 가드에 걸려 예측에서도 빠진다.",
+   "suggested_fix": "year는 (현재연도-2...현재연도)로 제한한다(두 자리면 2000을 더한다). day는 해당 월의 실제 일수로 검증한다. hours 0~7, minutes·seconds 0~59, 음수 불가를 검사하고 벗어나면 그 필드를 nil로 둔다. 곱셈은 범위 검사 뒤에 한다.",
+   "finder": "race"
+  },
+  {
+   "severity": "low",
+   "category": "config",
+   "file": ".github/workflows/race-info.yml",
+   "line": 11,
+   "title": "대회정보 갱신 배치가 실제로는 07:40~09:50 KST에 반영됨(문서상 05:00), 앱에는 데이터 신선도 경고가 없음",
+   "description": "cron은 20:00 UTC지만 GitHub 스케줄 지연으로 최근 15회 실행이 22:03~00:08 UTC에 시작했고, 크롤에 35~45분이 걸린다. 그래서 커밋은 07:40~09:52 KST에 이뤄진다(gh api 실행 기록으로 확인). 또 races 내용이 같으면 커밋하지 않으므로 앱 헤더의 'M월 d일 갱신'은 마지막 크롤 시각이 아니라 마지막 내용 변경일이다. 크롤이 계속 실패해 며칠째 멈춰도 앱은 같은 표기만 보여 줘 구분할 수 없다. timeout-minutes도 없어서 이미지 수집 단계가 멈추면 기본값인 6시간까지 잡을 붙잡는다.",
+   "failure_scenario": "새벽 5시에 접수가 열린 대회를 보려고 7시에 앱을 열면 전날 데이터가 보인다. 로드런 개편으로 크롤이 일주일째 실패해도 헤더는 'x월 x일 갱신'으로만 보여 사용자는 오래된 자료인지 알 수 없다.",
+   "suggested_fix": "cron을 앞당기고(예: 17:00 UTC) timeout-minutes(예: 90)를 추가한다. generatedAt과 별도로 lastCrawledAt을 두거나, 앱에서 generatedAt이 N일 넘게 지났으면 '자료가 오래됐어요'를 표시한다. 실패 알림(워크플로 실패 시 이슈 생성 등)도 둔다.",
+   "finder": "race"
+  },
+  {
+   "severity": "medium",
+   "category": "availability",
+   "file": "ios/RunWrap/HealthStore.swift",
+   "line": 100,
+   "title": "백그라운드 옵저버·새로고침 중 조회 실패가 이미 로드된 목록을 .failed로 덮고, 포그라운드 복귀 때 다시 불러오지 않음",
+   "description": "load()는 조회가 실패하면 기존 상태가 .loaded여도 무조건 state = .failed(...)로 바꾼다. 워치 러닝이 끝나 옵저버가 깨울 때(RunWrapApp.handleWorkoutUpdate → health.load()) 아이폰은 보통 잠겨 있고, 잠금 상태에서는 HealthKit 보호 데이터를 읽을 수 없어 fetchRunningWorkouts가 throw한다. 이 결과 메모리의 상태가 .failed가 된다. 그런데 복귀 경로는 두 곳 모두 이 상태를 건너뛴다. refreshCacheAndReschedule은 `if case .loaded = health.state`일 때만 다시 불러오고, RootView .task는 `.idle`일 때만 불러온다. RunWrapApp 56행 주석은 '빈 결과로 조용히 끝난다'고 적었지만 실제로는 빈 결과가 아니라 실패 상태가 남는다.",
+   "failure_scenario": "운동 알림을 켠 사용자가 폰을 주머니에 넣고(잠금 상태) 워치로 달린다 → 워크아웃이 동기화되면 옵저버가 발화하고 load()가 errorDatabaseInaccessible로 throw → state = .failed(\"Protected health data is inaccessible\") → 잠금을 풀고 앱을 열면 scenePhase .active가 와도 load를 건너뛴다 → 홈·리포트 탭 전체가 '불러오지 못했어요' 화면으로 바뀌고, 사용자가 '다시 시도'를 눌러야 복구된다. 당겨서 새로고침 도중 일시적인 오류가 나도 같은 방식으로 MainTabs 전체가 오류 화면으로 교체된다.",
+   "suggested_fix": "이미 .loaded인 상태에서 실패하면 기존 목록을 유지하고(오류는 별도 @Published로 알리거나 무시), .idle/.loading에서 시작한 조회만 .failed로 바꾼다. refreshCacheAndReschedule에서도 .failed 상태면 다시 불러오게 한다. 백그라운드 경로에서는 UIApplication.shared.isProtectedDataAvailable가 false면 load를 건너뛰는 가드도 고려한다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/HealthStore.swift",
+   "line": 58,
+   "title": "설정의 '다시 진단받기'를 마치면 connect()가 state를 .loading으로 바꿔 MainTabs가 스플래시로 교체되고 탐색 상태가 초기화됨",
+   "description": "connect()는 load()와 달리 기존 상태와 상관없이 `state = .loading`을 설정한다. 재진단 시트(SettingsScreen → OnboardingFlowScreen)의 마지막 '다음' 버튼이 health.connect()를 부르면, RootView.isBooting이 .loading에서 true가 되어 MainTabs 전체가 SplashScreen으로 바뀐다. 그러면 SettingsScreen과 거기서 띄운 시트가 뷰 계층에서 사라지고, 로드가 끝나면 MainTabs가 새로 만들어지면서 @State selection이 .home으로 돌아간다.",
+   "failure_scenario": "실기기에서 설정 → 다시 진단받기 → 설문을 끝내고 '다음'을 누른다 → 권한 요청이 끝나는 동안 화면 전체가 스플래시로 깜빡인다 → 설정 화면이 아니라 홈 탭 루트로 돌아간다(시트 dismiss 애니메이션도 없음). 권한 조회가 실패하면 앱 전체가 오류 화면이 된다.",
+   "suggested_fix": "connect()도 load()처럼 이미 .loaded면 .loading으로 내리지 않게 하거나, 재진단 경로에서는 connect() 대신 load()를 부른다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/HealthStore.swift",
+   "line": 113,
+   "title": "워크아웃 옵저버가 HealthKit 권한 요청 전에 등록돼 신규 사용자는 첫 세션 동안 백그라운드 전달이 동작하지 않음",
+   "description": "RunWrapApp의 WindowGroup .task는 앱이 뜨자마자, 온보딩과 권한 요청(connect)보다 먼저 startObservingWorkouts를 부른다. 신규 설치에서는 이때 읽기 권한이 아직 미결정 상태라 HKObserverQuery가 오류로 끝나고 enableBackgroundDelivery도 실패할 수 있는데, 결과는 무시된다. 그런데 `workoutObserver == nil` 가드 때문에 이후에 권한을 허용해도 앱을 완전히 종료했다 다시 켜기 전까지는 재등록되지 않는다. 같은 가드 탓에, 데모 모드로 기동한 뒤 설정에서 데모를 끈 경우에도 재기동 전까지 옵저버가 없다.",
+   "failure_scenario": "신규 사용자가 설치 → 온보딩 → 건강 권한 허용 → 운동 알림을 켠다 → 앱을 백그라운드로만 보내 두고 워치로 달린다 → 등록 시점에 권한이 없어 죽은 옵저버만 남아 있으므로 '오늘의 러닝' 알림이 오지 않는다. 앱 프로세스가 한 번 종료되고 다시 기동돼야 동작한다.",
+   "suggested_fix": "connect() 성공 직후(그리고 데모를 끌 때)에도 startObservingWorkouts를 호출하고, 옵저버 콜백이 오류를 받거나 enableBackgroundDelivery가 실패하면 workoutObserver를 nil로 되돌려 재등록할 수 있게 한다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "availability",
+   "file": "ios/RunWrap/RunWrapApp.swift",
+   "line": 22,
+   "title": "옵저버 등록이 SwiftUI 뷰 .task에 있어 종료된 앱의 백그라운드 기동 때 등록되지 않을 수 있음",
+   "description": "애플 문서는 백그라운드 전달을 받으려면 HKObserverQuery를 앱 기동 직후(application(_:didFinishLaunchingWithOptions:))에 등록하라고 한다. 이 앱은 WindowGroup 안 RootView의 .task에서 등록하므로, 앱이 종료된 상태에서 HealthKit이 백그라운드로 깨웠을 때 씬 연결이나 뷰 표시가 없거나 늦어지면 쿼리가 등록되지 않는다. 그러면 업데이트가 전달되지 않고 completion도 불리지 않는다. 씬이 연결되는지는 시스템 동작에 따라 다르므로 확신 수준은 낮다(PLAUSIBLE).",
+   "failure_scenario": "사용자가 앱을 스와이프로 종료한 뒤 워치로 달린다 → HealthKit이 앱을 백그라운드로 기동하지만 뷰 .task가 실행되지 않거나 늦어 옵저버가 없다 → 운동 직후 알림이 오지 않고, 전달 실패가 쌓이면 백오프가 걸린다.",
+   "suggested_fix": "@UIApplicationDelegateAdaptor를 추가해 didFinishLaunching에서 HealthStore(또는 공용 HKHealthStore)의 옵저버와 enableBackgroundDelivery를 등록한다. HealthStore 인스턴스를 앱과 delegate가 함께 쓰도록 구성한다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/RunWrapApp.swift",
+   "line": 46,
+   "title": "실기기 데모 모드의 합성 데이터가 ReportCache에 저장돼 주간 알림에 가짜 수치가 나감",
+   "description": "refreshCacheAndReschedule는 데모 여부를 확인하지 않고 health.state의 러닝 목록으로 ReportSnapshot을 만들어 ReportCache에 저장한다. 데모 모드에서는 이 목록이 DemoData 합성 러닝이다. 데모를 끈 뒤에도 실제 러닝이 0건이면 `!runs.isEmpty` 가드 때문에 캐시가 덮이지 않아 합성 스냅샷이 계속 남는다. 다른 곳(ProgressBackupStore, HomeScreen.checkNewPBs)은 DemoMode.isActive를 가드하는데 이 경로만 빠져 있다.",
+   "failure_scenario": "워치 기록이 없는 사용자가 '샘플 리포트'(데모)를 켰다가 끄고 주간 알림을 켠다 → 일요일 18시에 '최근 7일 3회 · 24.0 km — …'처럼 실제로 뛰지 않은 합성 수치가 알림으로 온다.",
+   "suggested_fix": "캐시 저장 앞에 `guard !DemoMode.isActive`를 추가하고, 데모를 끌 때 ReportCache를 비우거나, 실제 러닝이 0건이면 캐시를 삭제해 기본 문구로 떨어지게 한다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/NotificationScheduler.swift",
+   "line": 71,
+   "title": "알림 권한 요청 결과를 버려서, 거부된 상태에서도 토글이 켜진 채 알림이 조용히 나가지 않음",
+   "description": "requestAuthorization()의 Bool 결과는 모든 호출부(SettingsScreen 144/148/160)에서 `_ =`로 버려진다. 코드베이스 어디에서도 getNotificationSettings/authorizationStatus를 확인하지 않는다. 사용자가 시스템 알림 권한을 거부했거나 나중에 끈 경우에도 설정 토글은 켜진 채 남고, add()는 try?로 실패를 삼켜 아무 안내가 없다.",
+   "failure_scenario": "첫 권한 시트에서 '허용 안 함'을 누른다 → 주간·운동·수분 토글이 모두 켜진 것처럼 보인다 → 알림은 한 건도 오지 않고, 사용자는 원인을 알 수 없다(시트는 두 번 다시 뜨지 않음).",
+   "suggested_fix": "결과가 false이거나 authorizationStatus가 .denied면 토글을 되돌리고, 설정 앱으로 가는 안내(openSettingsURLString)를 보여준다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/NotificationScheduler.swift",
+   "line": 101,
+   "title": "주간 알림이 repeats:false라서 앱을 열지 않으면 한 번만 오고 끊기며, 본문은 마지막 실행 시점의 스냅샷에 머묾",
+   "description": "주간 알림은 다음 (요일, 시) 한 건만 repeats:false로 예약하고, 다음 주 예약은 포그라운드 진입에만 의존한다. 1주 넘게 앱을 열지 않은 사용자에게는 첫 알림 이후 아무것도 오지 않는다. 오는 알림의 본문도 '최근 7일' 수치를 마지막 실행 시점 기준으로 계산하므로, 발송 시점과 최대 6일 이상 어긋날 수 있다. 주석에 적힌 의도된 설계지만, 설정 화면에서 '매주' 알림을 켠 사용자의 기대와 다르다.",
+   "failure_scenario": "월요일에 앱을 연 뒤 3주간 열지 않는다 → 그 주 일요일에만 '최근 7일 N회'(월요일 기준 수치) 알림이 오고, 이후 2주는 알림이 없다. 재참여를 유도해야 할 휴면 사용자에게 알림이 끊긴다.",
+   "suggested_fix": "본문을 수치 없는 문구로 둔 repeats:true 백업 예약을 함께 두거나, 앞으로 N주치를 미리 예약하고, 스냅샷이 7일보다 오래됐으면 기본 문구를 쓴다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "line": 303,
+   "title": "데모 합성 상세의 시드가 run.id.hashValue(프로세스마다 무작위)와 매번 새로 만드는 UUID에 의존해, '같은 세션은 항상 같은 모양'이 성립하지 않음",
+   "description": "Swift의 hashValue는 프로세스 기동마다 시드가 바뀐다. 게다가 DemoData.runs는 계산 프로퍼티라 접근할 때마다 UUID()와 Date()를 새로 만든다. fillWithDemoData는 load()·포그라운드 진입마다 불리므로 같은 세션의 id가 계속 바뀌고, 합성 경로·스플릿·다이내믹스도 바뀐다. 심사자와 데모 사용자에게는 같은 세션을 다시 열 때 지도와 수치가 달라지는 것으로 보인다.",
+   "failure_scenario": "데모 모드에서 세션 상세를 연다 → 앱을 백그라운드로 보냈다 돌아오면 refreshCacheAndReschedule → load → 목록 id가 새로 생성된다 → 같은 날짜의 세션을 다시 열면 경로 모양, 케이던스, 존 비율이 달라져 있다. 앱을 재기동해도 hashValue가 바뀌어 달라진다.",
+   "suggested_fix": "시드는 안정적인 값(예: uuid 바이트나 start.timeIntervalSince1970 기반 FNV 해시)으로 만들고, DemoData.runs는 결정적 UUID(인덱스 기반)로 한 번만 만들어 static let으로 캐시한다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "line": 44,
+   "title": "세션 상세 조회가 실패해도 빈 WorkoutDetail이 저장돼 같은 화면에서는 재시도되지 않음",
+   "description": "fetch()는 fetchWorkout이 실패하면(try?로 nil이 되면) 빈 WorkoutDetail을 돌려주고, load()는 그 값을 detail에 넣는다. 이후에는 `guard detail == nil` 때문에 같은 화면에서 load가 다시 실행되지 않는다. 경로·스플릿·존 카드는 모두 미노출되고, 실패인지 데이터가 없는 것인지 구분할 수 없다.",
+   "failure_scenario": "알림을 탭해 잠금 화면에서 곧바로 세션 상세로 들어가거나 HealthKit이 일시적으로 오류를 낸다 → 빈 상세가 고정돼, 화면을 나갔다 들어오기 전까지 경로와 스플릿이 없는 것처럼 보인다.",
+   "suggested_fix": "워크아웃 조회 실패는 detail을 nil로 두고(또는 별도 실패 상태를 두고) 재시도 버튼이나 .task(id:)로 다시 시도할 수 있게 한다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/HealthStore.swift",
+   "line": 233,
+   "title": "밤별 수면 묶기가 같은 날 낮잠까지 합산해 3시간 가드와 수면 질 비율을 왜곡함",
+   "description": "fetchSleepNights는 잠든 표본을 종료 시각의 날짜로 묶고 날짜별 병합 합계에 3시간 가드를 건다. 주석은 '3시간 미만은 낮잠으로 보고 버린다'고 하지만, 실제로는 같은 날 오후 낮잠 구간이 그날 밤 수면(당일 아침 기상)에 더해진다. 그래서 asleepHours가 부풀고, 원래 2시간대였던 밤이 낮잠 덕분에 가드를 통과할 수 있다. lastNightSleepHours(36시간 창, 24시간 이내 종료)도 오늘 낮잠을 지난밤 수면에 합산한다.",
+   "failure_scenario": "새벽 2시~4시 30분(2.5시간)에 자고 14시~15시 30분에 낮잠 → 그날 밤 수면이 4시간으로 집계돼 가드를 통과하고, 체력 배터리의 수면 팩터가 실제보다 좋게 계산된다.",
+   "suggested_fix": "병합한 구간 가운데 서로 붙은(간격 예: 2시간 이내) 주 수면 블록만 그 밤으로 인정하고, 나머지 짧은 블록은 낮잠으로 제외한다. lastNightSleepHours도 같은 규칙을 쓴다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "line": 240,
+   "title": "세션 상세의 심박 존은 Tanaka/190 폴백 HRmax를 쓰고, 리포트의 hrMaxBpm은 관찰 최대를 써서 두 값이 어긋남",
+   "description": "HealthStore.hrMaxBpm은 이슈 #34 이후 '관찰 최대 우선, 없으면 Tanaka'로 추정한다. 반면 WorkoutDetailStore.heartRateMax는 생년월일 기반 Tanaka만 쓰고, 생년월일이 없으면 190으로 고정한다. 그래서 같은 사용자라도 세션 상세 존 계산과 대회 노력도 환산이 서로 다른 HRmax를 쓴다. 세션 최고 심박이 폴백 HRmax를 넘으면 'HRmax 대비 100% 초과'가 표시되고 Z5 비율도 과대 계산된다.",
+   "failure_scenario": "생년월일을 입력하지 않은 사용자가 인터벌 러닝에서 최고 심박 196bpm을 기록 → 상세 존 카드는 HRmax 190 기준이라 '최고 196 · HRmax 대비 103%'가 되고 Z5 시간이 부풀려진다. 리포트는 관찰 최대(196 이상)를 HRmax로 쓴다.",
+   "suggested_fix": "세션 상세도 TrainingGuideEngine.hrMax(관찰 최대 우선)를 쓰도록 HealthStore.hrMaxBpm을 넘겨받고, 폴백일 때만 hrMaxEstimated를 true로 둔다.",
+   "finder": "healthkit-stores"
+  },
+  {
+   "severity": "high",
+   "category": "data-loss",
+   "file": "ios/RunWrap/SettingsScreen.swift",
+   "line": 132,
+   "title": "설정의 '다시 진단'이 성장 사이클을 통째로 초기화함 (XP·단계 유실 후 CloudKit에도 전파)",
+   "description": "SettingsScreen은 재진단 시트를 `OnboardingFlowScreen(onFinish:)`로만 띄우고 `prefill`을 넘기지 않는다. OnboardingFlowScreen은 재진단 여부를 `prefill != nil`로 판정하므로 설정에서 진입해도 `isRediagnosis == false`가 되고, `persist`가 첫 온보딩 경로를 탄다. 그 결과 cycleStartedAt=now, maxStage=egg, 새 cycleID가 기록된다. 코드 주석(`재진단이면 성장 사이클은 건드리지 않는다 — §5`)과 기획 원칙('성장은 되돌리지 않는다')을 정면으로 어긴다. 게다가 `OnboardingAnswersStore.load()`는 저장소 어디에서도 호출되지 않아서, prefill을 넘기는 경로 자체가 없다.",
+   "failure_scenario": "온보딩 후 3주를 달려 새가 '청소년' 단계인 사용자가 설정 > 내 레벨 > '다시 진단'을 끝까지 마친다. 그러면 cycleStartedAt이 지금으로 바뀌어 XP가 0이 되고 maxStage도 egg로 돌아가 홈의 새가 알로 되돌아간다. 곧이어 OnboardingFlowScreen의 `backup.backupIfChanged()`가 돌고, cycleID가 달라 ProgressMergeEngine에서 로컬(최신 updatedAt)이 통째로 이긴다. 그래서 CloudKit 스냅샷의 이전 사이클도 덮어써지고 복구 경로가 없다. 부수 증상으로, Q7에서 '아직 없어요'를 고르면 raceGoal은 \"\"로 지워지는데 raceDate는 남는다. 설정에 레이스가 선택되지 않은 '목표 레이스' 섹션이 뜨는 불일치가 생긴다.",
+   "suggested_fix": "재진단 여부를 prefill 유무에서 떼어 내 `isRediagnosis: Bool` 파라미터로 명시한다. SettingsScreen은 `OnboardingFlowScreen(isRediagnosis: true, onFinish: ...)`로 부른다. 프리필이 의도라면 `prefill: OnboardingAnswersStore.load()`도 함께 넘긴다. 재진단 persist에서 raceGoal/raceGoalSec/onboardedAt을 덮을지도 정책으로 정한다. 테스트는 '설정 재진단 후 cycleStartedAt/maxStage/cycleID 불변'을 호출부 기준으로 추가한다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "medium",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 113,
+   "title": "재설치 복원이 일시 실패·iCloud 미로그인이면 새 온보딩이 CloudKit의 이전 진행도를 영구히 덮어씀",
+   "description": "restoreOnFreshInstall은 네트워크 오류, 10초 타임아웃, accountStatus != available에서 `.failed`/`.unavailable`만 남기고 온보딩을 연다. 사용자가 온보딩을 마치면 새 cycleID와 cycleStartedAt=now가 생기고, 곧바로 backupIfChanged가 서버 레코드를 가져와 merge한다. merge는 cycleID가 다르면 'updatedAt이 최신인 쪽이 통째로 이긴다'. 로컬 updatedAt은 readLocal 시점의 `Date()`라 항상 이긴다. 결과적으로 서버에 있던 이전 사이클의 cycleStartedAt·maxStage·레벨·목표가 전부 사라지고 도감만 합집합으로 남는다. 안내 문구('일단 새로 시작할게요')는 나중에 복원될 여지를 암시하지만 재시도 경로가 없다. 이슈 #29가 막으려던 'XP 유실'이 일시적인 네트워크 문제 하나로 그대로 재현된다.",
+   "failure_scenario": "앱을 재설치하고 첫 실행 때 지하철 등 느린 네트워크에서 CloudKit 응답이 10초를 넘기면 `.failed`가 된다. 사용자는 온보딩을 마치고, OnboardingFlowScreen이 backupIfChanged를 부른다. 서버에는 이전 사이클(cycleID A, maxStage 3, cycleStartedAt 2개월 전)이 있지만 로컬은 cycleID B에 updatedAt=now다. merge 결과 로컬 B가 업로드되어 이전 진행도가 영구 손실된다. iCloud에 로그인하지 않은 채 온보딩을 마친 뒤 나중에 로그인한 경우(`.unavailable`)도 첫 백업 때 똑같이 덮어쓴다.",
+   "suggested_fix": "복원이 확정되지 않은 설치(.failed/.unavailable)는 로컬에 'restorePending' 플래그를 남긴다. 다음 백업 때 서버 스냅샷이 발견되면 덮어쓰지 말고, 사용자에게 복원/새로 시작을 묻거나 서버가 이기게 한다. 병합 기준도 업로드 시각이 아닌 실제 변경 시각(사이클 전환·설정 변경 시점)으로 바꾸는 편이 안전하다. .failed에는 설정이나 안내에서 '다시 시도' 경로를 제공한다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 173,
+   "title": "디코딩할 수 없는 서버 스냅샷(새 스키마·손상)을 구버전이 무조건 덮어씀 — 주석이 말하는 keepServer 보호가 동작하지 않음",
+   "description": "upload()는 `Self.decode(serverRecord)`가 nil이면 병합을 건너뛰고 else 분기에서 `record = serverRecord`에 로컬 스냅샷을 그대로 실어 저장한다. keepServer 판정은 payload 디코딩에 성공했을 때만 schemaVersion을 보고 동작한다. 그런데 새 버전이 BirdSpecies에 case를 추가하거나 필드 타입을 바꾸면 구버전 JSONDecoder는 payload 전체를 디코딩하지 못한다. 레코드에는 별도 필드 `schemaVersion`이 있는데도 확인하지 않는다. restoreOnFreshInstall 주석('덮어쓰기는 merge가 keepServer로 막는다')과 실제 동작이 다르다.",
+   "failure_scenario": "같은 Apple ID를 쓰는 두 아이폰이 있다. A는 BirdSpecies에 새 종이 추가된 v1.3, B는 v1.2다. A가 새 종을 수집해 업로드한다. B가 백그라운드에 진입해 backupIfChanged를 부르면 fetchServerRecord는 성공하지만 decode가 실패한다(알 수 없는 enum rawValue). 그래서 else 분기에서 B의 구 스냅샷이 서버를 덮어써 A의 새 도감 항목과 진행도가 사라진다. 재설치 시 디코딩에 실패하면(.failed) 온보딩 후 첫 백업도 같은 경로로 서버를 덮는다.",
+   "suggested_fix": "serverRecord가 존재하는데 decode가 실패하면 업로드하지 않고 return한다(keepServer와 동일하게 취급). 또는 `record[RecordField.schemaVersion] as? Int`를 먼저 확인해 currentSchemaVersion보다 크면 보류한다. 디코딩 내성을 위해 enum 필드에 알 수 없는 값을 보존하는 fallback case나 커스텀 init(from:)을 두는 것도 고려한다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 118,
+   "title": "데모 모드의 합성 러닝이 실제 성장 저장값(maxStage)·도감·사이클을 영구 변경하고 CloudKit에도 올라감",
+   "description": "HomeScreen.onAppear는 데모 여부와 관계없이 `syncMaxStage(growth.stage)`를 호출해 @AppStorage의 maxStage를 올린다. 성조에 도달하면 세러모니를 띄우고, 거기서 startNewCycle이 도감 추가·cycleStartedAt 리셋·새 cycleID를 저장한다. DemoData는 now 기준 1~26일 전 러닝을 만들어 내므로, 온보딩 후 며칠이 지난 사용자가 데모를 켜면 cycleStartedAt 이후의 합성 러닝이 XP로 잡힌다. maxStage는 '내려가지 않는' 하한이라 데모를 꺼도 부풀려진 단계가 남는다. backupIfChanged는 실행 시점에 데모가 켜져 있을 때만 건너뛰므로, 데모를 끈 뒤 첫 백그라운드 진입 때 오염된 값이 CloudKit에 올라간다. PB 축하만 `guard !DemoMode.isActive`로 막혀 있고 성장 경로에는 가드가 없다.",
+   "failure_scenario": "3주 전에 온보딩한 실사용자가 설정에서 '샘플 데이터로 둘러보기'를 켜고 홈을 연다. 지난 3주에 해당하는 합성 러닝이 XP가 되어 새가 성장하고 maxStage가 저장된다. 성조까지 가면 세러모니가 떠서 합성 기록으로 새가 수집되고 사이클이 리셋된다. 데모를 꺼도 홈의 단계는 내려가지 않고, 다음 백그라운드 진입 때 이 상태가 CloudKit 스냅샷이 된다.",
+   "suggested_fix": "DemoMode.isActive일 때는 syncMaxStage·세러모니·startNewCycle을 실행하지 않고 저장 없이 표시만 한다. 또는 데모 전용 네임스페이스(별도 UserDefaults suite)를 쓴다. backupIfChanged도 '데모 중 생성된 변경'을 구분할 수 없으므로 저장 단계에서 막는 편이 근본적이다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "medium",
+   "category": "availability",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 221,
+   "title": "withTimeout이 실제로는 대기 시간을 제한하지 못함 — 태스크 그룹이 취소를 무시하는 CloudKit 호출을 끝까지 기다림",
+   "description": "withThrowingTaskGroup은 본문이 반환하거나 throw해도 모든 자식 태스크가 끝날 때까지 스코프를 빠져나가지 않는다. 타이머 자식이 10초 뒤 throw하면 그룹은 cancelAll을 하지만, 완료 핸들러 기반 ObjC API에서 브리징된 `CKContainer.accountStatus()`나 `CKDatabase.record(for:)`가 협력적 취소에 응답하지 않으면 결과가 올 때까지 계속 기다린다. 그러면 '10초 뒤 온보딩으로 넘어간다'는 설계가 깨지고, RootView는 restoreState가 .checking인 동안 SplashScreen을 유지하므로 스플래시가 CloudKit 자체 타임아웃(수십 초 이상)만큼 멈춘다. 이 스플래시에는 20초 안전망도 적용되지 않는다. splashTimeout은 levelRaw가 비어 있지 않을 때만 동작한다. (CloudKit async API의 취소 지원 여부는 실기기에서 확인이 필요하다.)",
+   "failure_scenario": "재설치 직후, 신호는 잡히지만 패킷이 오가지 않는 네트워크(캡티브 포털 Wi-Fi 등)에서 첫 실행한다. accountStatus나 record(for:)가 응답하지 않으면 타이머가 10초에 throw해도 그룹이 operation 자식을 기다리느라 반환하지 않는다. 사용자는 로고만 있는 스플래시를 수십 초에서 수 분간 보며 앱이 멈춘 것으로 인식한다.",
+   "suggested_fix": "자식을 기다리지 않는 경주 구조를 쓴다. 예를 들어 `withCheckedContinuation`과 한 번만 resume하는 가드로 타이머와 작업 중 먼저 끝난 쪽만 반영하고, 늦게 온 결과는 버린다. 또는 CKFetchRecordsOperation에 `configuration.timeoutIntervalForRequest`를 지정해 CloudKit 레벨에서 시한을 건다. 복원 스플래시에도 RootView 쪽 안전망 타이머를 둔다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "medium",
+   "category": "privacy",
+   "file": "docs/privacy.html",
+   "line": 151,
+   "title": "개인정보 처리방침이 CloudKit 업로드를 누락 — '서버가 없고, 외부 통신은 두 가지뿐'이라고 명시",
+   "description": "ProgressBackupStore는 사용자의 iCloud private DB에 러너 레벨, 러닝 목적, 주간 목표, 목표 레이스·기록·대회 날짜, 온보딩 시각, 도감(수집일·목표 문구·소요 일수)을 JSON으로 올린다. project.yml에도 CloudKit 엔타이틀먼트가 있다. 그런데 앱 내 링크로 제공하는 처리방침(docs/privacy.html, 마지막 수정 2026-08-12)은 '서버가 없고', '인터넷에 접속하는 경우는 아래 두 가지뿐'(날씨, 대회 일정)이라고만 쓴다. CloudKit 백업은 #29(97047b9)에서 추가됐는데 방침은 갱신되지 않았다. CollectionCache 주석은 도감이 '훈련 이력을 드러낸다'며 백업에서 제외하지만, 같은 데이터가 CloudKit으로는 올라가는 모순도 있다. App Store 심사 5.1.1 및 개인정보 라벨 정확성 측면의 리스크다.",
+   "failure_scenario": "심사자나 사용자가 처리방침과 실제 동작을 대조하면 iCloud로 프로필·목표·대회 날짜가 동기화되는 사실이 고지되어 있지 않다. 개인정보 라벨이나 처리방침 불일치로 리젝되거나 사용자 신뢰가 떨어질 수 있다.",
+   "suggested_fix": "처리방침 §2·§3에 'Apple iCloud(CloudKit) 개인 데이터베이스에 성장 진행도 스냅샷 1건 저장'을 항목으로 추가한다. 저장 필드와 건강 데이터 미포함 사실, iCloud 로그아웃 시 동작, 삭제 방법(설정 > Apple ID > iCloud > 저장 공간 관리)도 적는다. 가능하면 앱 내에서 백업을 끄는 토글이나 서버 스냅샷 삭제 경로도 제공한다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/RunWrapApp.swift",
+   "line": 46,
+   "title": "주간 알림 본문 캐시(ReportCache)에 무효화 조건이 없음 — 데모 데이터 오염·오래된 '최근 7일' 수치 발송",
+   "description": "ReportCache는 포그라운드 진입 시 `health.state`의 runs로 스냅샷을 만든다. 데모 모드에서는 이 runs가 DemoData 합성 러닝이라 합성 수치가 캐시에 저장된다. 데모를 끈 뒤 실제 기록이 없으면 `!runs.isEmpty` 가드 때문에 캐시가 갱신되지 않아 합성 수치가 계속 남는다. 또 `generatedAt`을 저장만 하고 어디서도 읽지 않는다. 앱을 며칠 열지 않으면 weeklyBody가 '최근 7일 N회'라는 문구로 마지막 실행 시점의 롤링 7일 수치를 보낸다. 워크아웃 옵저버 경로는 workoutNotify가 꺼져 있으면 초반에 return하므로 캐시 갱신도 하지 않는다.",
+   "failure_scenario": "(1) 워치 기록이 없는 신규 사용자가 데모를 켜고 앱을 한 번 열었다가 데모를 끈다. 이후 매주 '최근 7일 5회 · 4x.x km — (합성 헤드라인)' 알림을 받는다. (2) 주간 알림만 켠 사용자가 월요일에 앱을 열고 일요일 18시까지 열지 않는다. 화~토 러닝이 빠진 월요일 기준 '최근 7일' 수치가 일요일 알림으로 나간다.",
+   "suggested_fix": "데모 모드에서는 ReportCache.save를 건너뛰고, 데모를 끌 때 캐시를 삭제한다. runs가 비었을 때도 캐시를 지운다. weeklyBody(또는 rescheduleWeekly)에서 트리거 시각 기준으로 generatedAt이 일정 시간(예: 24~48시간) 넘게 지났으면 수치 없는 기본 문구로 폴백한다. 이 가드는 순수 함수라 테스트할 수 있다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/RaceRecordStore.swift",
+   "line": 61,
+   "title": "RaceRecordStore: 파일 디코딩 실패 시 빈 배열로 시작하고, 다음 추가·삭제 때 원본 파일을 덮어써 전체 기록을 잃음",
+   "description": "RaceRecordCache.load는 디코딩에 실패하면 nil을 반환하고, 스토어는 `?? []`로 빈 목록을 쓴다. 사용자는 '기록 없음'으로 보고 한 건을 추가한다. 그러면 save가 [새 기록 1건]으로 원본 JSON을 atomic write해서 복구 가능했던 기존 기록이 영구 삭제된다. 배열 전체를 한 번에 디코딩하므로 원소 하나만 문제여도 전부 버려진다. 예를 들어 RaceDistance에 새 case가 추가된 빌드에서 저장한 뒤 구버전(TestFlight↔App Store 전환)으로 돌아가면 이 상황이 된다. 이 파일은 백업에서 제외되고 CloudKit에도 없어서 복구 경로가 없다. 같은 패턴이 CollectionCache.load(`?? []`)에도 있지만, 도감은 CloudKit 합집합이 일부 복구한다.",
+   "failure_scenario": "race-records.json에 3건이 있는데 파일이 부분 손상됐거나 알 수 없는 race rawValue가 들어 있어 디코딩에 실패한다. 설정의 '지난 대회 기록'이 비어 보이고, 사용자가 1건을 추가하는 순간 기존 3건이 담긴 파일이 1건짜리로 교체된다.",
+   "suggested_fix": "'파일 없음'과 '디코딩 실패'를 구분한다. 디코딩에 실패하면 원본을 `race-records.corrupt-<date>.json`으로 옮기거나, 실패 플래그를 세워 save를 막는다. 원소 단위로 관대하게 디코딩해서(실패한 원소만 건너뛰기) 나머지 기록은 살린다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressSnapshot.swift",
+   "line": 57,
+   "title": "병합 기준 updatedAt이 '변경 시각'이 아니라 '업로드 시각'이라 오래된 로컬(기기 백업 복원 등)이 더 새로운 서버본을 이김",
+   "description": "readLocal은 updatedAt을 호출 시각 `now`로 채우므로, 로컬 스냅샷은 내용이 얼마나 오래됐든 업로드할 때마다 '가장 최신'이 된다. merge는 이 값으로 승자를 정한다(다른 cycleID면 통째로, 같은 cycleID면 maxStage 외 필드). 실제로는 '마지막 업로더가 이기는' 규칙이다. UserDefaults는 iCloud 기기 백업에 포함되므로, 기기 백업에서 복원한 새 아이폰은 levelV2가 채워져 restoreOnFreshInstall을 건너뛰고 backupIfChanged로 곧장 간다. 이때 백업 시점 이후 서버에 반영된 사이클 전환이 되돌려진다.",
+   "failure_scenario": "월요일 새벽 iCloud 기기 백업이 만들어진다. 화요일에 새를 수집해 사이클 B가 CloudKit에 올라간다. 수요일에 새 폰을 월요일 기기 백업으로 복원하면 로컬은 사이클 A(월요일 상태, 도감 파일은 백업 제외라 비어 있음)다. 첫 실행의 backupIfChanged에서 로컬 A(updatedAt=수요일)가 서버 B를 이겨 사이클 B의 cycleStartedAt·목표가 사라진다. 도감만 합집합으로 복구된다.",
+   "suggested_fix": "스냅샷 내용이 실제로 바뀐 시각(설정 변경, 사이클 전환, 단계 상승 시점)을 별도 키로 저장해 병합 기준으로 쓴다. 또는 revision 기반 낙관적 동시성을 쓴다. 로컬의 lastSyncedRevision이 서버 revision보다 작으면 서버를 먼저 적용한 뒤 로컬 변경분만 얹는다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/RaceRecordStore.swift",
+   "line": 27,
+   "title": "대회 기록·도감 파일은 백업 제외인데 CloudKit에도 없는 항목(대회 기록)은 재설치·기기 이전 시 조용히 사라짐",
+   "description": "RaceRecordCache는 isExcludedFromBackup을 지정하고 ProgressSnapshot에도 포함되지 않는다. 그래서 앱 삭제·재설치, iCloud 기기 백업 복원, 새 폰 이전 중 어느 경우에도 사용자가 손으로 입력한 대회 기록이 복원되지 않는다. 반면 같은 성격의 raceGoal·raceGoalSec·raceDate는 UserDefaults(기기 백업 포함)와 CloudKit 스냅샷 양쪽에 저장된다. '운동 기록이라 iCloud에 두지 않는다'는 근거와 일관되지 않고, 사용자에게 유실 사실을 알리는 안내도 없다.",
+   "failure_scenario": "하프·풀 기록 5건을 입력해 둔 사용자가 폰을 바꾸고 iCloud 백업으로 복원한다. 레벨·목표·대회 날짜는 돌아오지만 '지난 대회 기록'은 비어 있다. 예상 완주 기록이 다시 느리게 나오고, 사용자는 이유를 알 수 없다.",
+   "suggested_fix": "정책을 하나로 정한다. 대회 기록도 CloudKit 스냅샷(스키마 v2)에 넣거나, 반대로 목표 레이스 정보도 같은 기준으로 다룬다. 넣지 않는다면 설정 화면에 '이 기기에만 저장되며 재설치 시 사라진다'는 캡션을 단다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "privacy",
+   "file": "ios/RunWrap/OnboardingAnswers.swift",
+   "line": 137,
+   "title": "OnboardingAnswersStore는 저장만 하고 읽지 않는 데드 데이터이며 백업 제외도 누락 — 주석끼리 모순",
+   "description": "persist가 매번 onboarding-answers.json을 쓰지만 load를 호출하는 코드가 없다(grep 결과 0건). 파일에는 월간 주행거리, 최장 거리, 풀코스 기록대, 주간 빈도 같은 자기 신고 훈련 이력이 담긴다. 그런데 다른 캐시(ReportCache, CollectionCache, RaceRecordCache)와 달리 isExcludedFromBackup을 지정하지 않아 iCloud 기기 백업에 포함된다. SettingsScreen 주석은 '원답은 저장하지 않고 판정 결과만 남기며'라고 하고, OnboardingFlowScreen 주석은 '원답은 OnboardingAnswersStore(재진단 프리필용)'라고 해서 서로 모순된다.",
+   "failure_scenario": "사용자는 설정 주석(및 그 의도를 반영한 설명)대로 원답이 저장되지 않는다고 믿는다. 실제로는 훈련 이력 답변이 Application Support에 남고 iCloud 기기 백업으로도 복제된다. 앱 기능에는 전혀 쓰이지 않는다.",
+   "suggested_fix": "재진단 프리필을 쓸 계획이 없으면 save 호출과 파일을 제거하고 기존 파일은 한 번 삭제한다. 쓸 계획이라면 SettingsScreen에서 prefill로 연결하고, 다른 캐시와 같이 excludeFromBackup을 적용한 뒤 주석을 일치시킨다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 184,
+   "title": "업로드 await 중에 바뀐 사용자 설정을 병합 결과 apply가 되돌릴 수 있음",
+   "description": "backupIfChanged는 await 전에 readLocal로 스냅샷을 찍고, 네트워크 왕복(fetch + save) 후 `outgoing.apply(to: defaults)`로 levelRaw·purposes·weeklyGoal·raceGoal·raceDate 등 모든 필드를 UserDefaults에 다시 쓴다. MainActor라도 await 사이에는 사용자가 설정 화면에서 값을 바꿀 수 있다. 병합 결과가 로컬과 다르면(예: 서버 도감이 합쳐짐) 사용자가 방금 바꾼 값이 찍어 둔 시점 값으로 덮인다.",
+   "failure_scenario": "백그라운드 진입으로 백업이 시작되고 응답이 늦는다. 사용자가 곧바로 앱으로 돌아와 설정에서 주간 목표를 2회에서 4회로 바꾼다. 서버 도감이 로컬과 달라 merged ≠ local이 되어 apply가 실행되고, 주간 목표가 2회로 되돌아간다. 이 경우 UI도 @AppStorage를 통해 2로 바뀐다.",
+   "suggested_fix": "apply 전에 readLocal을 다시 읽어, 업로드 시작 시점의 local과 달라진 필드는 덮어쓰지 않는다. 또는 병합으로 달라지는 필드(도감·maxStage)만 선택적으로 반영한다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "low",
+   "category": "config",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 146,
+   "title": "CloudKit 레코드 타입의 운영 환경 배포 여부를 코드로 보장할 수 없음 — 실패가 전부 조용히 삼켜짐",
+   "description": "TestFlight·App Store 빌드는 CloudKit Production 환경을 쓰고, Production에서는 새 recordType(`ProgressSnapshot`)을 자동으로 만들 수 없다. Development 스키마를 콘솔에서 Production으로 배포하지 않았다면 모든 save가 실패한다. backupIfChanged는 모든 오류를 무시하고 로그도 남기지 않아 운영 환경에서 백업이 전혀 되지 않아도 알아챌 방법이 없다. 스키마 배포 여부는 저장소에서 확인할 수 없으므로 검증이 필요하다.",
+   "failure_scenario": "개발 중 시뮬레이터나 디버그 빌드에서는 Development 환경이라 레코드 타입이 자동 생성되어 잘 동작한다. 콘솔에서 'Deploy Schema Changes'를 누르지 않은 채 출시하면, 모든 실사용자의 백업이 오류로 끝나고 재설치 시 복원도 `.empty`로 떨어져 진행도가 복구되지 않는다.",
+   "suggested_fix": "CloudKit Console에서 Production 스키마 배포 여부를 확인한다. catch 블록에서 os.Logger로 CKError 코드만(개인 데이터 없이) 남기고, 설정 화면이나 디버그 메뉴에 '마지막 백업 성공 시각'을 표시해 운영 환경에서 관찰할 수 있게 한다.",
+   "finder": "persistence"
+  },
+  {
+   "severity": "medium",
+   "category": "crash",
+   "file": "ios/RunWrap/CourseSupplyEngine.swift",
+   "line": 85,
+   "title": "GPX 위도가 ±90°를 벗어나면 CourseSupplyEngine이 ClosedRange 조건 위반으로 크래시하고, 캐시된 파일 때문에 코스 탭에 들어갈 때마다 다시 죽는다",
+   "description": "GPXParser는 lat/lon을 `Double.init`으로만 읽고 범위나 유한성을 확인하지 않습니다. 그래서 `lat=\"120\"` 같은 값이 그대로 들어오고, \"nan\"이나 \"inf\"도 Double로 파싱됩니다. 코스 중앙 위도(refLat)가 90°보다 크면 cos 값이 음수가 되고 lonScale도 음수가 됩니다. 이때 lonPad = buffer / lonScale 도 음수가 되어 `(lons.min()! - lonPad)...(lons.max()! + lonPad)`의 하한이 상한보다 커집니다. Swift의 `...`는 -O 빌드에서도 precondition으로 trap합니다. 게다가 CourseScreen.apply()는 분석하기 전에 `try? data.write(to: Self.lastCourseURL)`로 파일을 먼저 저장합니다. 다음 진입 때 .task → restoreLastCourse() → analyze() 순서로 같은 크래시가 반복되고, 코스 지우기 버튼은 화면 안에 있어서 누를 방법이 없습니다. 재설치 말고는 복구 수단이 없습니다. 그 밖에 lon=\"inf\"가 섞인 파일이면 totalMeters=inf가 500m 가드를 통과해 배지에 \"infkm\"가 찍히고, 무효 좌표로 MapPolyline과 카메라 region이 설정됩니다.",
+   "failure_scenario": "`<trkpt lat=\"120\" lon=\"127\"/><trkpt lat=\"121\" lon=\"127\"/>`처럼 손상됐거나 위경도가 뒤바뀐 GPX를 올린다고 해 보겠습니다. totalMeters는 약 111km로 가드를 통과하고, lonScale ≈ -56,432, lonPad ≈ -0.0053이 되어 범위가 (127.0053)...(126.9947)로 만들어지면서 trap합니다. 앱을 다시 켜고 코스 탭을 누르면 LastCourse.gpx를 복원하는 과정에서 또 크래시합니다. (빌드 머신에 Xcode 라이선스 동의가 안 되어 있어 직접 실행하지는 못했고, 산식을 손으로 추적해 확인했습니다.)",
+   "suggested_fix": "GPXParser에서 `lat.isFinite && lon.isFinite && (-90...90).contains(lat) && (-180...180).contains(lon)`인 점만 받습니다. CourseScreen.apply는 analyze 결과가 nil이 아닐 때만 파일을 저장하게 바꿉니다. 엔진에도 `lonScale > 0 && totalMeters.isFinite` 가드를 추가합니다. 범위 밖·NaN 좌표 파서 테스트도 함께 넣습니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "medium",
+   "category": "availability",
+   "file": "ios/RunWrap/AirQualityStore.swift",
+   "line": 88,
+   "title": "에어코리아 인증키가 앱 번들 평문 JSON으로 배포되고, 개발계정 한도 500건/일을 모든 사용자가 나눠 쓴다",
+   "description": "CI(testflight.yml)가 `AirQualityKey.json`을 번들 리소스로 넣습니다. data.go.kr 트래픽 한도는 기기별이 아니라 인증키별입니다. 그런데 주석은 '기기당 하루 최대 24건으로 개발계정 트래픽 한도(500건/일)를 방어'한다고 적혀 있어 한도를 기기당으로 잘못 계산하고 있습니다. 앱은 출시 상태(2026-08-16)입니다. 캐시는 기기마다 따로이고 측정소가 바뀌면 다시 조회하며, Home과 Today가 각자 AirQualityStore를 가집니다. 그래서 하루 이용자가 수십~수백 명만 되어도 500건을 넘깁니다. 한도를 넘으면 게이트웨이가 오류(XML 또는 resultCode≠00)를 돌려주고, 전 사용자의 대기질 카드가 자정까지 조용히 사라집니다. 번들 리소스는 FairPlay 암호화 대상이 아니라서 IPA에서 키를 그대로 꺼낼 수도 있습니다. 누군가 키를 남용하면 같은 방식으로 기능이 막힙니다.",
+   "failure_scenario": "하루 사용자 60명이 서로 다른 시간대에 평균 9번 앱을 열면 540건이 됩니다. 오후부터는 모든 사용자에게 대기질 카드가 표시되지 않고, 사용자는 원인을 알 수 없습니다. 키를 추출한 제3자가 반복 호출해도 결과는 같습니다.",
+   "suggested_fix": "data.go.kr 운영계정 전환(한도 증액)을 신청하고, 주석의 한도 계산을 인증키 기준으로 바로잡습니다. 한도 초과 코드(22 등)를 받으면 일정 시간 재조회하지 않는 negative cache를 둡니다. 장기적으로는 GitHub Actions가 시간별로 전국 측정소 스냅샷을 raw로 올리고(RaceStore와 같은 방식, 개인 데이터 없음) 앱은 그 파일만 받는 구조를 검토합니다. 이 경우 키가 앱에서 빠지고 호출량도 사용자 수와 무관해집니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/WeatherStore.swift",
+   "line": 41,
+   "title": "홈의 날씨·대기질은 포그라운드 복귀 때 갱신되지 않아 며칠 전 값이 '지금'으로 남고, 수분 알람 재예약도 끊긴다",
+   "description": "WeatherStore.load()는 `.idle`일 때만 동작하는 1회성 로딩입니다. RunWrapApp의 scenePhase 훅은 health와 주간 알림만 갱신하고 weather는 건드리지 않습니다. 앱이 메모리에 남은 채 백그라운드↔포그라운드를 오가면 홈 판단 카드는 첫 기동 때 받은 기온·강수 값을 시각 표시 없이 계속 씁니다. 주석에 적힌 대로 수분 알람 예약은 날씨 조회에 붙어 있고(`'오늘'이 시트가 된 뒤로 이 호출이 앱의 유일한 정기 트리거가 됐다`), 알람은 `repeats: false`입니다. 따라서 다음 날 이후 수분 알람이 예약되지 않습니다. HomeScreen의 대기질도 `onReceive(weather.$coordinate)` → `airQuality.load()`이고 이것도 `.idle` 가드라, 기동 때 오프라인이었다면 당겨서 새로고침 전까지 다시 시도하지 않습니다. 또 권한을 거부해 `.denied`가 된 뒤 설정에서 허용하고 돌아와도 상태가 그대로입니다. 그래서 날씨 줄을 탭하면 다시 설정 앱으로 이동합니다.",
+   "failure_scenario": "아침 7시(12°C)에 앱을 켰다가 백그라운드로 보내고 오후 2시(29°C)에 다시 열면, 홈은 여전히 12°C 기준으로 복장과 판단을 보여 줍니다. 다음 날 예보 최고 31°C여도 앱이 종료되지 않았고 사용자가 당겨서 새로고침하지 않았다면 수분 알람이 오지 않습니다.",
+   "suggested_fix": "scenePhase가 .active가 될 때 마지막 조회 후 일정 시간(예: 30분)이 지났거나 날짜가 바뀌었으면 `weather.refresh()`를 호출합니다. WeatherStore에 fetchedAt을 둡니다. 대기질도 같은 시점에 refresh합니다(1시간 캐시가 호출량을 막아 줍니다). `.denied` 상태도 복귀할 때 권한을 다시 확인합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/LocationProvider.swift",
+   "line": 69,
+   "title": "'정확한 위치' 꺼짐(reduced accuracy)을 감지하지 않아 km 단위로 흐린 좌표로 '320m 직선거리'를 표시한다",
+   "description": "코스 탭은 `kCLLocationAccuracyNearestTenMeters`를 요청하고, LocationProvider 주석도 'km 오차로는 순서가 뒤집힌다'고 적고 있습니다. 하지만 `manager.accuracyAuthorization == .reducedAccuracy` 여부와 `CLLocation.horizontalAccuracy`를 전혀 확인하지 않습니다. 사용자가 권한 다이얼로그나 설정에서 '정확한 위치'를 끄면 iOS는 수 km 단위로 흐린 좌표를 줍니다. NearbySupplyEngine은 그 좌표를 기준으로 반경 1km 검색을 하고 'NNNm · 직선거리'를 정밀한 값처럼 표시합니다. 표본(입력) 품질이 부족한데 지표를 내는 셈이라 기획 원칙에 어긋납니다. Info.plist에는 `NSLocationTemporaryUsageDescriptionDictionary`도 없어서 일시적 정확도 요청도 할 수 없습니다.",
+   "failure_scenario": "'정확한 위치'를 끈 사용자가 코스 탭을 엽니다. 실제 위치에서 3km 떨어진 흐린 좌표를 기준으로 '편의점 120m'를 보여 주거나, 실제로는 근처에 있는 음수대를 '반경 1km 안에서는 보급 지점을 못 찾았어요'라고 안내합니다.",
+   "suggested_fix": "LocationProvider에서 accuracyAuthorization과 horizontalAccuracy를 State(예: `.located(coord, reduced: Bool)`)로 노출합니다. CourseScreen은 reduced이거나 horizontalAccuracy가 수백 m를 넘으면 주변 목록 대신 '정확한 위치를 켜 주세요' 안내를 보여 주고, `requestTemporaryFullAccuracyAuthorization(withPurposeKey:)`를 쓸 수 있게 project.yml의 info에 purpose 키를 추가합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "perf",
+   "file": "ios/RunWrap/CourseScreen.swift",
+   "line": 312,
+   "title": "코스 보급 매칭이 메인 스레드에서 O(bbox 안 POI × 세그먼트)로 돌고, 탭에 진입할 때마다 다시 계산한다",
+   "description": "`analyze()`는 View 메서드라 MainActor에서 동기로 CourseSupplyEngine.analyze를 호출합니다. 엔진은 bbox 안의 POI 하나마다 코스의 모든 세그먼트에 수선을 내립니다. 번들 POI는 실제로 96,225건이고(주석의 5.5만이 아님), 서울 도심 코스 bbox(37.45~37.62, 126.85~127.15)에만 12,321건이 있습니다. 워치 1초 기록 풀코스 GPX(약 12,000점)라면 1억 5천만 번 가까운 hypot 루프가 됩니다. `.task`가 탭이 나타날 때마다 다시 실행되면서 `analyze()`도 매번 다시 돌기 때문에 탭을 전환할 때마다 UI가 멈춥니다. GPX 파싱(XMLParser)과 `Data(contentsOf:)`도 메인 스레드에서 파일 전체를 읽으므로, 수십 MB짜리 파일이면 오래 멈추고 메모리도 크게 오릅니다.",
+   "failure_scenario": "서울마라톤 GPX(1초 기록 약 12k점)를 올린 사용자가 홈↔코스 탭을 오갈 때마다 코스 탭이 수 초 동안 응답하지 않습니다. 크게 멈추면 워치독 종료로 이어질 수 있습니다.",
+   "suggested_fix": "파싱과 분석을 `Task.detached`로 옮기고, 결과를 코스 데이터 단위로 캐시해 탭에 다시 들어올 때 재계산하지 않게 합니다. 코스 포인트를 10~20m 간격으로 솎아 내거나(Douglas-Peucker), POI를 격자 인덱스로 미리 나눠 세그먼트 주변 셀만 검사합니다. GPX 파일 크기에도 상한을 둡니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/CourseScreen.swift",
+   "line": 64,
+   "title": "코스 모드에서 잘못된 GPX를 올리면 오류 안내가 보이지 않는다 (조용한 실패)",
+   "description": "`notice` 카드는 `result == nil`인 분기(주변 모드)에서만 그려집니다. 코스가 이미 올라가 있는 상태에서 '다른 코스 올리기'로 웨이포인트만 있는 GPX, 읽기에 실패한 파일, 트랙이 없는 XML을 고르면 apply()나 fileImporter 핸들러가 `notice`만 설정하고 `result`는 이전 값 그대로 둡니다. 그래서 화면에 아무 변화가 없습니다. 사용자는 업로드가 된 건지 실패한 건지 알 수 없습니다.",
+   "failure_scenario": "코스 A가 표시된 상태에서 wpt만 있는 GPX를 선택하면 파일 선택기가 닫히고 코스 A가 그대로 남습니다. 안내 문구가 나오지 않습니다.",
+   "suggested_fix": "notice 카드를 result 분기 밖(헤더 바로 아래)으로 옮겨 두 모드 모두에서 보이게 합니다. 또는 코스 모드에서는 alert로 안내합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/CourseScreen.swift",
+   "line": 305,
+   "title": "복원된 코스 모드에서 500m 미만 GPX를 올리면 위치를 요청하지 않은 채 '위치 찾는 중' 스피너가 멈추지 않고, 기존 코스 파일도 덮어써진다",
+   "description": ".task에서 코스가 복원되면 `location.request()`를 건너뜁니다(`if result == nil`). 이 상태에서 짧은 GPX를 올리면 apply()가 먼저 파일을 LastCourse.gpx에 덮어쓰고 analyze()가 `result = nil`로 만듭니다. 화면은 주변 모드로 바뀌지만 location.state가 `.idle`이라 nearbySection이 locatingCard('지금 계신 곳을 찾고 있어요')를 계속 보여 줍니다. 위치를 요청하는 코드가 없어서 탭을 다시 들어가기 전까지 풀리지 않습니다. 새로고침 버튼은 지도 카드에만 있어서 누를 수도 없습니다. 이전의 유효한 코스는 이미 덮어써져 되돌릴 수 없습니다.",
+   "failure_scenario": "앱을 다시 실행해 코스 A가 복원된 뒤 300m짜리 GPX를 업로드하면, '분석을 접었어요' 카드 아래에서 스피너가 계속 돕니다. 다음 실행 때는 코스 A 대신 300m 파일이 복원되어 같은 안내가 반복됩니다.",
+   "suggested_fix": "분석 결과가 유효할 때만 파일과 lastCourseName을 저장하고 course 상태를 바꿉니다. 짧은 코스라면 이전 코스를 유지한 채 안내만 띄웁니다. 주변 모드로 넘어갈 때 location.state가 `.idle`이면 `location.request()`를 호출합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "availability",
+   "file": "ios/RunWrap/AirQualityClient.swift",
+   "line": 38,
+   "title": "대기질 조회는 재시도와 HTTP 상태 확인이 없다 — 이 게이트웨이는 SERVICETIMEOUT(504)이 잦다고 프로젝트 스스로 기록해 두었다",
+   "description": "tools/air-quality/fetch_stations.py에는 'data.go.kr 게이트웨이는 SERVICETIMEOUT(504)을 수시로 낸다 — 재시도로 넘긴다 (실측 절반가량 실패)'는 주석과 6회 재시도가 있습니다. 반면 같은 apis.data.go.kr 게이트웨이를 쓰는 앱 클라이언트는 한 번만 시도하고 실패하면 곧바로 unavailable로 처리합니다. 504나 XML 오류 본문은 JSON 디코드 실패로 흡수되어 원인도 구분되지 않습니다. 결과적으로 대기질 카드가 자주 표시되지 않을 가능성이 큽니다.",
+   "failure_scenario": "게이트웨이가 504를 돌려주면 TodayScreen과 HomeScreen 모두 대기질 카드가 빠집니다. HomeScreen은 `.idle` 가드 때문에 당겨서 새로고침하기 전까지 다시 시도하지 않습니다.",
+   "suggested_fix": "HTTPURLResponse 상태를 확인하고, 5xx나 타임아웃이면 1~2회 짧은 백오프로 재시도합니다(10초 상한 안에서). 한도 초과(22)처럼 재시도해도 소용없는 코드는 구분해 재시도하지 않습니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "availability",
+   "file": "ios/RunWrap/WeatherClient.swift",
+   "line": 25,
+   "title": "timeoutIntervalForRequest는 전체 상한이 아니라 무응답 간격 기준이어서 '10초로 묶는다'는 의도가 보장되지 않는다",
+   "description": "URLSessionConfiguration.timeoutIntervalForRequest는 데이터가 도착할 때마다 다시 시작되는 idle 타임아웃입니다. 전체 소요 시간 상한은 timeoutIntervalForResource(기본 7일)입니다. 느리게 조금씩 들어오는 네트워크(약한 셀 신호, 캡티브 포털)에서는 요청이 10초를 훨씬 넘길 수 있습니다. RootView에는 20초 안전망이 있지만 TodayScreen(시트)의 loadWeather에는 없어서 로딩 카드가 오래 떠 있을 수 있습니다. AirQualityClient도 같은 설정입니다.",
+   "failure_scenario": "약한 LTE에서 응답 바이트가 몇 초 간격으로 조금씩 들어오면 날씨 요청이 30초 이상 걸리고, 그동안 '오늘' 시트에는 로딩 카드만 보입니다.",
+   "suggested_fix": "`configuration.timeoutIntervalForResource = 10`(또는 15)을 함께 설정합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/AirQualityStore.swift",
+   "line": 55,
+   "title": "대기질 캐시 신선도를 측정 시각(dataTime)이 아니라 조회 시각으로 판정해 이전 시간대 값이 최대 1시간 더 남는다",
+   "description": "캐시 만료는 `fetchedAt`(기기에서 받은 시각) 기준 1시간입니다. 에어코리아 값은 정시 측정 후 10~20분 뒤에 공개됩니다. 예를 들어 14:55에 받은 응답(14:00 측정)은 15:55까지 그대로 쓰이므로, 15:15쯤 공개된 15:00 값을 40분 동안 반영하지 못합니다. 측정소 지연으로 13:00 값을 받은 경우에는 더 오래된 값이 '지금 공기'로 표시됩니다. 주석의 '정보 손실이 없다'는 주장과 다릅니다.",
+   "failure_scenario": "14:55에 '좋음'(14:00 측정)을 캐시했는데 15시에 황사가 유입돼 15:00 값이 '나쁨'이어도 15:55까지 '좋음'이 표시됩니다.",
+   "suggested_fix": "dataTime을 KST로 파싱해 '다음 정시 + 약 20분'을 만료 시각으로 삼거나, dataTime이 현재 시각보다 1시간 넘게 뒤처져 있으면 재조회합니다. 너무 오래된 dataTime(예: 3시간 이상)은 미노출 가드로 처리합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/TodayScreen.swift",
+   "line": 27,
+   "title": "위치 권한 거부 안내에 설정 바로가기가 없고, '오늘' 시트는 실제 표시 이름(런미새)과 다른 'RunWrap'으로 안내한다",
+   "description": "TodayScreen과 CourseScreen의 `.denied` 카드는 문구만 있고 `UIApplication.openSettingsURLString` 버튼이 없습니다. 설정 앱으로 가는 경로는 HomeScreen의 날씨 줄 탭 한 곳뿐입니다. TodayScreen 문구는 '설정 > RunWrap'인데 CFBundleDisplayName은 '런미새'여서 설정 앱에서 해당 항목을 찾을 수 없습니다. 위치 서비스가 시스템 전체에서 꺼져 있을 때도 authorizationStatus가 .denied로 오므로, '런미새를 켜 달라'는 안내만으로는 해결되지 않습니다.",
+   "failure_scenario": "위치를 거부한 사용자가 '오늘' 시트에서 안내를 보고 설정 앱에 들어가지만 'RunWrap' 항목이 없어 헤맵니다.",
+   "suggested_fix": "두 카드에 '설정 열기' 버튼(openURL(openSettingsURLString))을 추가하고, 문구의 앱 이름을 '런미새'로 고칩니다. 가능하면 `CLLocationManager.locationServicesEnabled()`로 시스템 전체가 꺼진 경우를 따로 안내합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/GPXParser.swift",
+   "line": 33,
+   "title": "GPX의 여러 trkseg/trk를 하나로 이어 붙여 끊긴 구간의 직선 점프가 누적 km와 보급 매칭에 들어간다",
+   "description": "Collector는 trkseg나 trk 경계를 구분하지 않고 모든 trkpt를 한 배열에 이어 붙입니다. 일시정지로 세그먼트가 나뉜 기록, 여러 트랙이 담긴 코스 파일(예: 1일차와 2일차, 본 코스와 대체 코스)에서는 세그먼트 끝과 다음 세그먼트 시작 사이의 직선이 코스로 취급됩니다. 그러면 누적 km(courseKm, totalKm)가 부풀고, 실제로 달리지 않는 직선 경로 근처의 POI가 '코스 N km 지점'으로 매칭됩니다.",
+   "failure_scenario": "한강 북단 루프와 남단 루프가 서로 다른 trk로 담긴 GPX를 올리면, 두 루프를 잇는 강 위 직선이 코스 거리에 더해지고 교량 근처 화장실이 코스상 지점으로 잘못 표시됩니다.",
+   "suggested_fix": "세그먼트 단위로 좌표를 모아 엔진이 세그먼트 사이 구간을 거리와 매칭에서 빼게 합니다. 최소한 첫 번째 trk만 쓰거나, 인접한 두 점 사이가 비정상적으로 멀면(예: 1km 이상) 끊긴 것으로 처리합니다.",
+   "finder": "network-location"
+  },
+  {
+   "severity": "high",
+   "category": "data-loss",
+   "file": "ios/RunWrap/OnboardingFlowScreen.swift",
+   "line": 179,
+   "title": "설정의 '다시 진단받기'를 하면 성장 사이클이 초기화됨(XP·새 단계가 알로 돌아감)",
+   "description": "재진단 여부를 `prefill != nil`로 판단한다. 그런데 SettingsScreen은 프리필 없이 `OnboardingFlowScreen(onFinish:)`만 띄운다. 프리필을 넘기지 않는 건 주석에 적힌 의도된 설계다. 그래서 재진단도 첫 온보딩과 똑같이 취급되어 cycleStartedAt=now, maxStage=egg, 새 cycleID가 저장된다. GrowthEngine은 XP를 원장 없이 cycleStartedAt 이후의 러닝으로만 계산하므로, 그동안 쌓은 성장이 사라진다. persist 주석('재진단이면 성장 사이클은 건드리지 않는다 — §5')과 정반대로 동작한다. persist 테스트도 없다.",
+   "failure_scenario": "두 달 달려서 새가 '청소년' 단계인 사용자가 설정 > 다시 진단받기에서 설문을 끝내고 '다음'을 누른다. cycleStartedAt이 오늘로 덮이고 maxStage가 egg가 된다. 홈의 새가 알로 돌아가고 XP는 0부터 다시 쌓인다. 새 cycleID로 CloudKit 스냅샷도 올라가서 복원으로도 되돌릴 수 없다.",
+   "suggested_fix": "재진단 여부를 prefill과 분리해 명시 파라미터로 받는다(예: `var isRediagnosis = false`, Settings에서 true). persist(isRediagnosis:) 동작을 확인하는 단위 테스트(UserDefaults(suiteName:) 주입)를 추가한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "medium",
+   "category": "availability",
+   "file": "ios/RunWrap/HealthStore.swift",
+   "line": 101,
+   "title": "HealthStore.load 실패 시 이미 로드된 데이터 화면이 오류 화면으로 통째로 바뀜",
+   "description": "load()는 이미 .loaded면 로딩 상태로 바꾸지 않을 만큼 기존 데이터를 지키려고 한다. 그런데 catch에서는 무조건 `.failed`로 덮는다. RootView는 health.state가 .failed면 MainTabs 대신 ContentUnavailableView를 그리므로, 당겨서 새로고침(Home/Stats/Report의 refreshable)이나 옵저버 재조회가 한 번 실패하면 탭·내비게이션 스택·보고 있던 데이터가 모두 사라진다.",
+   "failure_scenario": "기기 잠금 직후처럼 HealthKit 보호 데이터에 접근할 수 없는 시점(errorDatabaseInaccessible)에 백그라운드 옵저버가 load()를 호출하거나, 사용자가 리포트 탭에서 당겨서 새로고침한다. 멀쩡히 보이던 리포트가 '불러오지 못했어요' 전체 화면으로 바뀌고 탭 위치와 스택이 초기화된다.",
+   "suggested_fix": "기존 상태가 .loaded면 실패를 state에 반영하지 않는다. 필요하면 별도 `lastError`를 두어 토스트로만 알린다. `.failed`는 최초 로드 실패에만 쓴다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/ReportHomeScreen.swift",
+   "line": 434,
+   "title": "대회 D-day·예상 기록 섹션이 배터리 카드 안에 있어 수면 활력징후가 없으면 보이지 않음",
+   "description": "raceOutlookSection은 batteryCard 내부에서만 그려진다. batteryCard는 `if let battery, ReportGate.shows(.battery…)`일 때만 나온다. 수면 중 워치를 차지 않았거나 활력징후 기준선이 모자라 battery가 nil이면 batteryHintCard로 대체되는데, 여기에는 대회 섹션이 없다. 대회 목표를 입력한 사용자가 D-day와 예상 기록을 볼 방법이 없다.",
+   "failure_scenario": "밤에 워치를 충전하는 사용자(수면 HRV/RHR 없음)가 온보딩에서 풀코스 목표 4:30을 입력한다. 리포트 탭에 '배터리 안내' 카드만 나오고, 대회까지 남은 일수와 예상 완주 기록은 어디에도 표시되지 않는다.",
+   "suggested_fix": "raceOutlookSection을 배터리 카드에서 꺼내 독립 카드로 두거나 batteryHintCard에도 넣는다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/OnboardingFlowScreen.swift",
+   "line": 328,
+   "title": "Q7 종목을 바꾸면 Q8 휠에 이전 종목의 목표 기록이 그대로 남음",
+   "description": "apply(.target)는 '아직 없어요'(nil)일 때만 q8GoalSec을 지운다. GoalTimePage는 `initialSec ?? 프리셋`으로 초기값을 잡는다. 그래서 종목을 바꿔도 이전 종목의 초 값이 initialSec로 들어간다. `.id(distance)` 주석은 '휠 초기값이 새 종목 프리셋으로 다시 잡힌다'고 하지만 실제로는 이전 기록이 유지된다.",
+   "failure_scenario": "Q7 풀코스, Q8 sub-4:30(4:29) 확정, Q9에서 뒤로 두 번, Q7에서 5km를 선택한다. Q8 휠이 '4시간 29분', 페이스 '53′…″/km'로 뜬다. 무심코 '이 기록으로 할게요'를 누르면 5km 목표 4시간 29분이 raceGoalSec에 저장되고 대회 예측·가이드가 이 값을 쓴다.",
+   "suggested_fix": "apply(.target)에서 새 값이 이전 q7Target과 다르면 q8GoalSec = nil로 초기화한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/ReportHomeScreen.swift",
+   "line": 190,
+   "title": "런린이 레벨 게이트 구멍: distance 없이 ACWR/EF만 있으면 빈 리포트와 '자세히 보기'가 나오고, 상세에서는 숨긴 지표가 노출됨",
+   "description": "report.isEmpty는 distance, acwr, efficiency 셋이 모두 nil일 때만 true다. 런린이는 ACWR·EF 카드가 게이트로 숨겨지므로, distance가 nil이고(이전 7일 3km 미만) acwr나 efficiency만 있으면 어떤 지표 카드도 insufficientCard도 없이 '리포트 자세히 보기' 버튼만 나온다. 눌러 들어간 ReportDetailScreen은 레벨을 받지 않아 ACWR·EF 섹션을 그대로 보여준다. 또 `ReportGate.showsNumbers`(런린이 거리 카드는 문장만)는 어디서도 호출되지 않아 정책이 적용되지 않는다.",
+   "failure_scenario": "런린이가 3주 전부터 꾸준히 뛰다가 지난주(8~14일 전)에 2km만 달렸다. distance는 nil, acwr는 존재한다. 리포트 탭에 배터리/걷뛰 카드 다음 지표 영역이 비어 있고 '자세히 보기'만 있다. 상세에 들어가면 런린이에게 숨기기로 한 ACWR 게이지가 나온다.",
+   "suggested_fix": "레벨 게이트를 반영한 '보이는 카드 유무'로 insufficientCard와 링크 노출을 판정한다. ReportDetailScreen에 level을 넘겨 같은 ReportGate를 적용한다. 거리 카드에는 showsNumbers를 적용한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 741,
+   "title": "SF Symbol 'cloud.slash'가 존재하지 않아 날씨 실패 안내 아이콘이 빈칸으로 표시됨",
+   "description": "CoreGlyphs와 CoreGlyphsPrivate의 name_availability.plist 어디에도 'cloud.slash'가 없다(존재하는 것은 icloud.slash 등). Image(systemName:)은 없는 이름에 대해 빈 이미지를 그리고 콘솔 경고만 남긴다. TodayScreen.swift:47의 noticeCard도 같은 심볼을 쓴다.",
+   "failure_scenario": "비행기 모드에서 앱을 열면 WeatherStore가 unavailable이 된다. 홈 날씨 힌트 영역과 '오늘' 시트의 안내 카드에 아이콘 자리가 비어 레이아웃이 어색해진다.",
+   "suggested_fix": "iOS 17에 있는 심볼(예: `icloud.slash`, `cloud.fill` + `exclamationmark` 조합, `wifi.slash`)로 바꾼다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "perf",
+   "file": "ios/RunWrap/StatsScreen.swift",
+   "line": 240,
+   "title": "이번달 세션 목록이 행마다 전체 주간 리포트를 다시 계산함(대량 이력에서 스크롤 저하)",
+   "description": "NavigationLink(destination:)는 라벨을 만들 때 destination 클로저를 즉시 평가한다. 그래서 목록의 각 행에서 `weeklyContext(for: run)`이 호출되고, 매번 `ReportEngine().weeklyReport(from: runs)` 전체가 계산된다. 이 함수는 run 인자를 쓰지도 않아 모든 행이 같은 값을 반복 계산한다. weeklyReport 안의 distance 차트(기록 전체 주 수 × runs 필터)와 EF 차트(기록 전체 주 수 × runs 필터)는 O(W·N)이다.",
+   "failure_scenario": "5년 이력(약 1,500회, 260주)을 가진 사용자가 한 달에 25회를 달렸다. body가 평가될 때마다(월 전환, 새로고침) 약 25 × (260×1,500 ×2) 규모의 필터가 메인 스레드에서 돌아 월 이동과 스크롤이 버벅인다. GrowthScreen.swift:151/199도 같은 패턴이다.",
+   "suggested_fix": "body 상단에서 weeklyContext를 한 번 계산해 행에 전달한다. 또는 NavigationLink(value:)와 navigationDestination으로 지연 생성한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/OutfitRules.swift",
+   "line": 50,
+   "title": "날씨 비 판정 불일치: 러닝 이름은 WMO 코드로 '우중런'인데 복장·조언·홈 타일은 강수량 0이면 맑은 날로 처리",
+   "description": "WeatherAdviceRules.runName은 precipitationMm>0 또는 WMO 51–67/80–82 코드를 비로 본다. OutfitRules.items, WeatherAdviceRules.advice, TodayVerdictEngine의 raining은 precipitationMm>0만 본다. open-meteo 현재값은 이슬비·약한 소나기 코드인데 강수량이 0.0mm인 경우가 흔해서 한 화면 안에서 판정이 엇갈린다.",
+   "failure_scenario": "weatherCode=51(약한 이슬비), precipitationMm=0.0, UV 6. '오늘' 시트 제목은 '우중런'인데 복장 추천에는 방수 재킷 대신 선캡·선글라스·선크림이 나오고, 조언에 비 안내가 빠지며, 홈 타일에도 '비'가 표시되지 않는다.",
+   "suggested_fix": "`isRaining(code:precipitationMm:)` 헬퍼 하나를 WeatherAdviceRules에 두고 runName, advice, OutfitRules, TodayVerdictEngine이 공유한다. 뇌우(95–99)도 포함할지 함께 정한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 928,
+   "title": "승급 제안 문구의 '이번 주/지난주'가 달력 주가 아니라 경과 7일 단위로 계산됨",
+   "description": "iso8601 캘린더를 쓰지만 `dateComponents([.weekOfYear], from:to:)`는 두 날짜 사이의 완전한 7일 묶음 수를 돌려준다. 달력 주 경계를 비교하지 않는다. 그래서 지난주 화~일 세션을 월요일에 보면 0주 차이가 되어 '이번 주'로 표시된다.",
+   "failure_scenario": "일요일에 하프를 달리고 월요일에 홈을 연다. 승급 카드에 '이번 주 21.1km를 …에 달리셨더라고요'라고 나오는데, 그 세션은 지난주 기록이다.",
+   "suggested_fix": "두 날짜의 `dateInterval(of: .weekOfYear)` 시작일끼리 차이를 구해 달력 주 차이로 계산한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "ios/RunWrap/HomeBriefingEngine.swift",
+   "line": 70,
+   "title": "HomeBriefingEngine: ACWR가 낮아(<0.8) caution일 때도 '한 칸만 낮춰도 좋습니다'라며 줄이라고 안내함(현재 앱 미사용)",
+   "description": "ACWR tone은 ≥1.3~<1.5와 <0.8 두 구간이 모두 caution이다. overloadLine은 tone == .caution만 보고 '평소보다 N배 달리고 있어요… 낮춰도 좋습니다'를 낸다. 쉬어서 비율이 낮은 사용자에게 부하를 더 줄이라고 하는 셈이다. 이 가지가 우선순위 사다리 앞쪽이라 복귀 독려 문구도 가려진다. 현재 앱 코드에는 호출부가 없고 테스트만 있어서, 다시 연결하는 순간 드러날 잠복 버그다.",
+   "failure_scenario": "4주 꾸준히 달리다 7일을 쉰 사용자는 acute 0, ACWR 0.0으로 caution이다. 브리핑이 '평소보다 0.0배 달리고 있어요… 한 칸만 낮춰도 좋습니다'로 나온다.",
+   "suggested_fix": "`acwr.ratio >= 1.3` 조건을 추가하거나, 낮은 구간은 별도 문구(복귀 독려)로 분기한다. 사용 계획이 없으면 엔진과 테스트를 정리한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 117,
+   "title": "홈 onAppear 전용 검사(세러모니·PB 축하·최대 단계 동기화)가 새로고침이나 새 기록 반영 때 다시 돌지 않음",
+   "description": "syncMaxStage, 성조 세러모니, checkNewPBs가 content VStack의 onAppear에만 걸려 있다. 홈이 화면에 떠 있는 동안 refreshable이나 워크아웃 옵저버로 runs가 바뀌면 VStack은 다시 appear하지 않으므로 새 PB 축하나 성조 도달 세러모니가 다른 탭에 갔다 올 때까지 나오지 않는다.",
+   "failure_scenario": "러닝을 마치고 앱 홈에서 당겨서 새로고침을 한다. 5km PB와 성조 도달 조건이 충족됐는데 축하 시트와 세러모니가 뜨지 않는다. 설정 탭에 갔다 오면 그제서야 뜬다.",
+   "suggested_fix": "같은 로직을 `.onChange(of: runs.count)`나 `.task(id: runs.last?.id)`에도 연결한다(중복 표시는 기존 플래그로 막는다).",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "perf",
+   "file": "ios/RunWrap/TodayScreen.swift",
+   "line": 98,
+   "title": "'오늘' 시트가 WeatherStore와 별도로 위치·날씨를 다시 조회해 호출이 중복되고 값이 어긋날 수 있음",
+   "description": "TodayScreen은 자체 LocationProvider, AirQualityStore, WeatherClient로 조회한다. 앱 전역 WeatherStore도 같은 날씨를 가지고 있고 rescheduleHydration까지 호출한다(WeatherStore.swift:87). 시트를 열 때마다 GPS와 open-meteo 호출이 한 번 더 나가고, 시점 차이로 홈 타일과 시트의 기온·강수 값이 다를 수 있다. 주석('위치·날씨 조회가 이 탭에만 있어')은 현재 구조와 맞지 않는다.",
+   "failure_scenario": "홈 날씨 줄에 '23°'가 보여서 탭하면, 시트가 새로 조회한 '25°'와 다른 복장 추천을 보여준다. 수분 알람도 두 경로에서 연달아 재예약된다.",
+   "suggested_fix": "시트는 EnvironmentObject로 WeatherStore의 값을 쓰고, 새로고침만 WeatherStore.refresh에 위임한다. stale 주석도 고친다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "privacy",
+   "file": "ios/RunWrap/ShareCard.swift",
+   "line": 227,
+   "title": "스토리 카드가 정확한 경로 지도와 시작 시각을 기본으로 포함함(집 위치 노출 가능)",
+   "description": "ShareCardView는 MKMapSnapshotter로 실제 GPS 경로 전체를 그리고 시작 일시를 함께 넣는다. 공유 시트에는 경로를 끄거나 시작/끝 구간을 가리는 옵션이 없다. 대부분 집 앞에서 출발하는 러너가 SNS에 올리면 거주지가 드러난다(Strava의 Privacy Zone에 해당하는 기능이 없음).",
+   "failure_scenario": "매일 아파트 단지에서 출발·도착하는 사용자가 미니멀 카드를 인스타 스토리에 올린다. 지도 배경에 시작점과 끝점이 단지 입구로 정확히 찍혀 거주지를 특정할 수 있다.",
+   "suggested_fix": "공유 시트에 '경로 숨기기' 토글을 추가하거나, 시작·끝 200~500m를 잘라 그린다(privacy zone). 기본값은 사용자 선택으로 둔다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "crash",
+   "file": "ios/RunWrap/StatsScreen.swift",
+   "line": 19,
+   "title": "이번달 화면: 모든 기록이 미래 달에 있으면 months가 비어 인덱스 -1 크래시",
+   "description": "availableMonths는 현재 달부터 가장 오래된 기록의 달까지 거꾸로 센다. 가장 오래된 기록이 현재 달보다 미래이면(기기 시계를 과거로 돌림, 타 기기에서 미래 시각으로 저장된 워크아웃) 빈 배열을 돌려준다. `min(monthIndex, months.count - 1)`이 -1이 되어 months[-1]에 접근한다.",
+   "failure_scenario": "워크아웃 기록이 모두 2026-10 이후로 저장된 상태에서 기기 날짜를 2026-09로 되돌리고 리포트 > 이번달을 열면 Index out of range로 크래시한다.",
+   "suggested_fix": "availableMonths가 항상 최소 현재 달을 포함하게 하거나(cursor < first일 때 [현재 달] 반환), 화면에서 `guard !months.isEmpty`로 방어한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "ux-gap",
+   "file": "ios/RunWrap/RRCharts.swift",
+   "line": 81,
+   "title": "차트·아이콘 버튼의 VoiceOver 지원이 없음(탭 콜아웃은 제스처로만 접근 가능)",
+   "description": "WeeklyBarsChart, SplitBarsChart는 onTapGesture로만 값을 보여주고, TrendLineChart는 탭 좌표로 가장 가까운 점을 고른다. 모두 접근성 요소·라벨·조정 동작이 없어 VoiceOver 사용자는 주별 거리나 추세 값을 확인할 수 없다. AcwrGauge는 '0.5', '0.8–1.3 안전', '2.0'을 따로 읽는다. StatsScreen의 월 이동 버튼(chevron 아이콘만)도 라벨이 없어 '뒤로/앞으로'처럼 의미가 다르게 읽힌다. 담당 파일 중 accessibility 수식어는 RRCharts의 BatteryGauge, ReportHome 2곳, Home 1곳뿐이다.",
+   "failure_scenario": "VoiceOver를 켠 사용자가 리포트 거리 카드의 막대 차트에 초점을 옮기면 개별 숫자 텍스트만 읽히고 어느 주인지 연결되지 않는다. EF 추세 차트는 아예 초점이 가지 않는다.",
+   "suggested_fix": "막대마다 `.accessibilityElement(children: .ignore).accessibilityLabel(week.label).accessibilityValue(valueText(week.km))`를 단다. 라인 차트는 `accessibilityChartDescriptor`나 요약 라벨을 제공한다. 아이콘 버튼에는 '이전 달'/'다음 달' 라벨을 붙인다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "low",
+   "category": "config",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "line": 591,
+   "title": "색상 리터럴 `.white`/`.black` 사용(디자인 토큰 규칙 위반)",
+   "description": "프로젝트 규칙은 '색은 RR 토큰만'이다. 그런데 브랜드 채움 버튼의 글자색이 `.white`로 하드코딩되어 있다: HomeScreen 591(PB 축하)과 879(승급), ReportHomeScreen 202(자세히 보기), OnboardingFlowScreen PrimaryButton과 OptionButton 체크, SessionDetail 공유 버튼. 그림자도 `.black.opacity`다(Theme RRCardModifier, SessionDetail 카드 미리보기). 다크 모드에서 RR.brand가 밝아지면 대비가 떨어질 수 있고, 토큰으로 일괄 조정할 수 없다.",
+   "failure_scenario": "다크 모드용 RR.brand를 더 밝은 톤으로 조정하면 흰 글자와의 대비가 WCAG 4.5:1 아래로 떨어지는데, 토큰만 바꿔서는 버튼 글자색이 따라오지 않는다.",
+   "suggested_fix": "Theme.swift에 `RR.onBrand`(브랜드 위 글자), `RR.shadow` 토큰을 추가하고 리터럴을 치환한다.",
+   "finder": "ui-screens"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/RaceStore.swift",
+   "line": 36,
+   "title": "앱이 받는 원격 Races.json(main 브랜치)이 한 달 넘게 갱신되지 않음: 크롤러는 dev에만 커밋",
+   "description": "GitHub 저장소의 기본 브랜치는 dev다(gh api로 default_branch=dev 확인). 그래서 race-info.yml 스케줄 잡은 dev를 체크아웃하고 dev에 push한다. 그런데 앱의 RaceStore.remoteURL은 main 브랜치의 raw 파일을 가리킨다. main에는 릴리스 머지 때만 반영되므로, 매일 크롤한 결과가 사용자에게 가지 않는다. 오늘(2026-09-29) raw.githubusercontent의 main 파일을 직접 받아 보니 generatedAt이 2026-08-26T09:44이었다. origin/dev의 Races.json은 2026-09-29 커밋이다. store-listing.md 102행의 '매일 갱신합니다'라는 스토어 문구도 실제와 다르다.",
+   "failure_scenario": "9월에 새로 공지된 대회나 접수 기간이 바뀐 대회는 앱 대회 탭에 나오지 않는다. 8월 말 스냅샷에 있던 대회만 보이고, 날짜가 지난 대회가 빠지면서 목록이 점점 줄어든다. 다음 릴리스(dev→main 머지) 전까지 계속 그렇다.",
+   "suggested_fix": "두 가지 방법이 있다. (1) remoteURL을 크롤러가 실제로 커밋하는 브랜치로 바꾼다. 다만 dev의 스키마가 릴리스 앱보다 앞설 수 있으니 전용 `data` 브랜치를 두고 스키마 호환만 지키는 편이 안전하다. (2) race-info.yml이 main에도 Races.json을 push하게 한다. GITHUB_TOKEN으로 push하면 testflight 워크플로는 트리거되지 않는다. 어느 쪽이든 RaceStore.refresh에서 원격 generatedAt이 로컬보다 새것일 때만 교체하는 비교를 함께 넣는다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "tools/race-info/crawl.py",
+   "line": 288,
+   "title": "크롤러에 절대 건수 하한이 없음: 목록 페이지가 부분 응답이면 거의 빈 Races.json이 커밋·배포됨",
+   "description": "실패 판정은 '목록에서 찾은 id 대비 파싱 성공률 80%' 하나뿐이다. 목록 페이지(list.php)가 점검 중이거나 구조가 일부 바뀌어 id를 몇 개만 돌려주면, 그 몇 건을 100% 파싱해 성공 처리한다. 이어서 race-info.yml은 races 배열이 달라졌다며 커밋한다. 앱의 RaceStore.refresh()는 원격 파일을 generatedAt이나 건수 비교 없이 그대로 state와 캐시에 덮어쓴다. 같은 저장소의 fetch_stations.py는 MIN_STATIONS=400 하한을 두고 있는데 crawl.py에는 이 장치가 없다.",
+   "failure_scenario": "로드런 목록이 일시적으로 3건만 노출되는 경우: 3/3=100%로 성공 처리되고, 235건이던 Races.json이 3건으로 바뀌어 커밋된다. 앱은 원격 파일을 받는 순간 캐시까지 3건으로 덮어써서, 다음 크롤이 회복될 때까지 대회 탭이 사실상 빈다.",
+   "suggested_fix": "두 가지 하한을 추가한다. (1) crawl.py에 MIN_RACES(예: 100) 하한. (2) 직전 파일 대비 급감(예: 50% 미만) 시 실패 처리. 워크플로 비교 스크립트에서도 `len(new) < len(old) * 0.5`이면 커밋하지 않고 실패시킨다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "medium",
+   "category": "availability",
+   "file": ".github/workflows/testflight.yml",
+   "line": 62,
+   "title": "에어코리아 인증키가 IPA 번들에 평문으로 실리고, 키 하나의 일일 한도를 전체 사용자가 나눠 씀",
+   "description": "CI가 AIRKOREA_SERVICE_KEY 시크릿으로 AirQualityKey.json을 만들어 앱 번들 리소스로 넣는다. 배포된 앱을 풀면 누구나 키를 꺼낼 수 있다. 또 AirQualityStore 주석은 '1시간 캐시로 개발계정 트래픽 한도(500건/일) 안에 남는다'고 가정하지만, 캐시는 기기마다 따로 있고 한도는 키 단위라 모든 사용자가 합산된다. CLAUDE.md의 '이 앱은 API 키가 필요한 서비스를 쓰지 않는다'라는 전제와도 어긋난다.",
+   "failure_scenario": "활성 사용자 30명이 하루에 홈을 여러 번(서로 다른 시간대) 열면, 각 기기가 시간마다 1건씩 호출해 합계 500건/일을 넘긴다. 초과 이후 data.go.kr은 LIMITED_NUMBER_OF_SERVICE_REQUESTS 오류를 주고, 스토어는 unavailable로 접혀 그날 남은 시간 동안 모든 사용자의 대기질 카드가 사라진다. 키가 유출되면 제3자 호출만으로도 같은 일이 생긴다.",
+   "suggested_fix": "먼저 data.go.kr에 운영계정 전환(트래픽 증설)을 신청하고, 주석의 한도 가정을 '키 단위 합산'으로 고친다. 키 노출을 막으려면 중계 서버가 필요한데, 이는 온디바이스 원칙과 충돌하므로 사용자 결정이 필요하다. 한도 초과 오류 코드를 따로 감지해 당일 재호출을 멈추는 백오프도 고려한다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "medium",
+   "category": "privacy",
+   "file": "ios/project.yml",
+   "line": 53,
+   "title": "위치 권한 문구는 '전송하지 않는다'고 하지만, 날씨 조회는 좌표를 외부로 보냄",
+   "description": "NSLocationWhenInUseUsageDescription에 '위치는 기기 안에서만 쓰고 저장하거나 전송하지 않습니다'라고 적혀 있다. 하지만 WeatherClient.current는 위도·경도(소수 2자리, 약 1km)를 api.open-meteo.com 쿼리로 보낸다. 권한 시트 문구가 실제 동작과 다르면 App Review 5.1.1 정확성 요건에 어긋나고, 사용자에게 사실과 다른 고지가 된다.",
+   "failure_scenario": "사용자가 '전송하지 않는다'는 문구를 믿고 위치를 허용한다. 실제로는 대략 1km 정밀도의 좌표가 홈 진입마다 제3자(open-meteo)로 나간다. 심사자가 네트워크 트래픽을 확인하면 권한 문구 불일치로 리젝될 수 있다.",
+   "suggested_fix": "문구를 사실대로 고친다. 예: '날씨 조회에는 대략적인 좌표(약 1km)만 날씨 서비스로 보내며, 위치를 저장하지 않습니다.' 개인정보 처리방침과 PrivacyInfo 주석의 설명도 같은 내용으로 맞춘다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "config",
+   "file": "docs/appstore/review-notes.md",
+   "line": 57,
+   "title": "심사 노트의 '네트워크 호출은 정확히 두 개'가 현재 동작과 다름 (대기질·CloudKit·대회 이미지 호스트 누락)",
+   "description": "심사 노트는 외부 통신이 open-meteo와 GitHub raw 두 개뿐이라고 단언한다. 현재 앱은 여기에 더해 세 곳과 통신한다. (1) apis.data.go.kr(에어코리아, 측정소명과 인증키 전송), (2) CloudKit private DB(성장 진행도 백업, 이슈 #29), (3) 크롤러가 뽑은 임의의 대회 홈페이지 호스트(imageUrl을 AsyncImage로 로드, RaceListScreen/RaceDetailScreen). 54행의 'body mass only if the user picks a weight-related goal'도 HealthPermissions 주석('v0.7에서 몸무게는 아예 요청하지 않는다')과 어긋난다. CLAUDE.md의 '외부 통신은 날씨와 대회정보 둘뿐'이라는 규칙 문서도 같은 이유로 낡았다.",
+   "failure_scenario": "다음 버전 심사 때 이 노트를 그대로 붙여 넣는다. 심사자가 프록시로 data.go.kr, iCloud, 여러 대회 사이트로 나가는 트래픽을 보면 고지 불일치(2.3/5.1.1)로 리젝되거나 추가 질의를 받을 수 있다.",
+   "suggested_fix": "네트워크 목록을 실제대로 고친다. data.go.kr(측정소명만), iCloud 개인 DB(진행도 스냅샷, 건강 수치 없음), 대회 포스터 이미지(공개 URL, 사용자 데이터 없음)를 추가하고 body mass 문장은 삭제한다. store-listing의 개인정보 설문 근거와 CLAUDE.md의 외부 통신 규칙도 함께 갱신한다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "test-gap",
+   "file": ".github/workflows/testflight.yml",
+   "line": 24,
+   "title": "dev로 가는 PR과 push에 CI 테스트가 전혀 없음: 테스트는 main 릴리스 머지 때만 돎",
+   "description": "워크플로 4개 중 pull_request 트리거가 있는 것은 하나도 없다. xcodebuild test는 testflight.yml(push: main)에서만 실행된다. 작업 PR의 base는 dev이므로(메모리: PR base는 dev), dev에 들어가는 모든 변경은 CI 검증 없이 머지된다. race-info와 air-stations 봇도 JSON을 dev에 직접 커밋하는데, Swift 모델(RaceFile/AirStationFile)로 디코딩되는지 검사하지 않는다.",
+   "failure_scenario": "dev에 테스트를 깨는 변경이 머지된다. 몇 주 뒤 릴리스하려고 dev→main 머지를 하면 그제서야 testflight 잡이 테스트 단계에서 실패하고, 원인 커밋을 찾아 거슬러 올라가야 한다. 긴급 배포도 막힌다.",
+   "suggested_fix": "`on: pull_request: branches: [dev, main]`와 `push: branches: [dev]`로 xcodegen과 xcodebuild test만 도는 경량 CI 워크플로를 추가한다. 서명 없이 `CODE_SIGNING_ALLOWED=NO`로 돌린다. 크롤러 커밋 전에 Races.json의 필수 키(id/name/date) 스키마를 검사하는 단계도 넣는다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "medium",
+   "category": "bug",
+   "file": "ios/RunWrap/ReportMetrics.swift",
+   "line": 127,
+   "title": "ACWR 만성 부하가 기록 21~27일 구간에서 과소 추정돼 비율이 부풀려짐 (경계 테스트 없음)",
+   "description": "가드는 '가장 오래된 기록이 21일 이상 전'이다. 그런데 만성 부하는 항상 28일 합계를 4로 나눈다. 기록이 21~27일치뿐이면 분모가 실제 주평균보다 최대 25% 작아져 ACWR이 최대 1.33배 커진다. ReportEngine.swift:113과 BatteryEngine.swift:229에도 같은 식이 있다. 테스트(ReportEngineTests의 acwrNeedsThreeWeeksOfHistory, ReportMetricsTests:93)는 21일 미만이면 nil인지만 확인하고, 21~27일 구간의 값 정확성은 검증하지 않는다. 결과적으로 '틀린 인사이트는 없느니만 못하다' 원칙에 어긋난다.",
+   "failure_scenario": "앱을 쓴 지 정확히 3주 된 사용자가 매주 똑같이 15km씩 달렸다(3주 합 45km). acute는 15, chronic은 45/4=11.25로 ACWR 1.33이 되어 caution(부상 주의) 톤이 뜬다. 이번 주에 15% 늘려 17.25km를 달리면 1.53이 되어 overload('부상 위험') 경고가 나온다. 실제 주평균 15 기준으로는 1.0과 1.15, 즉 정상 범위다.",
+   "suggested_fix": "만성 분모를 실제 관측 기간으로 나눈다: `min(28, 가장 오래된 기록까지 일수) / 7`. 아니면 가드를 28일로 올린다. 심사 노트와 기획서는 이미 'ACWR은 4주 필요'라고 적고 있다. 세 엔진에 같이 적용하고, 21~27일 구간의 경계 테스트를 추가한다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "data-loss",
+   "file": "ios/RunWrap/ProgressBackupStore.swift",
+   "line": 146,
+   "title": "CloudKit 백업 실패가 전부 조용히 삼켜짐: 프로덕션 스키마 배포 절차가 문서 어디에도 없음",
+   "description": "ProgressSnapshot 레코드 타입은 개발 환경에서 첫 저장 때 JIT로 생긴다. TestFlight와 App Store 빌드는 CloudKit Production 환경을 쓰므로, CloudKit Console에서 'Deploy Schema Changes'를 하지 않았다면 save가 'Cannot create new type … in production schema' 오류로 계속 실패한다. backupIfChanged는 모든 오류를 catch 한 뒤 아무것도 남기지 않는다. 기능이 main(97047b9)으로 출시됐는데, docs와 코드 어디에도 스키마 배포 절차나 확인 기록이 없다. 콘솔 상태는 확인할 수 없어 가능성 수준으로 보고한다.",
+   "failure_scenario": "프로덕션 스키마를 배포하지 않은 상태에서 사용자가 앱을 삭제하고 다시 설치한다. 서버에 스냅샷이 한 번도 저장되지 않았으므로 복원할 것이 없고, 성장 단계와 도감이 초기화된다. 실패가 기록되지 않아 개발자도 모른다.",
+   "suggested_fix": "CloudKit Console에서 Production 스키마에 ProgressSnapshot 타입이 있는지 확인하고, 없으면 배포한다. 배포 절차를 docs(릴리스 체크리스트)에 명시한다. 설정 화면에 '마지막 백업 시각'을 보여 주는 등 실패가 드러나게 한다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "privacy",
+   "file": "ios/project.yml",
+   "line": 48,
+   "title": "건강 권한 문구가 실제 요청 항목(수면·손목 온도·호흡수·생년월일·경로 등)보다 좁음",
+   "description": "NSHealthShareUsageDescription은 '러닝(거리·시간·심박)'만 언급한다. 하지만 HealthPermissions.standard는 수면 분석, 수면 중 손목 온도, 호흡수, HRV, 안정 심박, 심박 회복, 생년월일(dateOfBirth), 운동 경로(workoutRoute), VO2max, 러닝 파워 등을 첫 연결에 한꺼번에 요청한다. 5.1.3은 건강 데이터 용도를 명확히 설명하라고 요구하므로, 문구가 요청 범위를 포괄하지 못하면 리젝 사유가 될 수 있다.",
+   "failure_scenario": "권한 시트에 수면, 손목 온도, 생년월일 항목이 뜨는데 설명은 '거리·시간·심박'뿐이다. 사용자는 의도를 이해하지 못해 거부하고, 체력 배터리가 표본 부족으로 사라진다. 심사자가 목적 설명 부족을 지적할 수도 있다.",
+   "suggested_fix": "문구에 회복 신호(수면·심박 변이·호흡수·손목 온도)와 심박 존 계산용 나이를 포함한다. 예: '러닝 기록(거리·심박·경로)과 회복 신호(수면·심박 변이 등)를 읽어 리포트와 체력 배터리를 만듭니다.'",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "bug",
+   "file": "tools/race-info/crawl.py",
+   "line": 285,
+   "title": "크롤러가 선택 필드(접수기간 등)의 전량 누락을 실패로 보지 않음",
+   "description": "필수 필드는 이름과 날짜뿐이다. registerStart/End, categories, homepage 같은 선택 필드는 라벨 정규식이 안 맞으면 조용히 빠진다. 누락 건수를 stderr에 찍기는 하지만 종료 코드에는 반영하지 않는다. 사이트가 '접수기간' 라벨이나 셀 색(bgcolor=white)을 바꾸면 성공률 100%인 채로 모든 대회의 접수 정보가 사라진 파일이 커밋된다. 앱의 RaceEngine은 접수기간이 없으면 status를 nil로 두므로, 접수중·접수예정 필터가 전부 빈 결과가 된다.",
+   "failure_scenario": "로드런이 값 셀의 bgcolor를 #FFFFFF로 바꾸면 field()가 모든 라벨에서 None을 돌려준다. 그런데 대회명과 대회일시도 같은 함수를 쓰므로 이 경우는 탈락률로 잡힌다. 반면 접수기간 라벨 하나만 '접수 기간'으로 바뀌면 235/235 성공인데 registerStart/End가 0건이 되고, 그대로 배포된다.",
+   "suggested_fix": "핵심 선택 필드(registerEnd, categories)의 누락률이 임계값(예: 90%)을 넘으면 exit 1로 실패시킨다. parse_detail에 대한 HTML 픽스처 기반 pytest도 추가한다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "test-gap",
+   "file": "ios/RunWrapTests/BatteryEngineTests.swift",
+   "line": 51,
+   "title": "BatteryEngine의 ACWR 표본 가드(3주 미만·주평균 3km 미만)가 테스트되지 않음",
+   "description": "CLAUDE.md는 엔진을 반드시 테스트하고 미노출 가드부터 정하라고 한다. BatteryEngine.acwr에는 가드가 두 개 있다(가장 오래된 기록이 21일 이상 전인지, chronic이 3 이상인지). 그러나 테스트는 가드를 통과해 -8점이 붙는 긍정 경로(poorVitalsAndTrainingDrainToZero) 하나뿐이다. 기록이 짧거나 부하가 낮을 때 '훈련 부하' 팩터가 빠지는지는 검증하지 않는다. 가드가 회귀해도 테스트가 잡지 못한다.",
+   "failure_scenario": "누군가 가드를 14일로 바꾸거나 실수로 지워도 테스트 스위트는 통과한다. 그러면 가입 2주차 사용자의 배터리에 과장된 '훈련 부하' 감점이 붙는다.",
+   "suggested_fix": "두 테스트를 추가한다. 기록이 20일치뿐일 때, 그리고 4주 합계가 10km(chronic 2.5)일 때 factors에 '훈련 부하'가 없음을 확인한다. 위 ACWR 분모 문제를 고칠 때 21~27일 경계 값 테스트도 같이 넣는다.",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "availability",
+   "file": ".github/workflows/race-info.yml",
+   "line": 43,
+   "title": "race-info 커밋이 rebase 없이 push돼, 40분 크롤 중 dev가 움직이면 그날 갱신이 유실됨",
+   "description": "최근 스케줄 실행은 한 번에 약 35~45분 걸린다(2026-09-24~29 run_started_at과 updated_at 비교). 이 동안 PR이 dev에 머지되면, 크롤 시작 시점 HEAD 위에 만든 커밋의 `git push`가 non-fast-forward로 거부되고 잡이 실패한다. 재시도 로직이 없다.",
+   "failure_scenario": "05시(실제 실행은 GitHub 지연으로 07~09시 KST) 크롤 도중 개발자가 dev에 PR을 머지한다. push가 거부되어 그날 대회정보가 갱신되지 않고, 잡은 크롤 실패처럼 빨간불로 떠서 사이트 개편 경보와 구분되지 않는다.",
+   "suggested_fix": "push 전에 `git pull --rebase origin dev`를 하고 실패 시 몇 번 재시도하는 루프를 넣는다. 또는 전용 data 브랜치에 커밋해 경합 자체를 없앤다(1번 finding의 수정과 함께).",
+   "finder": "config-ci-tests"
+  },
+  {
+   "severity": "low",
+   "category": "config",
+   "file": ".github/workflows/testflight.yml",
+   "line": 70,
+   "title": "CI가 xcodegen을 버전 고정 없이 brew 최신으로 설치",
+   "description": "pbxproj는 gitignore 대상인 생성물이라 모든 CI 빌드가 xcodegen generate에 의존한다(로컬 2.45.4로 생성한 pbxproj가 소스 전체와 일치하는 것은 확인했다). 그런데 CI는 `brew install xcodegen`으로 그날의 최신판을 받는다. xcodegen 메이저·마이너 업데이트로 기본 동작이 바뀌면(리소스 자동 분류, xcprivacy 처리 등) 로컬과 다른 프로젝트가 생성되어 릴리스 빌드만 깨지거나 리소스가 빠질 수 있다.",
+   "failure_scenario": "새 xcodegen이 .xcprivacy나 .json 같은 파일 타입의 기본 buildPhase를 바꾼다. 그러면 CI 산출 IPA에서 PrivacyInfo.xcprivacy나 Races.json이 빠지는데, 로컬에서는 재현되지 않는다.",
+   "suggested_fix": "`mint install yonaskolb/XcodeGen@2.45.4`나 릴리스 zip 다운로드로 버전을 고정하고, 로컬 권장 버전을 CLAUDE.md에 적는다.",
+   "finder": "config-ci-tests"
+  }
+ ],
+ "rejected": [
+  {
+   "title": "ACWR 표본 가드가 '가장 오래된 러닝'만 봐서 만성 부하 창이 비어 있어도 통과한다",
+   "file": "ios/RunWrap/ReportEngine.swift",
+   "finder": "report-engine",
+   "why": [
+    "인용된 코드 자체는 실제로 있다. ReportEngine.swift 108~114행, ReportMetrics.acwrCard 124~127행, BatteryEngine.acwr 220~233행이 모두 `oldest <= now-21d`로 가드하고, 분모는 `28일 합 / 4`다. HealthStore는 `HKObjectQueryNoLimit`로 전체 이력을 가져오므로 400일 전 러닝도 runs에 들어간다. 시나리오의 산술도 맞다. acute=20, chronic=10, ratio=2.0으로 overload가 되고, 배터리 감점은 min(15, round(0.7×25))=-15다. TrainingGuideEngine.guide(543행)에도 같은 가드가 있다.\n\n그러나 이것을 '버그'로 보기는 어렵다.\n\n(1) 주석은 '기록이 3주 미만이면'이다. 가드는 이것을 문자 그대로 구현하고 있다. 전체 기록의 시작이 21일 이전인지를 보기 때문에 주석과 코드가 어긋나지 않는다. 이 가드의 목적은 앱을 막 쓰기 시작해 '데이터가 없는 것'과 '실제로 쉰 것'을 구분하지 못하는 경우를 막는 것이다. 몇 달 전 기록이 있다면 그 사이 공백은 휴식으로 보는 편이 합리적이다.\n\n(2) 롤링 ACWR(Gabbett 2016)의 정의에서는 쉰 날도 0으로 만성 창에 들어간다. 장기 휴식 뒤 2주 만에 주 20km로 올린 러너에게 ACWR 2.0을 경고하는 것은 과장이 아니다. 이 지표가 잡아내려는 전형적인 부상 위험 패턴(복귀 직후 급증)이다. 따라서 시나리오의 결과는 의도된 올바른 출력이다.\n\n(3) 제안된 수정(28일 창 안의 첫 러닝이 21일 이상 전이어야 통과)은 오히려 해롭다. 휴식 후 복귀하는 러너의 3주 동안 부상 위험 경고와 배터리 감점이 모두 사라진다. 새 사용자만 nil이 되는 '불일치'도 데이터 유무의 모호성을 반영한 의도된 차이다.\n\n남는 우려는 하나다. 과거에 HealthKit에 기록하지 않는 기기나 앱을 쓰다가 넘어온 사용자라면, 공백이 휴식이 아니라 데이터 누락일 수 있다. 이것은 설계 한계에 해당하는 엣지 케이스이고 논리 오류는 아니다. 그래서 severity는 low가 적절하다.",
+    "산술은 맞다. ReportEngine.swift:110과 ReportMetrics.swift:125, BatteryEngine.swift:221의 가드는 전체 기록 중 가장 오래된 러닝(HealthStore.swift:83에서 HKObjectQueryNoLimit로 전부 가져옴)이 21일 전보다 앞서는지만 본다. 시나리오대로 400일 전 러닝 1회에 최근 1·4·8·11일 전 10km씩이면 acute=20, chronic=40/4=10, ratio=2.0이 나오고, 배터리 감점은 min(15, round(0.7×25)=18) = -15다. 여기까지 코드 경로는 재현된다.\n\n그런데 이것을 버그로 보는 전제가 틀렸다.\n(1) 주석 '기록이 3주 미만이면'과 기획서(runwrap-plan-v0.1 §383 '기록 3주 미만', v0.7 §195 '4주치 기록이 없으면')가 말하는 것은 '이력의 길이'다. 신규 사용자는 앱 이전 부하를 알 수 없으니 없는 데이터가 0으로 잡혀 분모가 과소평가된다. 가드가 막으려는 것은 이 경우다. 400일 전부터 이력이 있는 사용자라면 최근 15~28일에 기록이 없는 것은 실제로 쉬었다는 뜻이다. 그러니 chronic=10km/주는 과장이 아니라 실제 값이다.\n(2) 표준 rolling ACWR(Gabbett 2016)에서 2주를 쉰 뒤 주 20km로 복귀하면 급성:만성 2.0이 되고, 이것은 부상 위험 스파이크의 전형이다. 경고가 뜨는 것이 올바른 동작이다. 옛 러닝이 없는 사용자는 nil이 되는데, 이것도 '모르는 것과 0은 다르다'는 의도된 구분이라 판정이 일관되지 않다고 보기 어렵다.\n(3) 제안된 수정(28일 창 안의 첫 러닝이 21일 이상 전이어야 통과)을 적용하면 휴식 뒤 복귀하는 러너의 스파이크 경고를 오히려 숨기게 된다. ACWR이 가장 쓸모 있는 상황에서 지표를 끄는 셈이라 제품 영향이 역방향이다.\n\n남는 문제는 이력이 22~27일인 경우다. 이때는 이력 이전 며칠이 0으로 잡혀 chronic이 최대 약 21%(6/28) 과소평가된다. 다만 21일 임계는 설계상 선택한 값이고 영향도 미미하다. 이것만으로는 medium 버그라고 볼 수 없다. 핵심 주장(만성 창이 비어 있어도 통과하므로 비율이 부풀려진다)은 반박된다.",
+    "코드 경로와 산술은 finding대로 맞다. ReportEngine.swift:108-114, ReportMetrics.swift:124-128, BatteryEngine.swift:220-231의 세 곳이 모두 `runs.map(\\.start).min() <= now-21d`만 확인한다. HealthStore.load가 HKObjectQueryNoLimit로 전체 러닝을 넘기므로 400일 전 러닝도 가드에 들어간다. 시나리오대로면 acute=20, chronic=40/4=10, ratio=2.0이다. 배터리 감점은 (2.0-1.3)*25=17.5인데 min(15)에 걸려 -15가 된다.\n\n그래도 이것을 '비율이 부풀려지는 버그'로 보기는 어렵다.\n(1) 주석이 말하는 의도는 '기록이 3주 미만'이다. 즉 앱이 보는 이력의 총 길이가 짧으면, 쉬었는지 기록이 없는지 구분할 수 없어 판단을 보류한다는 뜻이다. 가드는 이 의도를 그대로 구현한다. 만성 창 안에 러닝이 있어야 한다는 요구는 finding이 새로 끼워 넣은 해석이다.\n(2) Gabbett식 rolling ACWR에서는 기록이 있는 사용자의 무부하 주가 실제 0 부하로 들어가는 것이 정의상 맞다. 긴 공백 뒤 2주 만에 주 0km에서 20km로 늘린 러너는 탈훈련 상태에서 부하가 급증한 경우다. ACWR이 '부상 위험 구간'으로 경고해야 하는 바로 그 대상이다. 그러니 ratio 2.0은 과장이 아니라 의미 있는 신호다.\n(3) 옛 기록이 없는 신규 사용자를 nil로 두는 것은 판정이 흔들리는 게 아니다. 데이터 부재와 휴식을 구분할 수 없을 때만 보류하는 일관된 정책이다. 옛 러닝이 있으면 워치로 기록해 온 이력이 있다는 뜻이라, 공백을 실제 휴식으로 보는 편이 타당하다.\n\n남는 진짜 문제는 finding이 곁들인 '이력 22~27일 구간'뿐이다. 여기서는 28일 합을 4로 나누므로 분모가 최대 22/28 수준으로 과소평가되고, 비율은 최대 약 1.27배 커진다. 다만 신규 사용자가 약 1주 동안만 겪는 과도기이고, 경고 구간이 한 칸 올라가는 정도다. 따라서 medium은 과장이다. '버그'로서의 핵심 주장은 반박되고, 남는 부분 창 문제만 low로 본다."
+   ]
+  },
+  {
+   "title": "주법 카드의 케이던스를 세션과 기준선이 서로 다른 산식으로 계산해 거짓 '보폭' 조언이 나올 수 있다",
+   "file": "ios/RunWrap/WorkoutDetailStore.swift",
+   "finder": "session-engines",
+   "why": [
+    "코드 경로 자체는 사실이다. WorkoutDetailStore.swift:113-118은 다이내믹스가 있으면 세션 케이던스를 `(meters / duration) / 평균 stride * 60`으로 구하고, 기준선(fetchFormSnapshots:144)은 HealthStore.cadenceSpm(of:)가 백필한 '걸음 수 ÷ 분' 값을 쓴다. SessionDetailScreen.swift:399는 `detail.cadenceSpm ?? run.cadenceSpm` 순서로 세션 값을 먼저 쓴다. 그러니 서로 다른 산식을 비교한다는 지적은 맞다.\n\n하지만 '거짓 보폭 조언이 뜬다'는 핵심 메커니즘은 수학적으로 틀렸다. 구간 i마다 시간 t_i, 케이던스 c_i, 보폭 s_i가 있다고 하자. 그러면 거리 D=Σt_i·c_i·s_i이고, 보폭 샘플이 시간상 고르게 찍힌다면 average()가 내는 평균 보폭은 Σt_i·s_i/T다. 따라서 속도÷평균보폭 = Σt_i·c_i·s_i / Σt_i·s_i, 즉 보폭 가중 평균 케이던스가 된다. 걸음 수 방식은 Σt_i·c_i/T, 즉 시간 가중 평균이다. 제시된 시나리오처럼 케이던스가 일정하고 보폭만 0.9~1.4m로 바뀌면 두 값은 정확히 같다(=c). 'Jensen 때문에 계통적으로 낮다'는 주장은 성립하지 않는다.\n\n두 값이 달라지는 건 케이던스와 보폭이 함께 움직일 때뿐이다. 인터벌처럼 빠를수록 보폭과 케이던스가 같이 오르는 흔한 경우에는 보폭 가중 평균이 더 크다. 즉 세션 값이 기준선보다 높게 나온다. FormEngine.advice의 케이던스 조언은 `cadence < base * 0.95`, 곧 낮을 때만 켜지므로, 이 편향은 거짓 조언을 만드는 쪽이 아니라 조언을 덜 띄우는 쪽이다.\n\n'172 대 162, −5.3%' 시나리오는 근거 없는 수치다. GPS 거리와 가속도계 보폭 간 보정 차이도 가능성으로만 남는다. 애플 보폭은 GPS로 보정되고, 그 차이가 몇 %인지도 입증되지 않았다.\n\n남는 문제는 두 가지다. 상단 그리드 케이던스와 통계·홈 추이(run.cadenceSpm)가 약간 다를 수 있다는 점, 그리고 같은 산식끼리 비교하는 편이 더 깔끔하다는 설계상 일관성이다. 둘 다 사용자 영향이 작은 low 수준의 개선 사항이다. 주장된 버그의 발생 경로와 방향이 틀렸으므로 반박한다.",
+    "코드 쪽 사실은 finding 설명과 맞다. WorkoutDetailStore.swift:113-118을 보면 보폭 샘플이 있을 때 세션 케이던스를 `(meters / workout.duration) / stride * 60`로 구하고, 이때 stride는 `average()`가 낸 샘플 단순평균이다. 기준선(fetchFormSnapshots:144)은 HealthStore.cadenceSpm(of:)가 백필한 '걸음 수 ÷ 분'을 쓴다. formCard(SessionDetailScreen.swift:399)는 `detail.cadenceSpm ?? run.cadenceSpm` 순서로 세션 값을 고르고, FormEngine.swift:83-84는 5% 임계로 조언을 켠다. 즉 산식이 서로 다른 것은 사실이다.\n\n하지만 failure_scenario가 내세우는 메커니즘은 재현되지 않는다. 핵심 근거인 'Jensen 부등식 때문에 속도/평균보폭 방식이 계통적으로 낮게 나온다'는 틀렸다. meters/duration은 시간 평균 속도이고, 보폭 샘플이 시간상 고르게 찍힌다면 stride 평균도 시간 평균이다. 케이던스가 c로 일정하면 v_i = c·s_i이므로 mean(v)/mean(s) = c가 되어 걸음 수 방식과 정확히 같다. 보폭이 0.9~1.4m로 바뀌어도 케이던스가 같다면 편향이 생기지 않는다. 조화평균과 산술평균의 차이는 거리 가중 평균에서 나오는 이야기이고, 이 산식에는 해당하지 않는다.\n\n그러면 편향은 케이던스 자체가 속도와 상관관계를 갖고 변할 때나 샘플 간격이 고르지 않을 때만 생긴다. 이 경우 크기는 보통 1~2% 수준이고 방향도 일정하지 않다. 예를 들어 걷기 휴식 구간이 섞이면 짧은 보폭 샘플 때문에 평균 보폭이 줄어 케이던스가 오히려 높게 나온다. 시나리오의 '172 대 162(−6%)' 같은 차이는 코드로 뒷받침되지 않는다. 또 애플워치의 runningStrideLength는 같은 센서 체계(GPS 보정 거리 ÷ 걸음)에서 나오는 값으로 보여, 'GPS 거리와 가속도계 보폭의 보정 차이'라는 주장도 실기기 근거 없는 추측이다.\n\n정리하면 산식 불일치는 일관성 측면의 코드 냄새로서 정리할 가치가 있다. `run.cadenceSpm ?? detail.cadenceSpm` 순서로 바꾸면 상단 그리드·통계와의 표시 불일치도 줄어든다. 다만 거짓 '보폭' 조언이 실제로 뜬다는 재현 경로는 성립하지 않아 finding 자체는 반박한다. 남는다 해도 심각도는 low가 맞다."
+   ]
+  },
+  {
+   "title": "재설치·기기 이전 때 복원되지 않는 사용자 데이터: 직접 입력한 대회 기록, 설문 원답, 승급 거절 시각",
+   "file": "ios/RunWrap/ProgressSnapshot.swift",
+   "finder": "growth-gamification",
+   "why": [
+    "코드를 따라가 보면 사실관계 일부는 맞다. `ProgressSnapshot`(ProgressSnapshot.swift:10~31)에는 대회 기록 필드가 없고, `RaceRecordCache.save`(RaceRecordStore.swift:27)는 `isExcludedFromBackup`을 설정한다. 그래서 재설치하거나 기기를 옮기면 직접 입력한 대회 기록은 0건이 된다. 그런데 이 finding을 결함으로 보는 근거는 무너진다.\n\n(1) 의도된 설계다. RaceRecordStore.swift:19~21의 doc comment에 \"사용자가 직접 입력한 소량 데이터라 잃어도 다시 입력할 수 있고, 운동 기록이라 iCloud에 두지 않는 쪽이 심사 지침 5.1.3(ii)에 안전하다\"라고 적혀 있다. 백업 제외와 CloudKit 제외는 문서화된 트레이드오프이지 빠뜨린 것이 아니다.\n\n(2) suggested_fix가 오히려 위험하다. 대회 완주 기록을 CloudKit 스냅샷에 넣으라는 제안은 개인 건강·피트니스 정보를 iCloud에 저장하지 말라는 5.1.3(ii)와 충돌한다. 저장소가 일부러 피한 심사 리스크를 되살리게 된다.\n\n(3) 나머지 두 항목은 기기 이전 시나리오에서 틀렸다. `OnboardingAnswersStore.save`(OnboardingAnswers.swift:134~138)는 백업 제외를 설정하지 않는다. `promotionDeclinedAt`(HomeScreen.swift:30)은 `@AppStorage`, 즉 UserDefaults에 있다. 둘 다 iCloud/기기 백업으로 이전된다. 잃는 경우는 삭제 후 재설치뿐이다. 잃었을 때의 영향도 미미하다. 재진단 프리필이 비고, 승급 제안이 4주 쿨다운 없이 한 번 더 뜨는 정도다.\n\n(4) 실제 영향이 제한적이다. 대회 기록을 잃어도 예측은 #35 이전의 HealthKit 표본 기반 동작으로 돌아갈 뿐이다. 크래시나 잘못된 값이 생기지 않고, 설정에서 몇 건을 다시 입력하면 복구된다.\n\n정리하면, 재설치나 기기 이전 때 수동 입력 대회 기록이 사라지는 현상은 재현된다. 다만 이는 문서화된 의도적 선택이고, 기껏해야 UX 개선 제안(재입력 안내 등) 수준이다. medium 데이터 손실 버그로 분류하는 것은 과장이며 severity는 low가 맞다.",
+    "사실관계 일부는 맞다. ProgressSnapshot(ProgressSnapshot.swift:10~31)에는 대회 기록이 없고, RaceRecordCache.save(RaceRecordStore.swift:27)는 isExcludedFromBackup을 건다. 그래서 재설치나 백업 기반 기기 이전 뒤에는 직접 입력한 대회 기록이 0건이 된다. 그래도 data-loss 결함(medium)으로 보기는 어렵다. 근거는 네 가지다.\n(1) 의도된 설계이고 문서에 적혀 있다. RaceRecordStore.swift:17~19 주석에 \"사용자가 직접 입력한 소량 데이터라 잃어도 다시 입력할 수 있고, 운동 기록이라 iCloud에 두지 않는 쪽이 심사 지침 5.1.3(ii)에 안전하다\"고 명시돼 있다. docs/appstore/review-notes.md에도 5.1.3 대응 절이 있다. 제안된 수정(raceRecords를 CloudKit 스냅샷에 넣기)은 이 정책 판단을 정면으로 뒤집는다. 버그 수정이 아니라 정책 변경이다.\n(2) 나머지 두 항목은 '기기 이전' 주장이 틀렸다. OnboardingAnswersStore.save(OnboardingAnswers.swift:134)는 백업 제외를 걸지 않는다. promotionDeclinedAt은 @AppStorage, 곧 UserDefaults라 기기 백업에 포함된다. 따라서 둘 다 백업·기기 이전 때 복원되고, 사라지는 경우는 삭제 후 재설치뿐이다.\n(3) 사라져도 영향이 작다. 온보딩 원답은 재진단 프리필에만 쓰인다. promotionDeclinedAt이 사라지면 4주 억제가 풀려 승급 제안 카드가 한 번 더 뜰 수 있을 뿐이다(HomeScreen.swift:446~449).\n(4) 대회 기록도 소량(몇 건)이다. 사용자가 다시 입력하면 곧바로 회복되고, HealthKit 훈련 데이터로 하는 기본 예측은 그대로 동작한다. 이슈 #35는 최근 머지된 기능이라 기록을 입력해 둔 사용자도 아직 적다.\n정리하면 복원 범위의 한계를 다룬 제품 개선 제안으로는 의미가 있다. 하지만 '버그·데이터 손실 medium'이라는 규정과 기기 이전에 관한 일부 주장은 과장이다. 굳이 남긴다면 severity는 low가 맞다."
+   ]
+  },
+  {
+   "title": "세러모니에서 새 목표를 고르면 이전 대회 날짜가 새 종목에 그대로 붙음",
+   "file": "ios/RunWrap/CeremonyScreen.swift",
+   "finder": "growth-gamification",
+   "why": [
+    "finding에 적힌 failure_scenario는 코드상 재현되지 않는다.\n1) 하프에서 풀로 넘어가는 경우: CeremonyScreen.onAppear가 CollectionEngine.recommendedGoal(after: .half)를 부르는데, 이 값은 (.full, 0)이다. goalOption도 풀→풀일 때만 초를 넘기므로(`(distance == .full && pickedDistance == .full) ? pickedSeconds : 0`) 이 경우 raceGoalSec는 0으로 저장된다. 그런데 RaceOutlookEngine.status의 첫 가드가 `guard let race, goalSec > 0, let raceDate else { return .notConfigured }`라서, 결과는 '대회 종료'가 아니라 notConfigured 안내('설정에서 대회 목표(레이스·기록·날짜)를 정하면…')가 된다. finding이 말한 '풀코스 대회 종료 카드'는 뜨지 않는다.\n2) '날짜를 새로 넣으라는 안내도 없다'는 주장도 사실과 다르다. raceFinished 상태가 나오는 경우(풀→풀, sub-4 추천처럼 goalSec > 0이면서 지난 날짜)에는 ReportHomeScreen이 '\\(race.label) 대회 날짜가 지났어요 — 설정에서 다음 대회 목표를 정해 주세요'라고 분명히 안내한다. 게다가 날짜가 지났다는 판정 자체는 맞다. 세러모니가 없어도 지난 날짜면 똑같이 뜨는 정상 동작이다.\n3) TrainingGuideEngine.guide는 지난 날짜면 phase(daysToRace:)가 nil을 돌려주므로 기본 점증 처방으로 떨어진다. 잘못된 주기화는 일어나지 않는다.\n남는 실제 문제는 좁다. 성조 도달(대회일과 무관)이 아직 오지 않은 미래 대회일보다 먼저 일어나고 사용자가 다른 종목을 고른 경우다. 이때만 옛 날짜가 새 종목의 테이퍼/피크 단계 계산에 쓰인다. 이 경우에도 설정 화면에서 날짜가 그대로 보이고 바로 고칠 수 있다. 대표 시나리오가 틀렸고 영향은 이 드문 경우로 한정되므로 반박으로 판정하고, severity는 low로 유지한다.",
+    "finding의 핵심 failure_scenario(하프를 성조까지 키운 뒤 '풀'을 고르면 풀코스 '대회 종료' 카드가 뜬다)는 코드상 일어나지 않는다.\n(1) 하프 다음 추천 목표는 CollectionEngine.recommendedGoal(after: .half)가 돌려주는 `(.full, 0)`이다. CeremonyScreen.goalOption도 `seconds = (distance == .full && pickedDistance == .full) ? pickedSeconds : 0`이라서, 종목이 바뀌는 경우에는 사실상 항상 goalSeconds 0이 넘어간다. 세러모니는 기록 목표를 받지 않는다고 주석에 적혀 있다.\n(2) HomeScreen.startNewCycle은 `raceGoalSec = goalSeconds`로 목표 기록을 0으로 초기화한다.\n(3) RaceOutlookEngine.status는 첫 가드 `guard let race, goalSec > 0, let raceDate else { return .notConfigured }`에서 먼저 빠진다. 그래서 raceFinished까지 가지 않고, '설정에서 대회 목표(레이스·기록·날짜)를 정하면…' 안내가 나온다. '날짜를 새로 넣으라는 안내도 없다'는 주장도 틀렸다.\nraceFinished가 뜨는 경우는 풀→풀처럼 종목이 그대로이고 기록 목표도 0보다 큰 경우뿐이다. 이때 옛 날짜는 실제로 같은 종목의 날짜이므로, '풀코스 대회 날짜가 지났어요 — 설정에서 다음 대회 목표를 정해 주세요'는 정확한 안내다.\n남는 문제는 하나다. 성조가 대회 전에 먼저 오고 날짜가 아직 미래일 때, TrainingGuideEngine.guide는 goalSec 없이 raceDate만으로 phase/taper를 계산한다. 그래서 새 종목 기준 주기화(D-day·테이퍼)에 옛 대회 날짜가 쓰인다. 다만 이 경우는 (a) 성조가 대회보다 먼저 와야 하고, (b) 그 날짜가 원래 사용자가 넣은 실제 대회일이라 완전히 틀린 값이라고 보기 어렵고, (c) 종목별 taper 차이는 1주 정도라 처방 차이도 작다. 설정에서 바로 고칠 수도 있다. 출시 앱 사용자에게 주는 영향은 nit에 가깝다.\n주장된 주 증상이 재현되지 않으므로 반박으로 판정한다. 남는 문제를 굳이 따지면 severity는 low 이하다."
+   ]
+  },
+  {
+   "title": "FoundationModels가 약한 링크(weak link)로 들어가는지 확인되지 않음 — iOS 17~25 실행 시 dyld 실패 위험(검증 필요)",
+   "file": "ios/RunWrap/RaceResultParser.swift",
+   "finder": "race",
+   "why": [
+    "빌드 산출물로 직접 확인하지는 못했다. XcodeBuildMCP build_sim과 otool이 모두 'You have not agreed to the Xcode license agreements'로 실패했다. ios/build 아래 기존 RunWrap.app들은 모두 8/11~8/13 빌드라 RaceResultParser.swift가 들어온 8/26 커밋보다 오래됐고, 바이너리에 FoundationModels 문자열도 없다. 그래서 LC_LOAD_WEAK_DYLIB 여부를 실측하지 못했다. 그래도 코드와 툴체인 동작을 따라가 보면 finding의 핵심 가설은 성립하지 않는다.\n\n(1) FoundationModels를 쓰는 곳은 모두 가용성 조건 안에 있다. isAvailable과 parse는 `guard #available(iOS 26.0, *)` 뒤에서만 SystemLanguageModel과 LanguageModelSession을 부른다. `@Generable`이 붙은 `RaceResultFields`에도 `@available(iOS 26.0, *)`가 있다(RaceResultParser.swift 100-102행). 그래서 매크로가 펼친 Generable 준수 메타데이터와 프로토콜 디스크립터 참조도 iOS 26 가용성 컨텍스트 안에서 생긴다.\n\n(2) 현대 Swift 컴파일러(이 프로젝트는 Xcode 26 / Swift 6.3)는 배포 타깃보다 늦게 나온 선언을 참조할 때 그 심볼을 자동으로 weak import로 표시한다. 링커는 어떤 dylib에서 가져오는 심볼이 전부 weak이면 그 dylib도 자동으로 약하게 로드한다. finding도 이 전제를 인정했는데, 위 (1)에 따라 강한 참조가 생길 경로가 없다. Xcode 11 시절 CryptoKit 사례처럼 -weak_framework를 수동으로 넣어야 하던 때는 이 자동 weak 링크가 생기기 전이다. iOS 17·18을 배포 타깃으로 두고 canImport + @available로 FoundationModels를 쓰는 것은 Apple이 안내한 표준 패턴이고, project.yml에 따로 설정하지 않아도 된다.\n\n(3) finding 스스로 '(가설)', '검증 필요'라고 적었고, 강한 참조가 실제로 있다는 구체적 근거를 내놓지 못했다. project.yml에 weak 설정이 없다는 것만으로는 결함이 증명되지 않는다.\n\n참고로 이 코드는 origin/main에 들어가 8/26 testflight 워크플로(run 32919774209)가 성공했다. 다만 iOS 17~25 기기에서 크래시가 났다거나 안 났다는 증거는 저장소에서 찾지 못했다. 반박 근거는 컴파일러와 링커 동작에 대한 지식이다. 실측으로 완전히 닫으려면 라이선스 동의 후 빌드하고 `otool -l`로 로드 명령을 확인하거나, iOS 18 시뮬레이터에서 한 번 실행해 보면 된다. 그 점을 감안해 신뢰도는 0.75로 두었고, 설령 문제가 있더라도 '확인 권장' 수준이라 severity는 low를 유지한다.",
+    "재현해 보지 못했고, 코드와 툴체인 동작을 따라가 보면 가설이 성립하지 않을 가능성이 높다. (1) 직접 확인: 이 환경에서는 Xcode 라이선스에 동의하지 않은 상태라 build_sim과 xcrun swiftc가 둘 다 실패했다. DerivedData에 RunWrap.app이 없고, Archives 3개(2026-08-12~14)는 #35(85ef207)보다 앞선 빌드라 otool로 확인할 산출물이 없다. testflight.yml은 빌드 산출물을 artifact로 남기지 않는다. finding도 스스로 '(가설)', '검증 필요'라고 적었다. 재현 근거가 없다. (2) 코드 경로: FoundationModels 참조는 전부 RaceResultParser.swift 안에 있다. `isAvailable`과 `parse`는 `guard #available(iOS 26.0, *)`로 막혀 있다. `@Generable private struct RaceResultFields`는 `@available(iOS 26.0, *)`이 붙어 있어 매크로가 확장한 Generable 준수도 같은 가용성을 가진다. 프레임워크 쪽 선언(Generable, GenerationSchema, GeneratedContent, LanguageModelSession, SystemLanguageModel)도 모두 iOS 26 이상으로 선언돼 있다. Swift 컴파일러는 배포 타깃보다 새 버전으로 선언된 심볼을 weak import로 내보낸다. 준수 레코드가 가리키는 프로토콜 디스크립터와 메타데이터 접근자도 여기에 해당한다. 링커는 한 dylib에서 가져오는 심볼이 모두 weak이면 그 dylib을 LC_LOAD_WEAK_DYLIB로 자동 링크한다. 그래서 project.yml에 weak 설정이 없다는 것만으로는 강한 링크라고 볼 수 없다. Swift Charts, WeatherKit처럼 새 OS 전용 프레임워크를 낮은 배포 타깃에서 `#available`로 감싸 쓰는 흔한 패턴도 별도 weak 설정 없이 동작한다. (3) 남는 위험: 특정 Xcode 버전(예: 초기 베타)에서 매크로가 만든 코드가 강한 참조를 남기는 툴체인 버그가 있을 수는 있다. 하지만 이 저장소에서 그런 증거는 찾지 못했다. 해당 코드는 origin/main(28b00be, 3934c1b)에 들어가 CI로 TestFlight에 올라간 상태로 보이지만, iOS 17~25 기기에서 크래시했다는 보고나 흔적은 저장소에 없다. 결론: 주장한 실패(iOS 18에서 실행 즉시 dyld 종료)를 코드로 따라가 봐도 나오지 않고, 직접 재현도 못 했다. 그래서 반박으로 판정한다. 다만 빌드 후 `otool -l`로 LC_LOAD_WEAK_DYLIB인지 확인하거나 iOS 18 시뮬레이터에서 한 번 실행해 보는 것은 비용이 싼 확인 작업으로 남겨 둘 만하다. severity는 low가 적절하다.",
+    "finding이 가리키는 코드 경로는 실제로 있다. ios/RunWrap/RaceResultParser.swift 2~4행에서 `#if canImport(FoundationModels) import FoundationModels`를 하고, 101행에 `@Generable private struct RaceResultFields`가 있으며, 41행에서 `LanguageModelSession`을 쓴다. 하지만 크래시한다는 주장은 finding 스스로 밝히듯 검증되지 않은 가설이고, 코드를 보면 그 가설이 맞지 않을 가능성이 높다.\n\n(1) FoundationModels 심볼을 쓰는 곳은 모두 `@available(iOS 26.0, *)` 타입 선언(RaceResultFields)이나 `guard #available(iOS 26.0, *)` 뒤쪽에만 있다(isAvailable, parse). Swift 컴파일러는 배포 타깃보다 높은 가용성을 가진 선언을 참조할 때 weak 참조로 만든다. `@Generable` 매크로가 만드는 Generable 준수, 프로토콜·타입 메타데이터 참조도 둘러싼 타입이 iOS 26으로 표시돼 있으므로 같은 규칙으로 weak가 된다. 링커는 어떤 dylib에서 참조하는 심볼이 전부 weak이면 그 로드 명령을 LC_LOAD_WEAK_DYLIB로 만든다. 따라서 `weak_framework`를 명시하지 않아도 되는 것이 정상이다. StoreKit 2, WidgetKit 등 새 프레임워크를 `canImport`와 `@available`로 감싸 하위 OS를 지원하는 흔한 패턴도 명시적 weak 설정 없이 동작한다.\n\n(2) finding이 강한 참조가 남을 수 있다고 든 예(@Generable 준수 메타데이터)도 availability로 막힌 타입 안에서 생긴다. 그래서 강한 참조가 된다는 구체적 근거가 없다.\n\n(3) 실사용자 영향도 현재는 없다. 이 코드가 들어온 커밋 85ef207은 dev 브랜치(와 origin/dev)에만 있고, main에는 아직 머지되지 않았다(main 최신은 65ca8e2). 즉 출시된 앱이나 TestFlight 빌드에는 들어가지 않았다.\n\n확인을 위해 XcodeBuildMCP build_sim으로 빌드해 otool로 로드 명령을 보려 했으나, 이 환경에서 Xcode 라이선스에 동의하지 않은 상태라 빌드가 즉시 실패했다. 그래서 실제 바이너리는 확인하지 못했다. 이 finding은 버그라기보다 '릴리스 전에 otool로 한 번 확인하거나 iOS 17/18 시뮬레이터에서 실행해 보라'는 점검 항목이고, 그 정도의 가치는 있다. 다만 결함으로 인정할 근거가 없어 반박으로 판정하고, severity는 low로 둔다."
+   ]
+  },
+  {
+   "title": "백그라운드 옵저버 콜백이 전체 load를 마친 뒤에야 알림을 보내고 done()을 호출해 백그라운드 실행 시간을 넘길 수 있음",
+   "file": "ios/RunWrap/RunWrapApp.swift",
+   "finder": "healthkit-stores",
+   "why": [
+    "코드 경로는 finding이 적은 그대로다. RunWrapApp.swift의 handleWorkoutUpdate는 `await health.load()`를 끝까지 기다린 뒤에 알림을 보낸다. HealthStore.startObservingWorkouts의 옵저버 콜백(`Task { if error == nil { await onUpdate() }; done() }`)도 이 작업이 모두 끝나야 done()을 부른다. load() 안에는 전체 워크아웃 조회, 최근 28일 케이던스 루프, fetchVitals(쿼리 약 7개), VO2max·크로스트레이닝·HRR 조회가 순차로 들어 있다. 구조 관찰 자체는 맞다.\n\n그러나 이 finding의 핵심인 \"백그라운드 제한 시간을 넘겨 done()이 안 불리고, 이것이 반복돼 전달이 끊긴다\"는 근거가 없는 추측이다.\n(1) 쿼리는 전부 기기 안의 HealthKit DB를 읽는 HKSampleQuery와 HKStatisticsQuery다. 네트워크가 없다. 조회 범위도 대부분 좁다: 28일이나 12주 창, 크로스트레이닝은 limit 200. 러닝이 20회여도 쿼리는 약 50~60개이고, 각각 수 ms에서 수십 ms라 합쳐도 대개 몇 초 안에 끝난다. 백그라운드 전달 때 주어지는 실행 시간은 보통 이보다 여유 있다. finding은 쿼리 개수만 셌을 뿐 실제로 얼마나 걸리는지 보이지 않았다.\n(2) 기기가 잠긴 상태에서는 보호 데이터 때문에 첫 fetchRunningWorkouts가 곧바로 throw한다. 그러면 load()가 catch로 빠져 즉시 끝나고 done()도 빨리 불린다. 오래 걸리는 경로가 아니다. 코드 주석에도 \"잠금 후 ~10분이 지나면 HK 읽기가 실패한다 — 빈 결과로 조용히 끝난다\"고 적혀 있다.\n(3) done()이 3회 불리지 않아 전달이 끊기려면 제한 시간 초과가 반복돼야 한다. 그런 일이 일상적인 사용자 규모에서 일어난다는 증거가 없다.\n\n\"백그라운드 경로에서 최신 1건만 조회하고 done()을 먼저 부르는 편이 낫다\"는 제안은 설계 개선으로서는 타당하다. 하지만 버그나 실제 사용자 영향으로 확인되지는 않는다. 확신이 없으면 반박한다는 기준에 따라 refuted로 판정한다. 채택하더라도 severity는 low(개선 제안) 수준이다.",
+    "코드 경로 자체는 finding 설명과 일치한다. RunWrapApp.swift 57-76행의 handleWorkoutUpdate는 `await health.load()`를 끝까지 기다린 뒤에야 알림을 보낸다. HealthStore.swift 120-123행 옵저버 핸들러도 `Task { if error == nil { await onUpdate() }; done() }` 구조라 done()은 load가 끝나야 불린다. load()는 워크아웃 전체 조회(HKObjectQueryNoLimit), 최근 28일 워크아웃별 케이던스 쿼리 1~2개, fetchVitals 7종, VO2max·크로스트레이닝·HRR 조회를 순차로 돈다. '백그라운드 경로가 필요 이상으로 무겁다'는 설계 지적은 사실이다.\n\n그러나 failure_scenario에 적힌 '시간 초과로 알림이 안 가고 done() 미호출이 3회 쌓여 background delivery가 끊긴다'는 결과는 코드로 재현되지 않는 추정이다.\n(1) 쿼리 수가 과장됐다. 28일 안에 러닝이 20회면 케이던스 쿼리는 20~40개다. 연결 샘플이 없을 때만 두 번째 폴백 쿼리가 돈다. 나머지 쿼리는 약 13개라 합쳐도 대략 35~55개이고, '60개 이상'은 최악의 경우보다도 많다.\n(2) 전부 온디바이스 HealthKit 로컬 DB에 대한 HKStatisticsQuery·HKSampleQuery라 한 건당 수 ms에서 수십 ms 수준이다. 워크아웃 요약은 코드 주석대로 통계를 재사용하므로 수천 건이어도 가볍다. 전체를 합쳐도 보통 몇 초 안에 끝날 것으로 보이며, 백그라운드 깨움 예산인 수십 초를 넘긴다는 근거가 finding에 없다.\n(3) 잠금 후 약 10분이 지나 HK 읽기가 막히면 fetchRunningWorkouts가 곧바로 throw한다. 그러면 state=.failed로 빠르게 끝나고 done()이 불린다. 즉 흔한 '잠긴 상태에서 깨움'은 오히려 빨리 끝난다.\n(4) 한국 러너 기준으로 28일 20회 이상은 상위권 빈도이고, 그런 사용자에게도 초과는 입증되지 않았다.\n\n결론적으로 '구조상 개선 여지(최신 1건만 조회하고 done을 먼저 호출)'는 타당한 리팩터링 제안이다. 하지만 finding이 주장하는 실패 결과(알림 누락, delivery 중단)는 재현 근거가 없다. 게다가 옵저버는 코드 주석에 명시된 대로 보조 경로이고 포그라운드 재계산이 1차 경로라, 실제 사용자 영향은 매우 작다. 확신이 없으므로 반박으로 처리하고, 남긴다면 severity는 low(성능 개선 제안 수준)가 적절하다.",
+    "코드 경로 자체는 맞다. RunWrapApp.swift:61의 handleWorkoutUpdate는 `await health.load()`를 끝까지 기다린 뒤 알림을 보낸다. HealthStore.swift의 옵저버 클로저는 `Task { if error == nil { await onUpdate() }; done() }` 구조라서 load 전체가 끝나야 done()이 불린다. load()는 워크아웃 전체 조회(HKObjectQueryNoLimit), 최근 28일 러닝마다 stepSum 1~2회, fetchVitals(reading 4회 + 수면 2회 + HRR 1회), VO2max·크로스트레이닝·HRR 추이를 순서대로 돈다. 여기까지는 사실이다.\n\n하지만 finding이 주장하는 결과, 즉 '제한 시간 초과 → done 미호출 → background delivery 중단'은 코드로도 실사용 조건으로도 뒷받침되지 않는다.\n(1) 쿼리 수가 과장됐다. 28일 동안 20회 뛰어도 쿼리는 대략 1 + 20~40 + 7 + 4 = 30~50개다. 온디바이스 로컬 DB 쿼리는 한 건에 수~수십 ms라서 순차로 돌려도 보통 몇 초 안에 끝난다. HealthKit background delivery로 깨어난 앱이 받는 시간은 문서에 명시돼 있지 않지만 이보다 넉넉하다고 알려져 있다. 쿼리 60개 이상이 한도를 넘긴다는 근거는 없다.\n(2) 기기가 잠겨 있으면 HK 읽기가 곧바로 에러를 낸다(코드 주석에도 적혀 있다). 이때 fetchRunningWorkouts가 즉시 throw해 load가 빨리 끝나므로 긴 실행으로 이어지지 않는다.\n(3) 앱이 정지돼 done()을 못 부르더라도 애플 정책상 HealthKit은 백오프를 두고 재시도하고, 연속 3회 무응답이어야 중단한다. 알림 한 번이 빠지는 수준이고, 주석에 적힌 대로 포그라운드 재계산이 1차 경로라 리포트·캐시 기능은 영향을 받지 않는다.\n(4) 출시 앱 사용자에게 드러난 증상이나 재현 근거가 없다. 전체를 재계산한 뒤 done을 부르는 설계가 최선은 아니라는 개선 제안으로는 의미가 있다. 다만 실제 사용자 영향이 있는 버그로는 성립하지 않아 '확신 없음'으로 보고 반박 처리한다.\n\n참고로 이 경로에는 별개의 문제가 있다. 잠금 상태에서 load가 실패하면 state가 .failed로 바뀌고, 이후 refreshCacheAndReschedule는 `if case .loaded` 가드 때문에 다시 load하지 않을 수 있다. 이는 이 finding과는 다른 이슈다. 심각도는 개선 제안 수준인 low로 둔다."
+   ]
+  },
+  {
+   "title": "온보딩 선택지를 빠르게 연타하면 다음 문항이 이전 답으로 건너뛰어짐",
+   "file": "ios/RunWrap/OnboardingFlowScreen.swift",
+   "finder": "ui-screens",
+   "why": [
+    "OnboardingFlowScreen.swift를 직접 확인했다. answer(_:)는 `let answered = step; apply(choice); advance(from: answered)` 구조가 맞다. 하지만 finding이 말하는 실패 경로는 실제로 일어나지 않는다. (1) 이전 버튼의 클로저(오래된 choice)가 문항이 바뀐 뒤에 실행되려면 두 번째 탭이 첫 탭과 같은 런루프 주기 안에, 즉 SwiftUI가 뷰 그래프를 다시 그리기 전에 들어와야 한다. @Published stepIndex가 바뀌면 다음 프레임(8~16ms)에 body가 다시 평가되고 Button의 action도 새 클로저로 바뀐다. 한 손가락으로 연타해도 탭 간격은 보통 80ms가 넘으므로 두 번째 탭은 새 문항의 버튼에 들어간다. choicePage에는 .transition이나 withAnimation이 없고, 애니메이션은 진행 바(592행 `.animation(..., value: index)`)에만 걸려 있다. 그래서 사라지는 중인 이전 버튼이 화면에 남아 탭을 받는 구간도 없다. (2) 두 번째 탭이 같은 위치의 새 버튼에 들어가면 그 choice는 새 문항의 값(.record/.monthly 등)이고 step도 새 문항이다. 따라서 apply는 새 문항의 답을 쓰고 advance는 그 문항 다음으로 넘어간다. 'apply가 Q2 값을 다시 쓰고 q3Record/q4Monthly가 nil로 남는다'는 주장과 달리 새 문항에는 답이 채워진다. 의도치 않은 선택지가 골라질 수는 있지만 탭 기반 UI라면 어디서나 생기는 일이고 코드 결함은 아니다. 게다가 뒤로가기(goBack)와 체크 표시로 바로잡을 수 있다. 오래된 클로저가 실행될 수 있는 경우는 두 손가락으로 서로 다른 버튼을 거의 동시에 떼는 정도의 억지 시나리오뿐이다. 그 경우에도 영향은 한 문항이 건너뛰어지는 것이고 되돌아가서 고칠 수 있다. 결론적으로 finding이 주장한 재현 경로와 결과가 코드상 성립하지 않으므로 반박한다.",
+    "finding이 설명한 순서대로 코드를 따라가 봤지만, 적힌 시나리오대로는 재현되지 않는다.\n\n(1) `answer(_:)`는 `let answered = step`으로 '현재 문항'을 잡은 뒤 `apply(choice)`와 `advance(from:)`를 호출한다. finding이 말하는 오작동은 이전 문항 버튼의 클로저(예: Q2의 `.longest`)가 `stepIndex`가 이미 Q3로 넘어간 뒤에 실행될 때만 생긴다.\n\n(2) 각 버튼은 문항마다 다른 id로 그려진다(`ForEach(model.choices, id: \\.id)`, id는 \"q2.xxx\", \"q3.xxx\"처럼 문항 접두사가 붙음). 그래서 첫 탭으로 `stepIndex`가 바뀌면 다음 렌더에서 Q2 버튼은 사라지고 Q3 버튼이 새로 생긴다. `.animation(.easeOut, value: index)`는 `OnboardingProgressBar`에만 걸려 있고, 선택지 목록에는 transition이나 애니메이션이 없다. 따라서 옛 버튼이 퇴장 애니메이션 중에 탭을 받을 창도 없다.\n\n(3) 탭 두 번은 각각 터치다운과 터치업을 거치는 별개 이벤트이고, 두 이벤트 사이에 SwiftUI가 상태 변경을 반영해 다시 그린다. 그래서 finding이 든 'Q2에서 같은 자리를 빠르게 두 번 탭'하면, 두 번째 탭은 같은 자리에 새로 생긴 Q3 버튼에 들어간다. 그러면 `answer(.record(...))`가 실행되고 `step == .record`이므로 Q3에 정상적으로 답이 기록된다. 사용자가 원치 않은 답을 실수로 고를 수는 있지만(더블탭 오입력), 이는 흔한 UX 특성이다. 'Q2 값을 다시 쓰고 Q3를 답 없이 통과'하는 버그와는 다르다.\n\n(4) failure_scenario에 적힌 '`q4Monthly`가 nil로 남는다'도 틀렸다. 설령 오래된 클로저가 실행되더라도 `advance(from: .record)`는 Q4 화면으로 이동할 뿐이라 Q4는 건너뛰지 않는다.\n\n(5) 이론상 남는 경로는 두 손가락으로 서로 다른 두 버튼을 동시에 눌렀다가 같은 터치 샘플에서 동시에 떼어, 두 액션이 한 번의 렌더 전에 연달아 실행되는 경우뿐이다. 이건 finding이 말한 '빠른 연타'가 아니라 의도적으로 만들어야 하는 극단적 조작이다. 이 경우에도 사용자는 Q4 화면에서 뒤로 가기로 복구할 수 있다.\n\n결론: 주장된 메커니즘과 failure_scenario는 실제 SwiftUI 이벤트 처리 흐름에서 재현되지 않는다고 판단해 반박한다. 제안된 `guard`는 방어 코드로는 무해하지만, 실사용자에게 영향을 주는 버그의 근거로는 부족하다.",
+    "코드 경로 자체는 맞다. OnboardingFlowScreen.swift의 answer(_:)는 `let answered = step`으로 호출 시점의 현재 문항을 쓴다. 따라서 이전 카드의 버튼 클로저(예: `.longest(v)`)가 stepIndex가 이미 Q3로 넘어간 뒤에 실행되면, apply가 q2Longest를 다시 쓰면서 q3Record를 지우고 advance(from: .record)로 Q3를 건너뛴다. 하지만 이 finding이 주장하는 결과(q3Record/q4Monthly가 nil로 남음)가 나오려면 이미 화면에서 사라진 이전 버튼의 클로저에 두 번째 탭이 전달되어야 하고, 현실적으로는 일어나기 어렵다.\n\n(1) 탭은 touch-down과 touch-up을 한 쌍으로 완료해야 액션이 실행된다. 사람이 두 번 탭하는 간격은 최소 수십~100ms다. 반면 @Published(stepIndex) 변경 뒤 SwiftUI는 다음 런루프 또는 프레임(약 16ms) 안에 questionCard를 다시 그려 OptionButton을 새 choice로 바꾼다.\n(2) 질문 카드에는 transition이나 withAnimation이 없다. `.animation`은 진행 바(line 592)에만 걸려 있어, 사라지는 이전 카드가 애니메이션 동안 남아 탭을 받는 창도 없다.\n(3) 같은 위치의 새 버튼에 두 번째 탭이 들어가는 경우는 choice가 `.record(x)`이고 step도 `.record`이므로 정상적인 Q3 답으로 처리된다. q3Record가 nil로 남지 않는다. 제안된 수정(`guard choice.step == step`)을 넣어도 이 경우는 막지 못한다. 이건 코드 버그가 아니라 탭이 다음 카드로 넘어가는 UX 문제다.\n\n설령 드물게 발생하더라도 사용자는 진행 바의 뒤로가기로 수정할 수 있고, 재진단(§7)도 가능하다. 영향은 레벨 판정이 한 단계 틀어지는 정도라 실제 사용자 영향은 매우 작다. 주장된 재현 시나리오가 실제로 성립한다는 근거가 부족하므로 반박한다. 방어적 가드로는 무해한 개선이지만 버그 finding으로 보기는 어렵고, 굳이 남긴다면 low가 상한이다."
+   ]
+  },
+  {
+   "title": "대기질 로드가 취소되지 않는 Task로 중복·경합 실행됨",
+   "file": "ios/RunWrap/HomeScreen.swift",
+   "finder": "ui-screens",
+   "why": [
+    "finding이 주장하는 동작 방식은 코드와 맞지 않는다. (1) ios/RunWrap/AirQualityStore.swift의 `load(latitude:longitude:)`는 맨 앞에서 `guard case .idle = state else { return }`로 막는다. 두 번째 load는 첫 load가 진행 중(.loading)이든 끝났든(.loaded/.unavailable) 즉시 반환하므로, onReceive가 Task를 여러 번 띄워도 요청이 겹치거나 '늦게 끝난 쪽이 덮어쓰는' 경합은 load끼리는 생기지 않는다. (2) '캐시 좌표 → 실제 좌표' 시나리오도 성립하지 않는다. WeatherStore.coordinate에는 캐시된 초기값이 없고, `resolve()` 안에서 위치 결론이 난 뒤에만 `coordinate = located`로 설정된다. 기동 때는 nil에서 실제 좌표로 한 번만 바뀐다. (3) 새로고침 경로에서는 `weather.refresh()`가 coordinate를 다시 publish해 onReceive → load가 호출되지만, 이때 airQuality.state는 이미 .idle이 아니라서 no-op이다. 실제 갱신은 뒤이어 호출되는 `airQuality.refresh`가 새 좌표로 한 번만 한다. 남는 경합은 하나뿐이다. 기동 때 시작된 첫 load(번들 읽기 + data.go.kr 호출)가 아직 끝나지 않았는데, 날씨가 먼저 결론 나서 스플래시가 풀리고 사용자가 곧바로 당겨서 새로고침을 하면, refresh 결과를 늦게 끝난 load가 덮어쓸 수 있다. 하지만 두 좌표는 몇 초 차이라 사실상 같은 최근접 측정소가 잡히고 1시간 캐시도 공유하므로, 사용자에게 보이는 차이는 거의 없다. finding이 말한 '이동 중 이전 동네 값이 남는다'는 상황은 주장된 경로로는 재현되지 않는다.",
+    "finding이 말하는 실패 시나리오는 실제 코드로 재현되지 않는다. (1) AirQualityStore.load는 첫 줄이 `guard case .idle = state else { return }`이다. 그래서 onReceive가 여러 번 불려도 두 번째 이후 load는 상태가 .loading이나 .loaded라서 바로 끝난다. 요청이 겹치지 않고, 늦게 끝난 쪽이 덮어쓰는 경합도 이 경로에서는 생길 수 없다. (2) '캐시 좌표 → 실제 좌표' 순서로 좌표가 두 번 들어온다는 전제도 틀렸다. WeatherStore.coordinate는 resolve()가 위치 결론을 받은 뒤 딱 한 번 대입된다(WeatherStore.swift:80). 캐시된 좌표를 먼저 흘려보내는 코드는 없다. 기동 경로에서 좌표는 한 번만 들어온다. (3) 새로고침 경로를 보면 weather.refresh()가 coordinate를 바꿔 onReceive가 다시 발화한다. 하지만 이때 airQuality.state는 이미 .loaded나 .unavailable이라 load는 아무것도 하지 않는다. 갱신은 뒤이어 순차로 호출되는 airQuality.refresh 하나만 한다. 이론상 남는 창은 하나다. 기동 때 첫 load의 네트워크 응답이 아직 안 온 상태에서 사용자가 당겨서 새로고침을 하고, 그 refresh가 먼저 끝나는 경우다. 이러려면 스플래시가 끝나고 몇 초 안에 새로고침을 해야 하고, 두 호출은 거의 같은 위치를 쓴다. 게다가 같은 측정소면 1시간 캐시를 공유하므로 '이전 동네 값이 남는다'는 결과는 사실상 나오지 않는다. 오히려 idle 가드 때문에 나중 좌표가 무시되는 역방향 설계를 의도적으로 택한 것이다. 주장된 중복·경합 버그는 성립하지 않으므로 반박한다.",
+    "finding이 말하는 경합 경로는 코드상 성립하지 않는다. (1) AirQualityStore.load는 첫 줄이 `guard case .idle = state else { return }`이고, await 전에 동기적으로 `state = .loading`을 세운다. 그래서 onReceive가 좌표를 연달아 받아 Task를 여러 개 띄워도, 실제로 resolve를 타는 것은 첫 번째뿐이고 나머지는 곧바로 반환한다. 중복 요청이 겹치지 않는다. (2) failure_scenario가 전제하는 '캐시 좌표 → 실제 좌표' 흐름은 없다. WeatherStore.coordinate는 초기값 nil이고, resolve()에서 위치 결론이 날 때 한 번만 대입된다(WeatherStore.swift:80). 이전 동네 좌표를 먼저 흘려보내는 캐시가 없다. (3) 새로고침 경로에서는 weather.refresh()가 coordinate를 다시 publish해 onReceive가 load를 부르지만, 그때 state는 이미 loaded/unavailable이라 guard에 걸려 아무 일도 하지 않는다. 실제 조회는 뒤이은 airQuality.refresh 한 번뿐이다. 남는 경합은 하나다. 기동 직후 첫 load의 네트워크 응답이 오기 전에 사용자가 당겨서 새로고침을 하면 load와 refresh가 동시에 돌 수 있다. 하지만 이 경우 두 좌표는 몇 초 차이의 같은 장소이고, 최근접 측정소도 대개 같다. 게다가 1시간 캐시가 있어서 사용자에게 보이는 차이는 사실상 없다. 주장한 '이전 동네 값이 남는다'는 결과는 재현되지 않는다. 기껏해야 코드 위생 수준의 관찰이다."
+   ]
+  },
+  {
+   "title": "RouteSnapshot.region(for:)가 빈 경로에서 강제 언래핑 크래시",
+   "file": "ios/RunWrap/ShareCard.swift",
+   "finder": "ui-screens",
+   "why": [
+    "finding이 가정한 크래시 경로가 코드에 없습니다. CourseScreen.swift:343의 courseCoordinates는 `course.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }`으로 원소를 1:1로 바꿀 뿐 필터링하지 않습니다. 그래서 \"course는 비어 있지 않은데 courseCoordinates는 빈 배열\"인 상황은 생길 수 없습니다. 게다가 analyze()는 첫 줄에서 `guard ..., !course.isEmpty else { return }`로 빈 코스를 걸러 냅니다. RouteSnapshot.region(for:)은 `result != nil`인 분기에서만 부르는데, CourseSupplyEngine.analyze는 `guard course.count >= minPoints else { return nil }`(CourseSupplyEngine.swift:59)와 500m 최소 길이 가드를 통과해야 결과를 냅니다. 따라서 이 분기에 들어오면 좌표가 반드시 여러 개 있습니다. GPX 파싱 단계의 빈 결과도 apply()와 restoreLastCourse()의 `!points.isEmpty` 가드에서 먼저 막힙니다. 나머지 호출처는 finding도 인정하듯 ShareCard.image(`route.count >= 2`)와 SessionDetailScreen 지도 헤더(사전 확인)입니다. 결국 모든 호출 경로에서 빈 배열이 들어갈 수 없습니다. 공개 static 함수 안에 강제 언래핑이 있다는 점은 방어적 코딩 관점의 코드 냄새일 뿐입니다. 출시된 앱에서 실제로 재현되는 크래시 버그가 아니므로 반박합니다.",
+    "finding이 제시한 failure_scenario는 실제 코드에서 재현되지 않습니다. CourseScreen.swift:343의 `courseCoordinates`는 `course.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }` 한 줄짜리 1:1 변환입니다. 필터링이 없으므로 \"course는 비어 있지 않은데 courseCoordinates는 비어 있는\" 상태는 구조상 나올 수 없습니다. 또 `analyze()`(310행)는 맨 앞에서 `guard case .loaded(let file) = store.state, !course.isEmpty else { return }`로 빈 코스를 거릅니다. 좌표 없는 GPX 트랙 포인트는 파서 단계에서 이미 빠지고, 빈 결과는 `apply(data:name:)`의 `guard !points.isEmpty`와 `restoreLastCourse()`의 같은 가드에서 걸러져 course에 들어가지 않습니다. 게다가 318행의 `region(for:)` 호출은 `CourseSupplyEngine.analyze` 결과가 nil이 아닐 때(코스 500m 이상)만 실행되므로, 좌표는 사실상 여러 개입니다. 다른 호출부인 SessionDetailScreen.swift:99는 finding 스스로 인정하듯 `route.count >= 2` 가드 뒤에 있습니다. 결국 현재 코드에서 크래시에 이르는 경로는 없습니다. 남는 것은 가드 없는 공개 static 함수라는 방어적 코딩 수준의 지적뿐이고, 버그나 크래시 finding으로 볼 근거는 없습니다.",
+    "finding이 제시한 실패 시나리오는 실제 코드에서 일어날 수 없습니다. CourseScreen.swift:343의 `courseCoordinates`는 필터링 없이 `course.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }` 한 줄로 끝나는 1:1 변환입니다. 그래서 배열 길이가 항상 `course.count`와 같습니다. 그리고 유일한 호출 지점인 `analyze()`(CourseScreen.swift:311)는 첫 줄에서 `guard case .loaded(let file) = store.state, !course.isEmpty else { return }`로 빈 코스를 이미 걸러냅니다. `apply(data:name:)`와 `restoreLastCourse()`도 `GPXParser.parse` 결과에 `guard !points.isEmpty`를 먼저 적용합니다. 좌표가 없는 트랙 포인트는 GPXParser 단계에서 빠지므로 `course`에는 들어오지 않습니다. 이 때문에 \"course는 비어 있지 않은데 courseCoordinates만 빈 배열\"인 상태가 만들어지지 않습니다. 또 `region(for:)`는 비어 있지 않은 배열이면 원소가 하나뿐이어도 `min()`/`max()`가 값을 돌려주므로 크래시가 나지 않습니다. 나머지 호출자인 `image(route:size:)`와 SessionDetailScreen.swift:99도 `route.count >= 2`를 먼저 확인합니다. 현재 코드에서 강제 언래핑 크래시로 가는 경로는 없습니다. 방어 코드가 없는 공개 static 함수라서 나중에 누가 가드 없이 호출하면 위험해질 수 있다는 점은 맞지만, 사용자에게 영향이 있는 버그는 아닙니다. 코드 위생 수준의 제안으로 보는 것이 맞습니다."
+   ]
+  }
+ ],
+ "gaps": [
+  {
+   "feature": "최대심박·안정심박·심박존 수동 입력 (Karvonen/HRR 방식 선택)",
+   "category": "설정·개인화",
+   "found_in": [
+    "Athlytic",
+    "Gentler Streak",
+    "Bevel",
+    "Apple Workout",
+    "Zones",
+    "Intervals.icu",
+    "Elevate",
+    "Final Surge",
+    "마라톤GO"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "WorkoutDetailStore.swift는 Tanaka 추정(없으면 190)만 쓰고 HealthStore와 HRmax 산출이 달라 존 표시가 화면마다 어긋날 수 있다. 설정 화면에 입력 항목 없음, Karvonen/hrReserve 코드 없음",
+   "feasibility": "높음 — @AppStorage 값 하나 + 엔진에 주입하면 끝. 온디바이스·무서버 원칙과 충돌 없음",
+   "priority": "P0",
+   "rationale": "심박존·이지런 판정·80/20 등 여러 지표의 기준값이라 추정 오차가 모든 인사이트에 전파된다. 대부분의 경쟁 앱이 기본 제공하며, Apple Workout도 존 수동 설정을 지원하므로 사용자가 기대하는 기본기다. HRmax 불일치 버그 해소도 겸한다"
+  },
+  {
+   "feature": "홈·잠금화면 위젯 / 워치 컴플리케이션 (오늘 판정·배터리·주간 거리)",
+   "category": "플랫폼 연동",
+   "found_in": [
+    "Athlytic",
+    "Training Today",
+    "Bevel",
+    "Gentler Streak",
+    "Zones",
+    "Strava",
+    "adidas Running",
+    "Runkeeper",
+    "Intervals.icu"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "WidgetKit import 없음. 위젯 익스텐션 타깃도 project.yml에 없음",
+   "feasibility": "높음 — App Group에 ReportCache 스냅샷을 쓰고 WidgetKit 타임라인에서 읽는다. 위젯 익스텐션은 HealthKit 직접 조회 제약이 있으므로 앱이 계산한 결과를 공유하는 방식이 적합. iOS 17 가용",
+   "priority": "P1",
+   "rationale": "리커버리/준비도 앱의 핵심 사용 동선은 앱을 열지 않고 위젯으로 확인하는 것. 재방문·리텐션에 직접 영향"
+  },
+  {
+   "feature": "HR·RPE 기반 훈련부하 (TRIMP/TSS, CTL·ATL·TSB 피트니스·피로·폼 곡선)",
+   "category": "훈련부하 분석",
+   "found_in": [
+    "Strava Fitness & Freshness",
+    "Runalyze",
+    "Intervals.icu",
+    "TrainingPeaks",
+    "Elevate",
+    "COROS",
+    "Polar",
+    "TrainAsONE",
+    "HRV4Training",
+    "Bevel",
+    "Garmin"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "ReportEngine의 ACWR(7/28)은 거리 기반만. 같은 10km라도 템포와 조깅의 부하 차이를 반영 못함. TRIMP 코드 없음. FormEngine은 폼(자세) 지표이지 TSB가 아님",
+   "feasibility": "높음 — 세션 심박 시계열이 이미 WorkoutDetailStore에 있어 Banister TRIMP 계산 가능. 단 HRmax/RHR 입력(P0)이 선행돼야 정확. 28일 미만이면 미노출 가드",
+   "priority": "P1",
+   "rationale": "강도를 반영하지 않는 부하 지표는 인터벌 위주 러너에게 과소평가를 준다. 데이터 해석 앱의 차별화 핵심 지표"
+  },
+  {
+   "feature": "Apple 운동 노력도(Effort Rating) 읽기 및 부하 반영",
+   "category": "훈련부하 분석",
+   "found_in": [
+    "Apple Fitness(Training Load)",
+    "Gentler Streak",
+    "Polar Perceived Load",
+    "TrainAsONE",
+    "Intervals.icu"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "workoutEffortScore/estimatedWorkoutEffortScore 조회 코드 없음, readTypes에도 없음",
+   "feasibility": "높음 — HealthKit 읽기만으로 가능. 단 iOS 18+ API라 @available 가드 필요(배포 타깃 iOS 17)",
+   "priority": "P1",
+   "rationale": "iOS 18부터 Apple Fitness 앱이 노력도 기반 Training Load를 기본 제공한다. RunWrap이 거리 ACWR만 보이면 Apple 판정과 엇갈려 신뢰를 잃을 수 있으므로 같은 원천 데이터를 읽어 정합성을 맞출 필요"
+  },
+  {
+   "feature": "구조화 워크아웃을 워치로 전송 (WorkoutKit Custom Workout)",
+   "category": "훈련 처방",
+   "found_in": [
+    "Runna",
+    "Athlytic",
+    "Training Today",
+    "Apple Custom Workouts",
+    "Coopah",
+    "Stryd",
+    "TrainingPeaks",
+    "Final Surge",
+    "Intervals.icu"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "TrainingGuideEngine.swift가 오늘의 처방을 텍스트로만 제공. WorkoutKit import 없음",
+   "feasibility": "중상 — WorkoutKit은 iOS 17+ 지원, WorkoutScheduler로 워치 운동 앱에 예약 가능. 서버 불필요. 워치 운동 앱이 기록하고 RunWrap은 결과를 읽는 구조라 읽기전용 원칙과도 양립",
+   "priority": "P1",
+   "rationale": "처방이 텍스트에서 끝나면 실행 전환율이 낮다. Apple 네이티브 Custom Workout을 활용하면 자체 워치 앱 없이 처방→실행→해석 루프를 닫을 수 있다"
+  },
+  {
+   "feature": "훈련 계획 캘린더 (대회 목표 역산 주간 플랜)",
+   "category": "훈련 처방",
+   "found_in": [
+    "Runna",
+    "NRC",
+    "Garmin Coach",
+    "Polar",
+    "COROS",
+    "런데이",
+    "러닝라이프",
+    "TrainingPeaks",
+    "Final Surge",
+    "Humango",
+    "Coopah"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "TrainingGuideEngine은 당일 가이드만, 대회 D-day와 목표기록(raceDate/raceGoalSec)은 있으나 주차별 계획 뷰 없음",
+   "feasibility": "중 — 온디바이스 규칙 기반 템플릿(테이퍼·빌드업)으로 가능. 적응형 AI 플랜 수준은 과함",
+   "priority": "P1",
+   "rationale": "대회 준비 러너의 가장 큰 니즈. 이미 대회 탭·목표 기록이 있어 연결 비용이 낮다. Apple은 플랜 기능을 제공하지 않는다"
+  },
+  {
+   "feature": "기간별 심박존 분포 + 80/20 강도 배분 분석",
+   "category": "훈련부하 분석",
+   "found_in": [
+    "Strava",
+    "Garmin Load Focus",
+    "COROS",
+    "Bevel",
+    "HRV4Training",
+    "NRC",
+    "Athlytic"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "세션 상세의 ZoneBar는 1회 단위, TrainingGuideEngine의 80/20은 세션 유형 추정 기반. 주·월 누적 존 시간 차트 없음",
+   "feasibility": "높음 — 세션별 존 시간 합산만 하면 됨. 표본 주 3회 미만이면 미노출",
+   "priority": "P1",
+   "rationale": "이지런을 너무 빠르게 뛰는 한국 러너 문제를 짚는 대표 인사이트. 기존 데이터로 저비용 구현"
+  },
+  {
+   "feature": "베스트 에포트 (러닝 중 최고 1k/5k/10k 구간 기록)",
+   "category": "기록·성장",
+   "found_in": [
+    "Strava",
+    "Athlytic",
+    "Smashrun Magic PR",
+    "Elevate",
+    "Runalyze",
+    "TrainingPeaks",
+    "NRC",
+    "Garmin"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "ProgressStats.swift의 PR은 세션 평균 페이스×거리로 추정 — 15km 런 속 5km 최고 구간을 못 잡고, 5km 이상 세션의 평균으로 5km PR을 부풀리거나 누락",
+   "feasibility": "높음 — 거리 샘플 시계열에서 슬라이딩 윈도 최소 시간 계산. HealthKit 경로/거리 샘플 읽기만 필요",
+   "priority": "P1",
+   "rationale": "PR은 러너의 가장 강한 동기 요소인데 현재 산식은 부정확해 '틀린 인사이트' 원칙에 걸린다"
+  },
+  {
+   "feature": "러닝화 마일리지 추적·교체 알림",
+   "category": "장비",
+   "found_in": [
+    "NRC",
+    "adidas Running",
+    "MapMyRun",
+    "런데이",
+    "러너온",
+    "러닝라이프",
+    "Runalyze",
+    "Intervals.icu",
+    "TrainingPeaks",
+    "Final Surge"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "shoeprints SF 심볼만 있고 신발 모델·거리 누적 코드 없음",
+   "feasibility": "높음 — 로컬 JSON(ReportCache 방식)으로 신발 등록·기본 신발 자동 배정·세션별 변경. 서버 불필요",
+   "priority": "P1",
+   "rationale": "경쟁 앱 대부분이 제공하는 보편 기능이고 부상 예방 메시지와도 연결된다. Apple 건강 앱에는 없다"
+  },
+  {
+   "feature": "월간·연간 결산 리캡 (Wrapped 스타일)",
+   "category": "공유·동기부여",
+   "found_in": [
+    "Strava Year in Sport",
+    "Gentler Streak",
+    "Athlytic",
+    "Garmin Connect Rundown",
+    "Zones",
+    "러너온"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "결산/Wrapped 코드 없음. 월간 통계(MonthlyStats)와 ShareCard는 있으나 스토리형 리캡 없음",
+   "feasibility": "높음 — 기존 엔진 결과 조합 + ShareCard 렌더링 재사용",
+   "priority": "P1",
+   "rationale": "앱 이름이 RunWrap인데 정작 'Wrap(결산)' 기능이 없다. 연말 공유 바이럴 효과가 가장 큰 기능"
+  },
+  {
+   "feature": "시간대별 러닝 날씨 예보 + 달리기 좋은 시간 추천",
+   "category": "날씨·환경",
+   "found_in": [
+    "Runna",
+    "쉼표",
+    "런붕",
+    "러너온",
+    "NRC(일출·일몰)"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "WeatherClient.swift/WeatherAdviceRules.swift는 현재값만 조회. hourly 파라미터 사용 없음",
+   "feasibility": "높음 — open-meteo가 hourly 예보를 제공(이미 사용 중인 엔드포인트, 개인정보 미포함). HeatEngine 재사용",
+   "priority": "P1",
+   "rationale": "한국 여름 더위·미세먼지로 '언제 뛸까'가 핵심 질문. 날씨 인프라가 이미 있어 확장 비용이 낮다"
+  },
+  {
+   "feature": "아침 리포트 알림 (오늘 컨디션·권장 강도)",
+   "category": "알림",
+   "found_in": [
+    "Athlytic",
+    "Garmin Morning Report",
+    "Gentler Streak",
+    "Training Today"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "NotificationScheduler.swift에 주간·운동 후 알림은 있으나 매일 아침 알림 없음. 주간/수분 알림은 반복 트리거가 아니라 1회성으로 끝나는 버그",
+   "feasibility": "중 — 로컬 알림은 가능하나 기상 시점의 최신 HRV로 문구를 만들려면 백그라운드 실행(HKObserverQuery background delivery)이 필요하고 보장되지 않음. 고정 문구 + 탭 시 앱 열기 방식이 현실적",
+   "priority": "P1",
+   "rationale": "일일 재방문 동선의 핵심. 기존 알림의 비반복 버그 수정과 함께 처리해야 한다"
+  },
+  {
+   "feature": "대회 탭 즐겨찾기·필터·캘린더 추가·접수 알림·목표 대회 지정",
+   "category": "대회",
+   "found_in": [
+    "레이스캘린더",
+    "러닝라이프",
+    "마라톤GO",
+    "NRC Race Finder",
+    "Runalyze Planned races",
+    "랭킹마라톤"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "RaceListScreen/RaceDetailScreen은 목록·상세·썸네일만. favorite/EventKit/접수 알림 코드 없음",
+   "feasibility": "높음 — 즐겨찾기는 @AppStorage, 캘린더는 EventKit 쓰기 권한(iOS 17 writeOnly 접근), 접수 알림은 로컬 알림. 모두 무서버",
+   "priority": "P1",
+   "rationale": "한국 러너는 대회 접수 경쟁이 치열해 접수 오픈 알림 수요가 크다. 대회 데이터를 이미 매일 크롤하므로 활용도를 높이는 저비용 개선"
+  },
+  {
+   "feature": "컨디션 난조·부상·휴식 모드 (지표 일시 보류)",
+   "category": "회복·건강",
+   "found_in": [
+    "Gentler Streak",
+    "Bevel",
+    "Runna",
+    "Training Today",
+    "Runalyze",
+    "Final Surge"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "휴식/부상 상태 입력 없음. 휴식 기간에 ACWR 저하가 '디트레이닝' 경고로 읽힐 수 있음",
+   "feasibility": "높음 — 로컬 플래그 + 엔진에 기간 제외 주입",
+   "priority": "P2",
+   "rationale": "아프거나 쉬는 기간을 잘못 해석하면 틀린 인사이트가 된다. 복귀 시 부하 재시작 가이드와 연결 가능"
+  },
+  {
+   "feature": "세션 RPE·메모·태그 입력 + 영향 분석",
+   "category": "기록·저널",
+   "found_in": [
+    "Athlytic",
+    "Bevel",
+    "HRV4Training",
+    "TrainingPeaks",
+    "adidas Running"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "RPE/메모 입력 없음",
+   "feasibility": "높음 — 로컬 저장. 단 iOS 18에서는 Apple 노력도가 HealthKit에 있으므로 우선 읽기로 대체 가능",
+   "priority": "P2",
+   "rationale": "주관 지표는 정밀도 보완에 유용하나 입력 부담이 있고, Apple 노력도 읽기(P1)로 상당 부분 커버된다"
+  },
+  {
+   "feature": "스트릭·배지·연속 기록 노출",
+   "category": "공유·동기부여",
+   "found_in": [
+    "Strava",
+    "NRC",
+    "Athlytic",
+    "Gentler Streak(휴식 허용 스트릭)",
+    "Runkeeper",
+    "Runalyze",
+    "Smashrun",
+    "러너온"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "ReportMetrics.streakWeeks는 계산되고 CardInfoText.streak 설명문도 있으나 화면에 카드로 표시되지 않음(데드 코드). 새 도감(CollectionEngine)이 배지 역할을 일부 수행",
+   "feasibility": "높음 — 이미 계산된 값을 카드로 노출만 하면 됨",
+   "priority": "P2",
+   "rationale": "구현 비용이 거의 0인 동기부여 요소. Apple 피트니스도 활동 링 연속 기록을 제공하므로 러닝 전용 주간 스트릭으로 차별화"
+  },
+  {
+   "feature": "주간·월간 요약 공유 카드, 스플릿·고도 스티커, 투명 오버레이",
+   "category": "공유·동기부여",
+   "found_in": [
+    "Strava",
+    "Athlytic",
+    "Gentler Streak",
+    "NRC",
+    "당근모임"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "ShareCard.swift + SessionDetailScreen의 ShareLink로 단일 세션 카드만 공유",
+   "feasibility": "높음 — ImageRenderer 재사용",
+   "priority": "P2",
+   "rationale": "인스타 스토리 공유는 한국 러닝 커뮤니티의 주요 확산 경로"
+  },
+  {
+   "feature": "대기질(PM2.5)을 오늘 판정·브리핑에 반영",
+   "category": "날씨·환경",
+   "found_in": [
+    "쉼표",
+    "런붕",
+    "러너온"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "AirQualityEngine.swift 값은 표시되나 오늘의 판정·브리핑 문구에는 미반영",
+   "feasibility": "높음 — 엔진 입력 추가",
+   "priority": "P2",
+   "rationale": "미세먼지 나쁨 날 '달리기 좋음'이 나오면 모순. 한국 사용자에게 특히 중요"
+  },
+  {
+   "feature": "대회 코스 고도·대회일 예보를 반영한 예측 + 페이스 전략",
+   "category": "대회",
+   "found_in": [
+    "Garmin PacePro",
+    "Stryd Race Calculator",
+    "Humango Race Planner",
+    "TrainAsONE"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "RaceOutlookEngine.swift는 서울 평년 기후만 사용, CourseScreen/GPXParser는 고도 무시",
+   "feasibility": "중 — GPX 고도는 이미 파일에 있음, 대회일 16일 이내면 open-meteo 예보를 지역 좌표로 조회 가능",
+   "priority": "P2",
+   "rationale": "지방 대회·언덕 코스에서 예측 오차가 커진다. 정확도 개선형 과제"
+  },
+  {
+   "feature": "수면 필요량·수면 부채, HRV·RHR 개별 추세 카드",
+   "category": "회복·건강",
+   "found_in": [
+    "Athlytic",
+    "Bevel",
+    "Garmin Sleep Coach",
+    "Training Today",
+    "Polar"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "BatteryEngine이 HRV/RHR/수면을 하나의 배터리로 합산, 개별 추세·수면 부채 없음",
+   "feasibility": "높음 — HealthKit 읽기",
+   "priority": "P2",
+   "rationale": "Apple 건강 앱이 iOS 26부터 수면 점수, Vitals 앱이 야간 지표 이상치를 기본 제공하므로 중복을 피하고 러닝 부하와의 연결에 집중하는 편이 낫다"
+  },
+  {
+   "feature": "회복 시간 카운트다운 (다음 고강도까지 권장 시간)",
+   "category": "회복·건강",
+   "found_in": [
+    "Garmin",
+    "COROS",
+    "Polar"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "중 — 산식이 벤더 독점이라 근거 있는 공개 모델 선택 필요, 과신 위험",
+   "priority": "P2",
+   "rationale": "직관적이지만 근거 약한 숫자는 '틀린 인사이트' 원칙과 충돌할 수 있어 신중해야 한다"
+  },
+  {
+   "feature": "훈련 상태 라벨 (생산적·유지·과훈련·디트레이닝)",
+   "category": "훈련부하 분석",
+   "found_in": [
+    "Garmin",
+    "COROS",
+    "Polar",
+    "Bevel"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "ACWR RRTone 4단계로 부분 대응",
+   "feasibility": "높음 — 부하 추세+VDOT/EF 추세 조합",
+   "priority": "P2",
+   "rationale": "기존 톤 체계를 확장하면 되지만 HR 기반 부하(P1) 이후가 적절"
+  },
+  {
+   "feature": "경사 보정 페이스(GAP)·언덕 점수",
+   "category": "세션 분석",
+   "found_in": [
+    "Strava",
+    "Intervals.icu",
+    "Garmin"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "고도 데이터를 페이스 분석에 쓰지 않음",
+   "feasibility": "중 — 경로 고도 샘플 필요, 기압계 노이즈 보정 필요",
+   "priority": "P2",
+   "rationale": "언덕 러닝이 많은 한국 지형에서 EF·페이스 해석 오차를 줄인다"
+  },
+  {
+   "feature": "젖산역치·임계 페이스 추정",
+   "category": "세션 분석",
+   "found_in": [
+    "Garmin",
+    "COROS",
+    "Intervals.icu",
+    "HRV4Training"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "VDOT·Riegel만 존재",
+   "feasibility": "중 — 최대노력 세션 표본 요구, 부족 시 미노출",
+   "priority": "P2",
+   "rationale": "중·고급 러너용 차별화 지표지만 표본 요건이 까다롭다"
+  },
+  {
+   "feature": "일시정지 인식 스플릿·워크아웃 트림",
+   "category": "세션 분석",
+   "found_in": [
+    "Athlytic",
+    "Apple Workout"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "HKWorkoutEvent 미사용 — 신호대기 정지 시간이 스플릿에 섞여 페이스 왜곡",
+   "feasibility": "높음 — HKWorkout.workoutEvents 읽기",
+   "priority": "P2",
+   "rationale": "도심 러닝(신호 대기)이 많은 한국 환경에서 체감되는 정확도 버그"
+  },
+  {
+   "feature": "동일 코스 그룹핑·코스별 기록 비교",
+   "category": "기록·성장",
+   "found_in": [
+    "Apple Workout Race Route",
+    "Runalyze",
+    "Intervals.icu",
+    "Strava Segments"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "중 — 경로 유사도 계산을 온디바이스로 수행",
+   "priority": "P2",
+   "rationale": "Apple Workout이 watchOS 10+에서 Race Route로 같은 코스 대결을 기본 제공하므로, 비교 결과의 해석 레이어로 차별화하는 편이 낫다"
+  },
+  {
+   "feature": "개인 러닝 히트맵·포스터",
+   "category": "공유·동기부여",
+   "found_in": [
+    "Strava",
+    "러너온",
+    "Runalyze"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "높음 — MapKit 오버레이, 경로는 로컬에서만",
+   "priority": "P2",
+   "rationale": "공유성 높은 비주얼이나 핵심 해석 기능은 아님"
+  },
+  {
+   "feature": "대회 주간 체크리스트·보급 계획, 대회 후 회복 가이드",
+   "category": "대회",
+   "found_in": [
+    "Runna",
+    "TrainAsONE"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "높음 — 정적 규칙",
+   "priority": "P2",
+   "rationale": "D-day 기능과 자연스럽게 연결되는 저비용 콘텐츠"
+  },
+  {
+   "feature": "데이터 내보내기 (CSV/JSON/GPX)",
+   "category": "데이터",
+   "found_in": [
+    "Training Today",
+    "Runalyze",
+    "Zones",
+    "TrainingPeaks"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "fileExporter/CSV 코드 없음",
+   "feasibility": "높음 — 사용자가 직접 파일로 저장하는 방식은 '앱이 네트워크로 전송하지 않는다' 원칙과 양립",
+   "priority": "P2",
+   "rationale": "Apple 건강 앱이 전체 내보내기를 기본 제공하므로 필수는 아니나 계산된 지표 내보내기는 고유 가치"
+  },
+  {
+   "feature": "설정 기본 항목 (앱 버전·피드백·라이선스·데이터 초기화·백업 상태)",
+   "category": "설정·개인화",
+   "found_in": [
+    "Athlytic",
+    "Gentler Streak",
+    "Bevel"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "SettingsScreen.swift에 버전·문의·초기화 없음, ProgressBackupStore.swift는 백업 상태/수동 백업 UI 없음",
+   "feasibility": "높음",
+   "priority": "P2",
+   "rationale": "출시된 앱으로서 기본 신뢰 요소. 사용자 피드백 채널 확보에도 필요"
+  },
+  {
+   "feature": "Siri·단축어·App Intents",
+   "category": "플랫폼 연동",
+   "found_in": [
+    "Athlytic",
+    "Training Today",
+    "Gentler Streak",
+    "Zones"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "AppIntents import 없음(빌드 로그의 'No AppIntents.framework dependency' 기준선과도 일치)",
+   "feasibility": "높음 — iOS 17 가용, 위젯 인터랙션과 공유 가능",
+   "priority": "P2",
+   "rationale": "'오늘 뛰어도 돼?' 음성 질의, 자동화 연동. 위젯(P1)과 함께 하면 효율적"
+  },
+  {
+   "feature": "걷뛰 음성 코칭 (한국어)",
+   "category": "실시간 코칭",
+   "found_in": [
+    "런데이",
+    "NRC",
+    "adidas Running"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "WalkRunEngine.swift는 가이드 텍스트만 제공",
+   "feasibility": "낮음 — 실시간 코칭은 운동 세션 기록(HKWorkoutSession) 또는 워치 앱이 필요해 읽기전용 해석 앱 컨셉과 충돌. WorkoutKit 인터벌 전송으로 워치 햅틱 알림을 대체 가능",
+   "priority": "P3",
+   "rationale": "초보 시장은 런데이가 장악. 대신 WorkoutKit 걷뛰 인터벌 전송(P1 항목의 일부)으로 흡수 권장"
+  },
+  {
+   "feature": "자연어 질의·AI 코치 (온디바이스 FoundationModels)",
+   "category": "AI",
+   "found_in": [
+    "Athlytic",
+    "Gentler Streak",
+    "Training Today",
+    "Bevel"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "FoundationModels는 RaceResultParser.swift의 대회 기록 파싱에만 사용",
+   "feasibility": "중 — iOS 26+ Apple Intelligence 지원 기기 한정, 가용성 분기 필요. 서버 LLM은 건강 데이터 전송이라 금지",
+   "priority": "P2",
+   "rationale": "엔진 결과를 근거로 설명하는 형태라면 원칙 위배 없이 차별화 가능, 단 기기 제약 큼"
+  },
+  {
+   "feature": "Strava·Garmin 계정 연동",
+   "category": "데이터",
+   "found_in": [
+    "Runalyze",
+    "Intervals.icu",
+    "TrainingPeaks",
+    "Elevate",
+    "Smashrun"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "낮음 — OAuth 토큰 교환에 서버·API 키 필요, 무서버 원칙 충돌",
+   "priority": "P3",
+   "rationale": "Garmin·COROS 등 타사 기기 기록도 Apple 건강에 동기화되면 HealthKit으로 읽을 수 있어 대체 가능"
+  },
+  {
+   "feature": "소셜·리더보드·크루·실시간 위치 공유·가상 마라톤",
+   "category": "소셜",
+   "found_in": [
+    "Strava",
+    "NRC",
+    "러너온",
+    "Crewda",
+    "TT러닝",
+    "당근모임",
+    "트랭글",
+    "런투유"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "낮음 — 서버 필수, 건강 데이터 외부 전송 금지 원칙과 정면 충돌",
+   "priority": "P3",
+   "rationale": "Apple 피트니스의 활동 공유·메시지 체크인이 기본 제공. 공유 카드로 대체"
+  },
+  {
+   "feature": "코스 생성·길 안내",
+   "category": "지도",
+   "found_in": [
+    "네이버지도",
+    "Strava Route Builder",
+    "트랭글",
+    "MapMyRun",
+    "Garmin"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "CourseScreen은 GPX 보기만",
+   "feasibility": "중 — MapKit으로 가능하나 범위가 큼",
+   "priority": "P3",
+   "rationale": "워치 운동 앱·지도 앱 영역이며 해석 앱 컨셉과 거리가 있다"
+  },
+  {
+   "feature": "러닝 파워 분석 (CP·파워존)",
+   "category": "세션 분석",
+   "found_in": [
+    "Stryd",
+    "Apple Workout",
+    "Intervals.icu"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "러닝 파워는 읽기만 하고 분석 없음",
+   "feasibility": "중",
+   "priority": "P3",
+   "rationale": "국내 사용자층이 얇고 심박 기반 분석 보강이 우선"
+  },
+  {
+   "feature": "훈련 단조로움·스트레인 (Foster monotony)",
+   "category": "훈련부하 분석",
+   "found_in": [
+    "Runalyze",
+    "TrainAsONE"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "높음 — 일별 부하 표준편차",
+   "priority": "P3",
+   "rationale": "전문가용 지표로 일반 사용자 가치는 낮음"
+  },
+  {
+   "feature": "SpO2·호흡수 등 바이탈 모니터",
+   "category": "회복·건강",
+   "found_in": [
+    "Athlytic",
+    "Bevel"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "oxygenSaturation 미조회",
+   "feasibility": "높음",
+   "priority": "P3",
+   "rationale": "Apple Vitals 앱(watchOS 11+)이 기본 제공 — 중복"
+  },
+  {
+   "feature": "페이스·기록 예측·심박존 계산기",
+   "category": "도구",
+   "found_in": [
+    "마라톤GO",
+    "런붕"
+   ],
+   "runwrap_status": "partial",
+   "runwrap_note": "VDOT·Riegel 예측은 내 데이터 기반으로만 제공",
+   "feasibility": "높음",
+   "priority": "P3",
+   "rationale": "개인 데이터 해석이 강점이라 범용 계산기는 부가가치 낮음"
+  },
+  {
+   "feature": "대시보드 카드 순서·표시 커스터마이즈",
+   "category": "설정·개인화",
+   "found_in": [
+    "Athlytic",
+    "Gentler Streak",
+    "TrainingPeaks"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "높음",
+   "priority": "P3",
+   "rationale": "시안 단일 원본 원칙과 충돌 여지, 필요성 낮음"
+  },
+  {
+   "feature": "생리주기·영양·근력운동·생체나이",
+   "category": "확장 건강",
+   "found_in": [
+    "Athlytic",
+    "Bevel",
+    "Gentler Streak"
+   ],
+   "runwrap_status": "absent",
+   "runwrap_note": "없음",
+   "feasibility": "중",
+   "priority": "P3",
+   "rationale": "러닝 해석 집중 컨셉과 거리가 있고 Apple 건강 앱이 주기 추적을 기본 제공"
+  }
+ ]
+}
