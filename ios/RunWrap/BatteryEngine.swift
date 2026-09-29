@@ -125,9 +125,14 @@ enum BatteryEngine {
         }
 
         // 수면 질 — 깊은+렘 비율이 있는 밤이 7개 이상일 때만, 가장 최근 밤 vs 나머지 밤 평균(기저)
+        // 신선도 가드: 가장 최근 밤의 기상일이 오늘 또는 어제일 때만 — 지난밤 워치를 안 찼으면
+        // 며칠 전 밤이 '최근 밤'이 되어 오늘 배터리를 깎는다 (HRR 3일 가드와 같은 취지, 이슈 #99)
+        let calendar = Calendar.current
+        let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now))!
         let qualityNights = vitals.sleepNights.filter { $0.deepRemFraction != nil }.sorted { $0.date < $1.date }
         if qualityNights.count >= 7,
-           let latest = qualityNights.last, let todayFraction = latest.deepRemFraction {
+           let latest = qualityNights.last, latest.date >= yesterdayStart,
+           let todayFraction = latest.deepRemFraction {
             let baselineNights = qualityNights.dropLast()
             let baselineFraction = baselineNights.compactMap(\.deepRemFraction).reduce(0, +) / Double(baselineNights.count)
             if baselineFraction > 0, (baselineFraction - todayFraction) / baselineFraction >= 0.20 {
