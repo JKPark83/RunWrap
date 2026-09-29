@@ -44,9 +44,16 @@ struct RunSummary: Identifiable, Equatable {
 
     var distanceKm: Double? { distanceMeters.map { $0 / 1000 } }
 
-    /// 평균 페이스 (초/km) — 거리가 너무 짧으면 의미가 없어 nil
+    /// 평균 페이스 (초/km) — 러닝으로 볼 수 없는 표본이면 nil (이슈 #76).
+    /// - 거리 0.1km 이하: 너무 짧아 페이스가 의미 없다.
+    /// - 시간 0초: 외부 앱 가져오기 등에서 duration이 비면 페이스 0 → 영구 PB·EF inf가 된다.
+    /// - 150...1200초/km(2:30~20:00) 밖: 세계기록 페이스가 약 2:50/km라 2:30은 러닝으로
+    ///   불가능하고, 20:00/km는 걷기보다 느리다. 범위 밖은 사이클 오태깅·GPS 튐 같은
+    ///   러닝이 아닌 표본으로 보고 버린다 — "틀린 인사이트는 없느니만 못하다".
     var paceSecPerKm: Double? {
-        guard let km = distanceKm, km > 0.1 else { return nil }
-        return durationSec / km
+        guard let km = distanceKm, km > 0.1, durationSec > 0 else { return nil }
+        let pace = durationSec / km
+        guard (150...1_200).contains(pace) else { return nil }
+        return pace
     }
 }

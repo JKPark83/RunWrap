@@ -42,6 +42,54 @@ struct ProgressStatsTests {
         #expect(entries.isEmpty)
     }
 
+    // MARK: 페이스 타당 범위 가드 (이슈 #76)
+
+    @Test("페이스 가드 — 시간 0초면 nil")
+    func paceNilWhenZeroDuration() {
+        let zero = RunSummary(id: UUID(), start: now, durationSec: 0,
+                              distanceMeters: 5_200, avgHeartRate: 150)
+        #expect(zero.paceSecPerKm == nil)
+    }
+
+    @Test("페이스 가드 — 2:00/km·25:00/km처럼 비현실 페이스는 nil")
+    func paceNilWhenOutOfRange() {
+        #expect(run(daysAgo: 1, km: 5, minPerKm: 2).paceSecPerKm == nil)    // 120초/km < 150
+        #expect(run(daysAgo: 1, km: 5, minPerKm: 25).paceSecPerKm == nil)   // 1500초/km > 1200
+    }
+
+    @Test("페이스 가드 — 정상 페이스와 경계값 150·1200초/km는 값을 낸다")
+    func paceValueInRange() throws {
+        let normal = try #require(run(daysAgo: 1, km: 5, minPerKm: 5.5).paceSecPerKm)
+        #expect(abs(normal - 330) < 0.01)   // 5:30/km
+        let fastest = try #require(run(daysAgo: 1, km: 5, minPerKm: 2.5).paceSecPerKm)
+        #expect(abs(fastest - 150) < 0.01)  // 2:30/km — 하한 포함
+        let slowest = try #require(run(daysAgo: 1, km: 5, minPerKm: 20).paceSecPerKm)
+        #expect(abs(slowest - 1_200) < 0.01) // 20:00/km — 상한 포함
+    }
+
+    @Test("회귀 — 시간 0초인 5.2km 기록이 섞여도 5K PB는 그대로, 월 EF는 유한하다")
+    func zeroDurationRunDoesNotBecomePBOrInfiniteEF() throws {
+        let runs = [run(daysAgo: 1, km: 5.2, minPerKm: 5.0),   // 페이스 300 → 5K 1500초
+                    run(daysAgo: 5, km: 8, minPerKm: 6),       // EF (60000/360)/150 ≈ 1.1111
+                    run(daysAgo: 9, km: 8, minPerKm: 6),
+                    run(daysAgo: 33, km: 8, minPerKm: 6)]
+        let broken = RunSummary(id: UUID(), start: now.addingTimeInterval(-3 * 86_400),
+                                durationSec: 0, distanceMeters: 5_200, avgHeartRate: 150)
+
+        // 가드 전에는 페이스 0 → 5K 0초가 영구 PB가 됐다
+        let fiveK = try #require(PersonalRecords.compute(runs: runs + [broken])
+            .first { $0.label == "5K" })
+        #expect(abs(fiveK.timeSec - 1500) < 0.01)
+        #expect(fiveK.run.id != broken.id)
+
+        // 가드 전에는 60000/0 = inf가 월평균 EF를 inf로 만들었다.
+        // 8월 유효 표본 3회: (1.3333 + 1.1111 + 1.1111) / 3 ≈ 1.1852
+        let series = try #require(MonthlySeries.compute(runs: runs + [broken], now: now))
+        let august = try #require(series.points.last?.avgEF)
+        #expect(august.isFinite)
+        #expect(abs(august - 1.1852) < 0.001)
+    }
+
     // MARK: 월별 시리즈
 
     @Test("월 시리즈 — 7·8월 집계가 오래된 → 최신 순서로 나온다")
