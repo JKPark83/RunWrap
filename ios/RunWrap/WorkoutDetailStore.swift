@@ -89,9 +89,13 @@ final class WorkoutDetailStore: ObservableObject {
             detail.maxHeartRateBpm = hrSamples.map { $0.quantity.doubleValue(for: bpmUnit) }.max()
         }
 
-        let distanceSamples = (try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout)) ?? []
+        let distanceSamples = ((try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout)) ?? [])
+            .map { (start: $0.startDate, end: $0.endDate, meters: $0.quantity.doubleValue(for: .meter())) }
+        // 오토포즈·신호 대기 구간 — 스플릿·드리프트에서 정지 시간을 뺀다 (이슈 #47)
+        let pauses = Self.pauses(of: workout, distanceSamples: distanceSamples)
         if !distanceSamples.isEmpty {
-            detail.splits = Self.splits(from: distanceSamples)
+            detail.splits = ActiveTimeline.splits(distanceSamples: distanceSamples, pauses: pauses)
+                .map { WorkoutDetail.Split(index: $0.index, paceSecPerKm: $0.paceSecPerKm) }
         }
 
         // 심박 드리프트 — 존·스플릿용으로 이미 가져온 샘플을 재사용한다 (추가 쿼리 없음, 제안 문서 A2)
@@ -100,12 +104,11 @@ final class WorkoutDetailStore: ObservableObject {
                 hrSamples: hrSamples.map {
                     (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
                 },
-                distanceSamples: distanceSamples.map {
-                    (start: $0.startDate, end: $0.endDate,
-                     meters: $0.quantity.doubleValue(for: .meter()))
-                },
+                distanceSamples: distanceSamples,
                 start: workout.startDate,
-                durationSec: workout.duration)
+                durationSec: workout.duration,
+                pauses: pauses,
+                end: workout.endDate)
         }
 
         // 케이던스: ① 평균 속도 ÷ 평균 보폭 (다이내믹스가 있는 워치)
@@ -267,34 +270,27 @@ final class WorkoutDetailStore: ObservableObject {
         return seconds.map { $0 / total }
     }
 
-    /// 누적 거리 샘플 → km 스플릿. km 경계는 샘플 사이를 선형 보간한다.
-    /// index는 실제 km 번호 — 데이터 오류로 건너뛴 구간이 있어도 눈금이 밀리지 않는다.
-    static func splits(from samples: [HKQuantitySample]) -> [WorkoutDetail.Split] {
-        var result: [WorkoutDetail.Split] = []
-        var cumulative: Double = 0        // m
-        var boundaryTime: Date? = samples.first?.startDate
-        var nextBoundary: Double = 1000
-
-        for sample in samples {
-            let meters = sample.quantity.doubleValue(for: .meter())
-            let before = cumulative
-            cumulative += meters
-            while cumulative >= nextBoundary, meters > 0 {
-                let fraction = (nextBoundary - before) / meters
-                let duration = sample.endDate.timeIntervalSince(sample.startDate)
-                let crossing = sample.startDate.addingTimeInterval(duration * fraction)
-                if let start = boundaryTime {
-                    let sec = crossing.timeIntervalSince(start)
-                    if sec > 60 {  // 60초/km 미만은 데이터 오류로 본다
-                        result.append(WorkoutDetail.Split(index: Int(nextBoundary / 1000),
-                                                          paceSecPerKm: sec))
-                    }
+    /// 워크아웃 이벤트 → 정지 구간. 사용자 정지와 모션(오토포즈) 정지를 모두 읽는다.
+    /// 이벤트가 없는 기록은 벽시계와 활동 시간이 30초 넘게 어긋날 때만 거리 샘플 공백으로
+    /// 추정한다 — 정지 없는 세션의 GPS 공백까지 빼지 않기 위해서 (감사 리포트 M6)
+    private static func pauses(of workout: HKWorkout,
+                               distanceSamples: [(start: Date, end: Date, meters: Double)]) -> [DateInterval] {
+        let markers: [(date: Date, kind: ActiveTimeline.Marker)] = (workout.workoutEvents ?? [])
+            .compactMap { event in
+                switch event.type {
+                case .pause: (date: event.dateInterval.start, kind: .pause)
+                case .resume: (date: event.dateInterval.start, kind: .resume)
+                case .motionPaused: (date: event.dateInterval.start, kind: .motionPause)
+                case .motionResumed: (date: event.dateInterval.start, kind: .motionResume)
+                default: nil
                 }
-                boundaryTime = crossing
-                nextBoundary += 1000
             }
+        if !markers.isEmpty {
+            return ActiveTimeline.pauses(markers: markers, start: workout.startDate, end: workout.endDate)
         }
-        return result
+        let unaccounted = workout.endDate.timeIntervalSince(workout.startDate) - workout.duration
+        guard unaccounted > 30 else { return [] }
+        return ActiveTimeline.gapPauses(distanceSamples)
     }
 
     // MARK: - 데모 모드: 합성 데이터 (run.id 시드 — 같은 세션은 항상 같은 모양)
@@ -359,6 +355,19 @@ final class WorkoutDetailStore: ObservableObject {
                                               firstHalfEF: firstEF,
                                               secondHalfEF: firstEF / (1 + decoupling / 100),
                                               tone: decoupling < 5 ? .steady : .caution)
+        }
+
+        // 신호 대기 시나리오 세션은 합성 샘플을 실제 엔진에 통과시켜 위 난수 값을 덮어쓴다 —
+        // 정지 구간 제외가 화면에서 보이게 하는 검증용 (이슈 #47)
+        if let scenario = DemoData.pauseScenario(for: run) {
+            detail.splits = ActiveTimeline.splits(distanceSamples: scenario.distance, pauses: scenario.pauses)
+                .map { WorkoutDetail.Split(index: $0.index, paceSecPerKm: $0.paceSecPerKm) }
+            detail.drift = DriftEngine.compute(hrSamples: scenario.hr,
+                                               distanceSamples: scenario.distance,
+                                               start: run.start,
+                                               durationSec: run.durationSec,
+                                               pauses: scenario.pauses,
+                                               end: scenario.end)
         }
         return detail
     }
