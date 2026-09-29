@@ -3,13 +3,20 @@
 # 매일 새벽 로드런을 크롤해 ios/RunWrap/Races.json을 갱신한다.
 # 앱은 이 파일의 raw URL을 받아 본다 (RaceStore) — 번들 사본은 앱 빌드 때 함께 실린다.
 # generatedAt은 매번 바뀌므로 races 내용이 같으면 커밋하지 않는다 (커밋 소음 방지).
-# 크롤 실패(파싱 성공률 80% 미만 포함)면 잡이 실패로 떠서 사이트 개편을 알아챌 수 있다.
+# 크롤 실패(파싱 성공률 80% 미만·100건 미만·접수기간/종목 누락률 50% 초과 포함)면
+# 파일을 쓰지 않고 잡이 실패로 떠서 사이트 개편을 알아챌 수 있다 (#45).
+# 40분 크롤 중 dev가 움직여도 갱신이 유실되지 않도록 push 전에 rebase한다 (#45).
 name: race-info
 
 on:
   schedule:
     - cron: "0 20 * * *"   # 매일 05:00 KST (UTC 20:00)
   workflow_dispatch: {}     # 수동 실행용
+
+# 수동 실행과 스케줄 실행이 겹치면 둘 다 Races.json을 바꿔 rebase가 충돌한다 — 차례로 돌린다
+concurrency:
+  group: race-info
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -40,5 +47,6 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add ios/RunWrap/Races.json
             git commit -m "chore: 대회정보 자동 갱신 ($(TZ=Asia/Seoul date +%Y-%m-%d))"
-            git push
+            git pull --rebase origin "$GITHUB_REF_NAME"
+            git push origin "HEAD:$GITHUB_REF_NAME"
           fi

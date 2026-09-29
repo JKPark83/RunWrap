@@ -13,6 +13,7 @@
 """
 
 import argparse
+import calendar
 import json
 import re
 import sys
@@ -158,12 +159,22 @@ def field(html: str, label: str) -> str | None:
 DATE_RE = re.compile(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")
 
 
-def parse_date(text: str) -> str | None:
+def parse_date(text: str, clamp_day: bool = False) -> str | None:
+    """"2026년3월26일" → "2026-03-26". 날짜가 없거나 달력에 없으면 None.
+
+    clamp_day=True면 원문 "9월31일"처럼 그 달 말일을 넘는 일(day)을 말일로 낮춘다 (#45).
+    접수기간에만 쓴다 — 운영자가 '9월 말까지'를 잘못 적은 경우가 실제로 있고(로드런
+    41649·41854·41869), 마감일을 버리면 앱이 대회 당일까지 '접수중'으로 보여 준다.
+    대회일은 D-day·날씨가 함께 틀어지므로 엄격하게 둔다(clamp 없음).
+    13월·0일 같은 값은 clamp해도 None — monthrange의 IllegalMonthError도 ValueError다.
+    """
     m = DATE_RE.search(text)
     if not m:
         return None
     y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
     try:
+        if clamp_day:
+            d = min(d, calendar.monthrange(y, mo)[1])
         return datetime(y, mo, d).strftime("%Y-%m-%d")
     except ValueError:
         return None
@@ -198,11 +209,12 @@ def parse_detail(no: int, html: str) -> dict | None:
             race["categories"] = cats
 
     # 접수기간: "2026년3월26일~2026년7월30일" — 물결 앞뒤로 나눠 각각 날짜 파싱
+    # 말일을 넘는 일(원문 "9월31일")은 말일로 클램프한다 (#45)
     if period := field(html, "접수기간"):
         parts = re.split(r"[~∼]", period, maxsplit=1)
-        if start := parse_date(parts[0]):
+        if start := parse_date(parts[0], clamp_day=True):
             race["registerStart"] = start
-        if len(parts) > 1 and (end := parse_date(parts[1])):
+        if len(parts) > 1 and (end := parse_date(parts[1], clamp_day=True)):
             race["registerEnd"] = end
 
     # 홈페이지: 표시 텍스트가 아니라 href 속성이 정확하다
@@ -222,6 +234,38 @@ def parse_detail(no: int, html: str) -> dict | None:
         race["note"] = note
 
     return race
+
+
+# 결과 품질 가드 — 하나라도 걸리면 파일을 쓰지 않고 실패한다 (#45)
+# (fetch_stations.py의 MIN_STATIONS처럼 '이상하면 갱신하지 않는다')
+MIN_PARSE_RATE = 0.8   # 상세 파싱 성공률 하한 — 사이트 구조 변경 감지
+MIN_RACES = 100        # 절대 건수 하한 — 2026-08-12 이후 git 이력 실측 최소 216건, 최대 273건
+# 핵심 선택 필드 — 라벨이 바뀌면 조용히 전부 빠지므로 누락률로 감지한다
+# (이력 실측: registerStart·categories 누락 0건, registerEnd 최대 3건)
+KEY_OPTIONAL = ("registerStart", "registerEnd", "categories")
+MAX_MISSING_RATE = 0.5
+
+
+def quality_errors(ok: int, total: int, missing: dict[str, int],
+                   limited: bool) -> list[str]:
+    """크롤 결과의 품질 오류 목록 — 비어 있으면 통과.
+
+    --limit 실행(limited)은 표본이 작아 건수 하한·누락률 검사를 건너뛴다.
+    """
+    errors = []
+    rate = ok / total if total else 0
+    if rate < MIN_PARSE_RATE:
+        errors.append(f"파싱 성공률 {rate:.1%} < {MIN_PARSE_RATE:.0%}")
+    if limited:
+        return errors
+    if ok < MIN_RACES:
+        errors.append(f"대회 {ok}건 < 최소 {MIN_RACES}건")
+    if ok:
+        for key in KEY_OPTIONAL:
+            miss = missing.get(key, 0) / ok
+            if miss > MAX_MISSING_RATE:
+                errors.append(f"{key} 누락률 {miss:.1%} > {MAX_MISSING_RATE:.0%}")
+    return errors
 
 
 def main() -> int:
@@ -270,6 +314,18 @@ def main() -> int:
         time.sleep(args.delay)
 
     races.sort(key=lambda r: (r["date"], r["id"]))
+    ok = len(races)
+    print(f"파싱 성공 {ok}/{len(ids)} ({ok / len(ids):.1%}), 탈락 no={dropped}",
+          file=sys.stderr)
+    for key, count in sorted(missing.items()):
+        print(f"  {key} 누락: {count}/{ok}", file=sys.stderr)
+    # 품질이 무너지면 쓰기 전에 실패 처리 — Actions에서 구조 변경을 알아채고,
+    # 로컬 파일도 덮어쓰지 않는다
+    if errors := quality_errors(ok, len(ids), missing, limited=bool(args.limit)):
+        for e in errors:
+            print(f"품질 가드 실패: {e} — 파일을 쓰지 않음", file=sys.stderr)
+        return 1
+
     doc = {
         "generatedAt": datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00"),
         "source": "roadrun.co.kr",
@@ -278,14 +334,7 @@ def main() -> int:
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
         f.write("\n")
-
-    ok = len(races)
-    print(f"파싱 성공 {ok}/{len(ids)} ({ok / len(ids):.1%}), 탈락 no={dropped}",
-          file=sys.stderr)
-    for key, count in sorted(missing.items()):
-        print(f"  {key} 누락: {count}/{ok}", file=sys.stderr)
-    # 성공률이 크게 무너지면 실패 처리 — Actions에서 구조 변경을 알아채는 장치
-    return 0 if ok / len(ids) >= 0.8 else 1
+    return 0
 
 
 if __name__ == "__main__":
