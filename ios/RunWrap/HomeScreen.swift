@@ -255,7 +255,7 @@ struct HomeScreen: View {
 
     @ViewBuilder
     private func loadedBody(runs: [RunSummary], growth: GrowthState, level: RunnerLevel,
-                            promotion: RunnerLevel?, now: Date) -> some View {
+                            promotion: PromotionEvidence?, now: Date) -> some View {
         let battery = health.vitals.flatMap { BatteryEngine.compute(vitals: $0, runs: runs, now: now) }
         let verdict = TodayVerdictEngine.verdict(runs: runs,
                                                  battery: battery,
@@ -283,9 +283,8 @@ struct HomeScreen: View {
                     .padding(.top, 10)
 
                 if let promotion {
-                    PromotionCard(target: promotion,
-                                  evidence: promotionEvidence(runs: runs, now: now),
-                                  onAccept: { accept(promotion) },
+                    PromotionCard(evidence: promotion,
+                                  onAccept: { accept(promotion.target) },
                                   onDecline: { decline(now: now) })
                         .padding(.top, 20)
                 }
@@ -473,22 +472,12 @@ struct HomeScreen: View {
     // MARK: - 승급 제안 (기획서 §3, 시안 1h)
 
     /// 실데이터 승급 후보. 거절한 지 4주가 안 지났으면 다시 묻지 않는다.
-    private func promotionOffer(runs: [RunSummary], level: RunnerLevel, now: Date) -> RunnerLevel? {
+    private func promotionOffer(runs: [RunSummary], level: RunnerLevel, now: Date) -> PromotionEvidence? {
         if promotionDeclinedAtRaw > 0 {
             let declined = Date(timeIntervalSince1970: promotionDeclinedAtRaw)
             guard now.timeIntervalSince(declined) >= 28 * 86_400 else { return nil }
         }
         return LevelEngine.promotionCandidate(current: level, runs: runs, now: now)
-    }
-
-    /// 승급 근거가 된 세션 — 카드 본문의 "지난주 10km를 59분에" 자리를 실제 값으로 채운다.
-    /// LevelEngine의 판정 조건(최근 4주 · 10km 이상 · 60분 이내 · 페이스 가드 통과)과 같은 창을 본다.
-    private func promotionEvidence(runs: [RunSummary], now: Date) -> RunSummary? {
-        let fourWeeksAgo = now.addingTimeInterval(-28 * 86_400)
-        return runs
-            .filter { $0.start >= fourWeeksAgo && $0.start <= now }
-            .filter { ($0.distanceKm ?? 0) >= 10 && $0.durationSec <= 3_600 && $0.paceSecPerKm != nil }
-            .max { $0.start < $1.start }
     }
 
     private func accept(_ level: RunnerLevel) {
@@ -928,9 +917,8 @@ private struct GoalDots: View {
 /// 승급 제안 카드 (시안 1h) — 1회 노출, 거절하면 4주 뒤에 다시 묻는다.
 /// 승급만 있고 강등은 없다 ("성장은 되돌리지 않는다", 기획서 §3).
 private struct PromotionCard: View {
-    let target: RunnerLevel
-    /// 승급 근거 세션 — 없으면 거리·기록 문장을 생략한 짧은 본문으로 대체한다
-    let evidence: RunSummary?
+    /// 승급 근거 (LevelEngine 판정 결과) — 제안 레벨과 근거별 본문 문장을 정한다
+    let evidence: PromotionEvidence
     let onAccept: () -> Void
     let onDecline: () -> Void
 
@@ -982,17 +970,25 @@ private struct PromotionCard: View {
             .strokeBorder(RR.brand, lineWidth: 1.5))
     }
 
-    /// 시안 문구를 실제 값으로 채운 템플릿 — 레벨명만 볼드로 강조한다 (AttributedString 합성)
-    private func body(for run: RunSummary?) -> AttributedString {
-        var level = AttributedString(target.label)
+    /// 시안 문구를 근거별 실제 값으로 채운 템플릿 — 레벨명만 볼드로 강조한다 (AttributedString 합성)
+    private func body(for evidence: PromotionEvidence) -> AttributedString {
+        var level = AttributedString(evidence.target.label)
         level.font = .system(size: 14.5, weight: .bold)
 
-        guard let run, let km = run.distanceKm else {
-            return AttributedString("최근 기록을 보니 한 단계 올려도 되겠어요. 리포트를 ")
-                + level + AttributedString(" 수준으로 올려드릴까요?")
+        let lead: String
+        switch evidence {
+        case .tenKmPace(let run):
+            let km = run.distanceKm ?? 10
+            // 10km 환산 기록(분) — 엔진 판정식 durationSec / km × 10과 같은 값
+            let tenKmMin = Int((run.durationSec / km * 10 / 60).rounded())
+            lead = "\(Format.relativeWeek(of: run.start, now: .now)) \(Format.km(km))km를 "
+                + "10km 환산 \(tenKmMin)분 페이스로 달리셨더라고요. "
+        case .halfFinish(let run):
+            lead = "\(Format.relativeWeek(of: run.start, now: .now)) 하프 거리를 완주하셨더라고요. "
+        case .fullUnder430(let run, let monthlyKm):
+            lead = "\(Format.relativeWeek(of: run.start, now: .now)) 풀 거리를 \(Format.duration(run.durationSec))에 "
+                + "달리고 4주 월환산 \(Format.km(monthlyKm))km — 런친놈 기준이에요. "
         }
-        let period = Format.relativeWeek(of: run.start, now: .now)
-        let lead = "\(period) \(Format.km(km))km를 \(Format.duration(run.durationSec))에 달리셨더라고요. 리포트를 "
-        return AttributedString(lead) + level + AttributedString(" 수준으로 올려드릴까요?")
+        return AttributedString(lead + "리포트를 ") + level + AttributedString(" 수준으로 올려드릴까요?")
     }
 }
