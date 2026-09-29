@@ -124,10 +124,10 @@ struct NotificationContentTests {
                     RunSummary(id: UUID(), start: windowStart.addingTimeInterval(-60),
                                durationSec: 2_100, distanceMeters: 7_000, avgHeartRate: 150)]
         #expect(runs[2].start >= now.addingTimeInterval(-7 * 86_400))  // 전제: 롤링 7일 안
-        let snapshot = ReportSnapshot.make(report: report, runs: runs, now: now)
+        let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .intermediate, now: now)
         #expect(abs(snapshot.weekKm - 10) < 0.001)
         #expect(snapshot.runCount == 3)
-        #expect(snapshot.headline == report.headline)
+        #expect(snapshot.headline == report.headline(level: .intermediate))
         #expect(snapshot.generatedAt == now)
     }
 

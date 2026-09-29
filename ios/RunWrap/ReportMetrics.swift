@@ -68,26 +68,46 @@ struct WeeklyReport {
             .map(\.0)
     }
 
-    /// 상세 화면 첫 문장 — 가장 나쁜 톤 기준으로 한 주를 요약한다
-    var headline: String {
-        let tones = [distance?.tone, acwr?.tone, efficiency?.tone].compactMap { $0 }
+    /// 상세 화면 첫 문장 — 이 레벨에서 보이는 카드 중 가장 나쁜 톤 기준으로 한 주를 요약한다.
+    /// 근거 카드는 `visibleCards(level:)`와 같은 규칙 — 런린이에게 숨긴 ACWR·EF의 판정이
+    /// 문장으로 새 나가지 않게 한다 (이슈 #124)
+    func headline(level: RunnerLevel) -> String {
+        let tones = visibleTones(level: level)
         if tones.contains(.overload) { return "몸보다 훈련량이 앞서 나간 한 주였습니다." }
         if tones.contains(.caution) { return "조금 무리했거나 리듬이 흔들린 한 주였습니다." }
         if tones.contains(.improving) { return "몸이 좋아지고 있는 한 주였습니다." }
         return "안정적으로 리듬을 지킨 한 주였습니다."
     }
 
-    /// 다음 주 제안 — 과부하면 안전 상한을 계산해 감량 폭을 제시한다
-    var suggestion: String? {
+    /// 다음 주 제안 — 과부하면 안전 상한을 계산해 감량 폭을 제시한다.
+    /// ACWR 근거는 ACWR 카드가 보이는 레벨에서만 쓰고, 거리 수치를 못 보는 런린이에게는
+    /// km 없이 문장만 낸다 (기획서 §4 "문장만", 이슈 #124)
+    func suggestion(level: RunnerLevel) -> String? {
         guard let d = distance else { return nil }
-        let overloaded = d.tone == .overload || (acwr.map { $0.ratio > 1.3 } ?? false)
+        let a = ReportGate.shows(.acwr, level: level) ? acwr : nil
+        let overloaded = d.tone == .overload || (a.map { $0.ratio > 1.3 } ?? false)
         if overloaded {
+            guard ReportGate.showsNumbers(.distance, level: level) else {
+                return "이번 주보다 조금 덜 달려도 괜찮아요. 롱런 하나를 가볍게 바꿔 보세요."
+            }
             var upper = d.capKm
-            if let a = acwr { upper = min(upper, a.chronic * 1.3) }
+            if let a { upper = min(upper, a.chronic * 1.3) }
             let lower = upper * 0.93
             return String(format: "주간 %.0f–%.0f km로 줄이면 안전 구간으로 돌아옵니다. 롱런 하나를 회복 주행으로 바꾸면 충분해요.", lower, upper)
         }
         return "지금 리듬 그대로 이어가면 됩니다. 다음 주에도 증가 폭 10% 이내를 지켜보세요."
+    }
+
+    /// 이 레벨에서 그려지는 판정 카드의 톤만 모은다 (headline 근거)
+    private func visibleTones(level: RunnerLevel) -> [RRTone] {
+        visibleCards(level: level).compactMap { card in
+            switch card {
+            case .distance: distance?.tone
+            case .acwr: acwr?.tone
+            case .efficiency: efficiency?.tone
+            default: nil
+            }
+        }
     }
 }
 
