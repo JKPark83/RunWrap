@@ -115,10 +115,15 @@ struct HomeScreen: View {
             }
         }
         .onAppear {
-            syncMaxStage(growth.stage)
-            // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
-            // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다
-            if CollectionEngine.hasReachedAdult(stage: growth.stage) { showsCeremony = true }
+            // 데모(합성 데이터)는 표시만 한다 — 최고 단계·세러모니·사이클 전환을 저장하면
+            // 데모를 꺼도 부풀려진 단계와 가짜 새가 남고 CloudKit까지 올라간다 (이슈 #44).
+            // 세러모니가 뜨지 않으면 startNewCycle도 불리지 않는다
+            if !DemoMode.isActive {
+                syncMaxStage(growth.stage)
+                // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
+                // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다
+                if CollectionEngine.hasReachedAdult(stage: growth.stage) { showsCeremony = true }
+            }
             checkNewPBs(runs: runs)
         }
         .fullScreenCover(isPresented: $showsCeremony) {

@@ -82,6 +82,24 @@ struct RootView: View {
         .environmentObject(weather)
         .environmentObject(raceRecords)
         .tint(RR.brand)
+        // 복원 선택 (이슈 #44) — 첫 업로드 직전에 서버의 이전 진행도를 발견했을 때 묻는다.
+        // 메인 탭이 아니라 루트에 붙인다: 건강 데이터가 실패·미지원이어도 답할 수 있어야
+        // 백업이 막힌 채 남지 않는다. 스플래시(권한 시트·기동 로딩) 중에는 미룬다
+        .sheet(isPresented: showsRestoreChoice) {
+            if let candidate = backup.restoreCandidate {
+                RestoreChoiceSheet(candidate: candidate,
+                                   onAccept: {
+                                       if let birds = backup.acceptRestoreCandidate() {
+                                           collection.replace(with: birds)
+                                       }
+                                   },
+                                   onDecline: {
+                                       collection.replace(with: backup.declineRestoreCandidate())
+                                   })
+                    // 둘 중 하나를 골라야 백업이 풀린다 — 스와이프로 닫아 미정 상태로 두지 않는다
+                    .interactiveDismissDisabled()
+            }
+        }
         // 스플래시 → 홈은 교차 페이드로 잇는다 — 런치 스크린류 화면의 관례
         .animation(.easeOut(duration: 0.35), value: isBooting)
         .task {
@@ -134,6 +152,13 @@ struct RootView: View {
         }
     }
 
+    /// 복원 선택 시트 표시 조건 — 후보가 있고, 온보딩을 마쳤고, 스플래시가 끝났을 때.
+    /// 닫기는 선택 버튼으로만 한다(후보가 비면 저절로 닫힌다)
+    private var showsRestoreChoice: Binding<Bool> {
+        Binding(get: { backup.restoreCandidate != nil && !levelRaw.isEmpty && !isBooting },
+                set: { _ in })
+    }
+
     /// 신규 설치 복원을 기다리는 중인지 — 이 동안은 온보딩 대신 스플래시를 유지한다.
     /// idle도 포함한다: 첫 body 평가는 .task보다 먼저라, 시도 전에 온보딩이 새면 안 된다
     private var isCheckingRestore: Bool {
@@ -147,8 +172,9 @@ struct RootView: View {
     private var restoreNoticeText: String? {
         guard !noticeDismissed else { return nil }
         switch backup.restoreState {
-        case .unavailable: return "iCloud에 로그인되어 있지 않아 이전 기록을 확인할 수 없었어요. 새로 시작할게요."
-        case .failed: return "iCloud에서 이전 기록을 확인하지 못했어요. 일단 새로 시작할게요."
+        // 확인하지 못한 기록은 나중에 연결되면 다시 찾아 묻는다 (이슈 #44 복원 선택 시트)
+        case .unavailable: return "iCloud에 로그인되어 있지 않아 이전 기록을 확인하지 못했어요. 일단 시작하고, 연결되면 다시 확인할게요."
+        case .failed: return "iCloud에서 이전 기록을 확인하지 못했어요. 일단 시작하고, 연결되면 다시 확인할게요."
         case .idle, .checking, .restored, .empty: return nil
         }
     }
@@ -178,6 +204,97 @@ struct RootView: View {
         guard levelRaw.isEmpty, UserDefaults.standard.bool(forKey: legacyKey) else { return }
         isReturningUser = true
         UserDefaults.standard.removeObject(forKey: legacyKey)
+    }
+}
+
+/// 복원 선택 시트 (이슈 #44) — "이전 기록 불러오기 / 새로 시작".
+///
+/// 복원이 일시 실패한 뒤 새로 시작한 설치가, 첫 업로드 직전에 서버의 다른 사이클 본을 발견했을 때 뜬다.
+/// 조용히 덮어쓰지 않고 묻는 것은 사용자 결정이다. 불러오면 방금 정한 레벨·목표가 이전 값으로 바뀌므로
+/// 그 점을 문구로 밝힌다. 새로 시작해도 도감은 합집합으로 남는다(ProgressBackupStore).
+private struct RestoreChoiceSheet: View {
+    let candidate: ProgressSnapshot
+    let onAccept: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(text: "iCloud")
+
+            Text("이전 기록을 찾았어요")
+                .font(RR.display(26))
+                .foregroundStyle(RR.text)
+                .padding(.top, 12)
+
+            VStack(alignment: .leading, spacing: 10) {
+                summaryRow(label: "레벨", value: levelLabel)
+                summaryRow(label: "성장 단계", value: stageLabel)
+                summaryRow(label: "도감", value: "\(candidate.collectedBirds.count)마리")
+                summaryRow(label: "마지막 백업", value: Self.dateText(candidate.updatedAt))
+            }
+            .padding(16)
+            .background(RR.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(RR.line))
+            .padding(.top, 20)
+
+            Text("불러오면 방금 진단한 레벨과 목표 대신 이전 기록으로 이어가요.")
+                .font(.system(size: 13))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 14)
+
+            Spacer(minLength: 20)
+
+            PrimaryButton(title: "이전 기록 불러오기", action: onAccept)
+
+            Button(action: onDecline) {
+                Text("새로 시작")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+
+            Text("새로 시작해도 도감의 새는 그대로 남아요")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 28)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(RR.bg.ignoresSafeArea())
+    }
+
+    private var levelLabel: String {
+        RunnerLevel(rawValue: candidate.levelRaw)?.label ?? candidate.levelRaw
+    }
+
+    private var stageLabel: String {
+        (GrowthStage(rawValue: candidate.maxStage) ?? .egg).label
+    }
+
+    private func summaryRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(RR.text3)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(RR.text)
+        }
+    }
+
+    private static func dateText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy년 M월 d일"
+        return formatter.string(from: date)
     }
 }
 

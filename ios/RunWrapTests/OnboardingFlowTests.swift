@@ -99,3 +99,71 @@ struct OnboardingFlowTests {
         #expect(Set(full.map(\.seconds)).count == full.count)
     }
 }
+
+/// 온보딩 저장 — 재진단이 성장 사이클을 보존하는지 (이슈 #44).
+/// 설정의 "다시 진단받기"가 사이클을 새로 열어 XP가 0이 되던 회귀를 막는다.
+/// now = 2026-09-29T09:00:00Z 고정, UserDefaults는 스위트별로 비우고 시작한다.
+@MainActor
+@Suite("온보딩 저장 — 재진단 사이클 보존")
+struct OnboardingPersistTests {
+    let now = ISO8601DateFormatter().date(from: "2026-09-29T09:00:00Z")!
+    /// 재진단 전부터 키우던 사이클 — 8/1 시작, 4단계(fledgling), 고정 식별자
+    let cycleStartedAt = ISO8601DateFormatter().date(from: "2026-08-01T00:00:00Z")!
+    let onboardedAt = ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!
+    let cycleID = "AAAAAAAA-0000-0000-0000-000000000001"
+
+    /// 기존 사이클 값을 미리 넣어 둔 격리 UserDefaults
+    private func seededDefaults(_ name: String) -> UserDefaults {
+        let suite = "OnboardingPersistTests.\(name)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(cycleStartedAt.timeIntervalSince1970, forKey: GrowthKey.cycleStartedAt)
+        defaults.set(GrowthStage.fledgling.rawValue, forKey: GrowthKey.maxStage)
+        defaults.set(cycleID, forKey: GrowthKey.cycleID)
+        defaults.set(onboardedAt.timeIntervalSince1970, forKey: ProfileKey.onboardedAt)
+        return defaults
+    }
+
+    /// 재진단 답 — 주 4회 이상(Q5 fourPlus → 주간 목표 4회), 하프 목표 1:45:00(6_300초)
+    private func model() -> OnboardingFlowModel {
+        let model = OnboardingFlowModel()
+        model.prefillIfNeeded(OnboardingAnswers(
+            q1Experience: .experienced, q2aActivity: nil, q2Longest: .halfToFull, q3Record: nil,
+            q4Monthly: .hundredTo200, q5Frequency: .fourPlus, q6Race: .finished,
+            q7Target: .half, q8GoalSec: 6_300, q9Purposes: [.record]))
+        return model
+    }
+
+    @Test("재진단 저장 — 사이클 시작·최고 단계·사이클 식별자·온보딩 시각을 보존하고 설문 답만 갱신한다")
+    func rediagnosisKeepsCycle() {
+        let defaults = seededDefaults("rediagnosis")
+        let model = model()
+
+        model.persist(isRediagnosis: true, now: now, defaults: defaults)
+
+        // 사이클 키 3종 + 온보딩 시각: 미리 넣은 값 그대로
+        #expect(defaults.double(forKey: GrowthKey.cycleStartedAt) == cycleStartedAt.timeIntervalSince1970)
+        #expect(defaults.integer(forKey: GrowthKey.maxStage) == GrowthStage.fledgling.rawValue)
+        #expect(defaults.string(forKey: GrowthKey.cycleID) == cycleID)
+        #expect(defaults.double(forKey: ProfileKey.onboardedAt) == onboardedAt.timeIntervalSince1970)
+        // 설문 답: 레벨은 LevelEngine 판정, 주간 목표는 Q5 fourPlus → 4회, 대회 목표는 Q7·Q8
+        #expect(defaults.string(forKey: ProfileKey.levelV2) == LevelEngine.decide(model.answers).rawValue)
+        #expect(defaults.integer(forKey: ProfileKey.weeklyGoal) == 4)
+        #expect(defaults.string(forKey: ProfileKey.raceGoal) == RaceDistance.half.rawValue)
+        #expect(defaults.integer(forKey: ProfileKey.raceGoalSec) == 6_300)
+    }
+
+    @Test("첫 온보딩 저장 — 새 사이클을 연다: 시작=지금, 단계=알, 새 식별자, 온보딩 시각=지금")
+    func firstOnboardingOpensNewCycle() throws {
+        let defaults = seededDefaults("firstOnboarding")
+
+        model().persist(isRediagnosis: false, now: now, defaults: defaults)
+
+        #expect(defaults.double(forKey: GrowthKey.cycleStartedAt) == now.timeIntervalSince1970)
+        #expect(defaults.integer(forKey: GrowthKey.maxStage) == GrowthStage.egg.rawValue)
+        let newID = try #require(defaults.string(forKey: GrowthKey.cycleID))
+        #expect(newID != cycleID)
+        #expect(UUID(uuidString: newID) != nil)
+        #expect(defaults.double(forKey: ProfileKey.onboardedAt) == now.timeIntervalSince1970)
+    }
+}

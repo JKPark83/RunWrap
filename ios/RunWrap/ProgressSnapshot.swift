@@ -137,6 +137,27 @@ enum ProgressMergeEngine {
         return .upload(merged)
     }
 
+    /// 첫 업로드 전에 사용자에게 "이전 기록 불러오기 / 새로 시작"을 물어야 하는지 (이슈 #44).
+    ///
+    /// 복원이 일시 실패(네트워크·iCloud 미로그인·타임아웃)한 설치는 새 온보딩으로 새 사이클을
+    /// 만들고, `readLocal`이 `updatedAt`을 지금으로 채우므로 `merge`의 "다른 사이클은 최신이
+    /// 통째로 이긴다" 규칙에서 항상 이긴다 — 서버의 이전 진행도가 조용히 사라진다.
+    /// 그래서 이 설치가 **한 번도 동기화한 적 없고**(업로드·복원 이력 없음) 서버에
+    /// **다른 사이클의 복원 가능한 본**이 있으면 덮어쓰기 전에 묻는다.
+    ///
+    /// - 동기화 이력 있음: 이미 서버와 맞춰 본 설치 — 기존 병합 규칙을 따른다
+    /// - 서버 본 없음·같은 사이클: 잃을 것이 없다 (같은 사이클은 maxStage 최댓값 병합)
+    /// - 적용 불가(미래 스키마·빈 레벨): 불러올 수 없으니 묻지 않는다 — 미래 스키마는
+    ///   `merge`의 keepServer가 덮어쓰기를 막는다
+    ///
+    /// 동기화 이력으로 판정하므로 이 수정 이전에 복원이 실패한 채 업로드하지 못한 설치,
+    /// 다른 기기에서 처음 올리는 기존 사용자(#29 마이그레이션)도 같은 보호를 받는다.
+    static func needsRestoreChoice(local: ProgressSnapshot, server: ProgressSnapshot?,
+                                   hasSyncedBefore: Bool) -> Bool {
+        guard !hasSyncedBefore, let server, canRestore(server) else { return false }
+        return server.cycleID != local.cycleID
+    }
+
     /// 도감 합집합 — id 기준 중복 제거, 수집일 오래된 순(CollectionStore의 저장 순서와 동일)
     static func unionBirds(_ lhs: [CollectedBird], _ rhs: [CollectedBird]) -> [CollectedBird] {
         var seen = Set<UUID>()

@@ -43,7 +43,8 @@ struct RunWrapApp: App {
     /// 최초 기동은 RootView의 connect/load가 담당하므로 여기서는 건드리지 않는다.
     private func refreshCacheAndReschedule() async {
         if case .loaded = health.state { await health.load() }
-        if case .loaded(let runs) = health.state, !runs.isEmpty {
+        // 데모 수치는 캐시하지 않는다 — 주간 알림 본문으로 나가면 안 된다 (이슈 #44)
+        if case .loaded(let runs) = health.state, !runs.isEmpty, !DemoMode.isActive {
             let report = ReportEngine().weeklyReport(from: runs)
             ReportCache.save(ReportSnapshot.make(report: report, runs: runs, now: Date()))
         }
@@ -68,9 +69,11 @@ struct RunWrapApp: App {
 
         await NotificationScheduler.sendWorkoutInsight(
             body: NotificationScheduler.workoutBody(run: latest))
-        // 주간 알림 본문도 최신 데이터로
-        let report = ReportEngine().weeklyReport(from: runs)
-        ReportCache.save(ReportSnapshot.make(report: report, runs: runs, now: Date()))
+        // 주간 알림 본문도 최신 데이터로 — 데모 수치는 캐시하지 않는다 (이슈 #44)
+        if !DemoMode.isActive {
+            let report = ReportEngine().weeklyReport(from: runs)
+            ReportCache.save(ReportSnapshot.make(report: report, runs: runs, now: Date()))
+        }
         await NotificationScheduler.rescheduleWeekly()
     }
 }

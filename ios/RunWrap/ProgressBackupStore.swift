@@ -1,5 +1,6 @@
 import CloudKit
 import Foundation
+import os
 
 /// 진행도 CloudKit 백업·복원 스토어 (이슈 #29).
 ///
@@ -10,6 +11,7 @@ import Foundation
 ///
 /// 원칙: iCloud 미로그인·네트워크 실패·quota 오류가 **로컬 진행도를 초기화하면 안 된다.**
 /// 백업 실패는 조용히 다음 기회로 미루고, 복원 실패는 상태로만 알려 온보딩을 연다.
+/// 복원을 확정하지 못한 설치가 나중에 서버의 이전 진행도를 발견하면 덮지 않고 사용자에게 묻는다 (이슈 #44).
 @MainActor
 final class ProgressBackupStore: ObservableObject {
     /// 신규 설치 부트스트랩의 복원 시도 결과 — RootView가 온보딩을 열지 말지 이걸로 가른다
@@ -23,6 +25,9 @@ final class ProgressBackupStore: ObservableObject {
     }
 
     @Published private(set) var restoreState: RestoreState = .idle
+    /// 첫 업로드 직전에 발견한 서버의 이전 진행도 — nil이 아니면 RootView가
+    /// "이전 기록 불러오기 / 새로 시작" 시트로 묻는다. 답을 받기 전에는 업로드하지 않는다 (이슈 #44)
+    @Published private(set) var restoreCandidate: ProgressSnapshot?
 
     /// CloudKit 컨테이너 — project.yml의 icloud-container-identifiers와 짝
     private static let containerID = "iCloud.com.jkpark.runwrap"
@@ -46,6 +51,8 @@ final class ProgressBackupStore: ObservableObject {
         static let lastSyncedRevision = "cloud.lastSyncedRevision"
         /// 마지막 업로드 성공본(JSON) — 내용이 같으면 업로드를 건너뛰는 변경 감지용
         static let lastUploaded = "cloud.lastUploadedSnapshot"
+        /// 복원 선택 시트에서 "새로 시작"을 골랐는지 — 그 뒤 업로드가 실패해도 다시 묻지 않는다 (이슈 #44)
+        static let restoreChoiceMade = "cloud.restoreChoiceMade"
     }
 
     private let defaults: UserDefaults
@@ -54,6 +61,13 @@ final class ProgressBackupStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        #if DEBUG
+        // 시뮬레이터 확인용 — CloudKit 계정이 없고 데모 가드가 백업 경로를 막아
+        // 실제로는 복원 선택 시트에 닿을 수 없다. 실행 인자로 후보를 주입해 화면을 본다
+        if ProcessInfo.processInfo.arguments.contains("-RWInjectRestoreCandidate") {
+            restoreCandidate = Self.debugRestoreCandidate(now: Date())
+        }
+        #endif
     }
 
     private var database: CKDatabase {
@@ -90,8 +104,9 @@ final class ProgressBackupStore: ObservableObject {
                 Self.decode(try await CKContainer(identifier: containerID)
                     .privateCloudDatabase.record(for: CKRecord.ID(recordName: Self.recordName)))
             }) else {
-                // 레코드는 있는데 읽을 수 없다 — 손상이거나 지금 앱보다 새 스키마.
-                // 새로 시작은 하되 안내는 남긴다 (덮어쓰기는 merge가 keepServer로 막는다)
+                // 레코드는 있는데 payload를 읽을 수 없다 — 손상된 레코드다.
+                // 새로 시작은 하되 안내는 남긴다. 읽을 수 없는 본은 복원 선택으로 물을 수도 없어
+                // 첫 업로드가 덮어쓴다 (디코드되는 미래 스키마는 merge의 keepServer가 막는다)
                 restoreState = .failed
                 return nil
             }
@@ -124,7 +139,8 @@ final class ProgressBackupStore: ObservableObject {
     /// 업로드 이력이 없으니 "변경됨"으로 판정되어 현재 로컬 상태가 첫 스냅샷이 된다.
     /// 실패는 조용히 삼킨다: 다음 트리거(백그라운드 진입·단계 상승·사이클 전환)에서 다시 시도한다.
     func backupIfChanged() async {
-        guard !DemoMode.isActive, !isBackingUp else { return }
+        // 복원 선택을 기다리는 동안은 올리지 않는다 — 답하기 전에 서버 본을 덮으면 묻는 의미가 없다
+        guard !DemoMode.isActive, !isBackingUp, restoreCandidate == nil else { return }
         guard var local = ProgressSnapshot.readLocal(defaults: defaults,
                                                      birds: CollectionCache.load(),
                                                      now: Date()) else { return }
@@ -138,6 +154,15 @@ final class ProgressBackupStore: ObservableObject {
 
         do {
             let serverRecord = try await fetchServerRecord()
+            // 한 번도 동기화하지 않은 설치가 서버의 다른 사이클 본을 만나면 덮기 전에 묻는다 (이슈 #44).
+            // 가져온 레코드를 그대로 판정에 쓴다 — 판정용으로 한 번 더 조회하지 않는다
+            let server = serverRecord.flatMap(Self.decode)
+            if ProgressMergeEngine.needsRestoreChoice(local: local, server: server,
+                                                      hasSyncedBefore: hasSyncedBefore),
+               let server {
+                restoreCandidate = server
+                return
+            }
             try await upload(local: local, onto: serverRecord)
         } catch let error as CKError where error.code == .serverRecordChanged {
             // 저장 경합 — 서버 최신본과 한 번 더 병합해 재시도, 또 실패하면 다음 기회로
@@ -186,7 +211,74 @@ final class ProgressBackupStore: ObservableObject {
         }
     }
 
+    // MARK: - 복원 선택 (이슈 #44)
+
+    /// "이전 기록 불러오기" — 서버 본을 로컬에 적용한다. 방금 온보딩에서 정한 레벨·목표는 서버 값으로 바뀐다.
+    ///
+    /// 도감은 합집합으로 붙인다 — 수집 이력은 잃을 이유가 없다(merge와 같은 원칙).
+    /// 반환값은 적용된 도감 — 메모리의 `CollectionStore` 반영은 호출부 몫이다.
+    func acceptRestoreCandidate() -> [CollectedBird]? {
+        guard let server = restoreCandidate else { return nil }
+        var applied = server
+        applied.collectedBirds = ProgressMergeEngine.unionBirds(CollectionCache.load(),
+                                                                server.collectedBirds)
+        applied.apply(to: defaults)
+        try? CollectionCache.save(applied.collectedBirds)
+        // 동기화 기준은 서버에 실제로 있는 본 — 합집합으로 늘어난 새가 있으면 다음 백업이 올린다
+        rememberSynced(server)
+        restoreCandidate = nil
+        Task { await backupIfChanged() }
+        return applied.collectedBirds
+    }
+
+    /// "새로 시작" — 지금의 새 사이클을 유지하고 서버 본을 덮는다.
+    ///
+    /// 서버 쪽 도감은 먼저 로컬 파일에 합쳐 둔다 — 업로드가 실패해도 "도감의 새는 그대로 남아요"가
+    /// 지켜진다. 이후 업로드는 기존 병합 규칙(다른 사이클 → 최신인 로컬이 이김, 도감은 합집합)을 탄다.
+    /// 반환값은 합쳐진 도감 — 메모리의 `CollectionStore` 반영은 호출부 몫이다.
+    func declineRestoreCandidate() -> [CollectedBird] {
+        let local = CollectionCache.load()
+        guard let server = restoreCandidate else { return local }
+        let birds = ProgressMergeEngine.unionBirds(local, server.collectedBirds)
+        try? CollectionCache.save(birds)
+        defaults.set(true, forKey: SyncKey.restoreChoiceMade)
+        restoreCandidate = nil
+        Task { await backupIfChanged() }
+        return birds
+    }
+
+    #if DEBUG
+    /// 시뮬레이터 확인용 샘플 — 런친놈, 90일 전 시작한 사이클의 날갯짓 단계, 도감 2마리
+    private static func debugRestoreCandidate(now: Date) -> ProgressSnapshot {
+        ProgressSnapshot(
+            schemaVersion: ProgressSnapshot.currentSchemaVersion,
+            revision: 7,
+            updatedAt: now.addingTimeInterval(-3 * 86_400),
+            cycleID: UUID(),
+            levelRaw: RunnerLevel.advanced.rawValue,
+            purposesRaw: RunPurpose.encode([.record]),
+            weeklyGoal: 4,
+            onboardedAt: now.addingTimeInterval(-200 * 86_400),
+            cycleStartedAt: now.addingTimeInterval(-90 * 86_400),
+            maxStage: GrowthStage.flapping.rawValue,
+            raceGoalRaw: RaceDistance.full.rawValue,
+            raceGoalSeconds: 4 * 3_600,
+            raceDate: nil,
+            collectedBirds: [
+                CollectedBird(species: .sparrow, goalLabel: "주 3회 습관",
+                              collectedAt: now.addingTimeInterval(-150 * 86_400), cycleDays: 40),
+                CollectedBird(species: .swallow, goalLabel: "10km 완주",
+                              collectedAt: now.addingTimeInterval(-95 * 86_400), cycleDays: 55),
+            ])
+    }
+    #endif
+
     // MARK: - 동기화 메타
+
+    /// 이 설치가 서버와 한 번이라도 맞춰 봤는지 — 업로드·복원 성공 이력이 있거나 복원 선택을 마쳤다
+    private var hasSyncedBefore: Bool {
+        lastUploaded() != nil || defaults.bool(forKey: SyncKey.restoreChoiceMade)
+    }
 
     private func rememberSynced(_ snapshot: ProgressSnapshot) {
         defaults.set(snapshot.revision, forKey: SyncKey.lastSyncedRevision)
@@ -213,22 +305,36 @@ final class ProgressBackupStore: ObservableObject {
         return try? JSONDecoder().decode(ProgressSnapshot.self, from: data)
     }
 
-    /// 복원 대기 상한 — CloudKit 자체 타임아웃이 스플래시를 오래 잡아 두지 않게 경주시킨다
-    private static func withTimeout<T: Sendable>(
+    /// 복원 대기 상한 — CloudKit 자체 타임아웃이 스플래시를 오래 잡아 두지 않게 경주시킨다.
+    ///
+    /// 태스크 그룹은 쓰지 않는다: 그룹은 끝나기 전에 남은 자식을 모두 기다리는데, CloudKit async
+    /// 호출은 협력적 취소를 지원하지 않아 결국 CloudKit 자체 타임아웃만큼 멈춘다 (이슈 #44).
+    /// 대신 작업과 타이머를 따로 띄워 **먼저 끝난 쪽만** continuation을 재개한다.
+    /// 시한을 넘긴 작업은 취소만 요청하고 결과는 버린다(응답이 올 때까지 살아 있어도 무해하다).
+    private nonisolated static func withTimeout<T: Sendable>(
         _ seconds: TimeInterval,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
-            group.addTask {
-                try await Task.sleep(for: .seconds(seconds))
-                throw CKError(.networkFailure)
+        // continuation은 정확히 한 번만 재개해야 한다 — 두 경주자 중 첫 번째만 통과시키는 깃발.
+        // Mutex는 iOS 18부터라 iOS 16+의 OSAllocatedUnfairLock을 쓴다
+        let resumed = OSAllocatedUnfairLock(initialState: false)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<T, Error>) in
+            @Sendable func finish(_ result: Result<T, Error>) {
+                let isFirst = resumed.withLock { done -> Bool in
+                    guard !done else { return false }
+                    done = true
+                    return true
+                }
+                if isFirst { continuation.resume(with: result) }
             }
-            guard let first = try await group.next() else {
-                throw CKError(.internalError)
+            let work = Task {
+                do { finish(.success(try await operation())) } catch { finish(.failure(error)) }
             }
-            group.cancelAll()
-            return first
+            Task {
+                try? await Task.sleep(for: .seconds(seconds))
+                work.cancel()
+                finish(.failure(CKError(.networkFailure)))
+            }
         }
     }
 }
