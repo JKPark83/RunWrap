@@ -114,7 +114,7 @@ struct RaceListScreen: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(selected ? .white : RR.text2)
+                .foregroundStyle(selected ? RR.onBrand : RR.text2)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(selected ? RR.brand : RR.surface2, in: Capsule())

@@ -480,7 +480,7 @@ struct CourseScreen: View {
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .opacity(0.75)
                     }
-                    .foregroundStyle(isOn ? .white : kind.color.opacity(total > 0 ? 1 : 0.45))
+                    .foregroundStyle(isOn ? RR.onBrand : kind.color.opacity(total > 0 ? 1 : 0.45))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
                     .background(isOn ? kind.color : kind.softColor,
@@ -551,6 +551,7 @@ struct CourseScreen: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (핀·mapBadge의 흰/검)
     private func poiPin(_ poi: CoursePOI, caption: String) -> some View {
         let isSelected = selected?.poi == poi
         return ZStack {

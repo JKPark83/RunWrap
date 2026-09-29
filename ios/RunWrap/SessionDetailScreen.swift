@@ -132,6 +132,7 @@ struct SessionDetailScreen: View {
             .frame(height: 320)
             .clipped()
 
+            // 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (히어로 그라데이션·거리 배지·뒤로 버튼)
             LinearGradient(colors: [.black.opacity(0.42), .clear],
                            startPoint: .top, endPoint: .bottom)
                 .frame(height: 110)
@@ -705,7 +706,7 @@ private struct ShareSheetView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(RR.line))
-            .shadow(color: .black.opacity(0.10), radius: 14, y: 8)
+            .shadow(color: RR.shadowStrong, radius: 14, y: 8)
     }
 
     private var actionRow: some View {
@@ -732,7 +733,7 @@ private struct ShareSheetView: View {
                                                 image: Image(uiImage: rendered))) {
                     Label("공유", systemImage: "square.and.arrow.up")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(RR.onBrand)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
                         .background(RR.brand,
