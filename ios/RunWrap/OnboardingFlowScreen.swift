@@ -340,6 +340,8 @@ final class OnboardingFlowModel: ObservableObject {
         case .raceExperience(let value):
             answers.q6Race = value
         case .target(let value):
+            // 종목이 바뀌면 이전 종목 기준 목표 기록은 무의미하다 — 지워서 Q8이 새 종목 프리셋으로 다시 잡히게 한다
+            if value != answers.q7Target { answers.q8GoalSec = nil }
             answers.q7Target = value
             if value == nil { answers.q8GoalSec = nil }  // "아직 없어요"면 Q8도 건너뛴다
         }

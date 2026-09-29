@@ -778,7 +778,7 @@ private struct VerdictCard: View {
         case .denied:
             hintArt(symbol: "location.slash", line: verdict.weather)
         case .unavailable:
-            hintArt(symbol: "cloud.slash", line: verdict.weather)
+            hintArt(symbol: "icloud.slash", line: verdict.weather)
         }
     }
 

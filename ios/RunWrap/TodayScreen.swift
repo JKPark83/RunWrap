@@ -44,7 +44,7 @@ struct TodayScreen: View {
                     } else if weatherFailed {
                         noticeCard("날씨를 불러오지 못했어요",
                                    message: "네트워크 상태를 확인하고 화면을 아래로 당겨 새로고침해 주세요.",
-                                   symbol: "cloud.slash")
+                                   symbol: "icloud.slash")
                     } else {
                         loadingCard
                     }
