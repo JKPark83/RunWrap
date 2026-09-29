@@ -55,6 +55,15 @@ struct GrowthState {
     let daysSinceLastRun: Int?
 }
 
+/// 주간 목표 변경 이력 1건 — (변경 시각, 변경 직전 목표) (이슈 #108, #116).
+///
+/// 변경을 전부 보관한다(사용자 결정 2026-09-30) — 1건만 두면 두 번째 변경이 첫 기록을 덮어
+/// 첫 변경 이전 주까지 낮춘 목표로 소급 판정되기 때문이다. 이력은 시각 오름차순이다
+struct WeeklyGoalChange: Codable, Equatable {
+    let at: Date
+    let before: Int
+}
+
 /// 성장 시스템 — 알에서 나는 새까지 XP·단계를 계산하는 순수 로직 (기획서 §5)
 ///
 /// **XP 원장을 저장하지 않는다.** `cycleStartedAt` 이후의 HealthKit 러닝 이력에서
@@ -83,11 +92,11 @@ enum GrowthEngine {
     ///   - cycleStartedAt: 이번 사이클(첫 사이클 = 온보딩) 시작 시각. 이전 러닝은 XP 미산입
     ///   - maxStage: 저장된 이번 사이클 최고 도달 단계 (rawValue). "성장은 되돌리지 않는다" 하한
     ///   - weeklyGoal: 주간 목표 러닝 횟수 (Q5 초기값 · 설정에서 변경)
-    ///   - weeklyGoalChange: 마지막 주간 목표 변경(시각, 변경 직전 목표). nil이면 변경 없음 —
-    ///     모든 주를 현재 목표로 판정한다 (이슈 #108)
+    ///   - weeklyGoalChanges: 주간 목표 변경 이력(시각 오름차순). 비어 있으면 변경 없음 —
+    ///     모든 주를 현재 목표로 판정한다 (이슈 #108, #116)
     ///   - now: 판정 기준 시각 (결정론을 위한 주입)
     static func state(runs: [RunSummary], cycleStartedAt: Date, maxStage: Int,
-                       weeklyGoal: Int, weeklyGoalChange: (at: Date, before: Int)? = nil,
+                       weeklyGoal: Int, weeklyGoalChanges: [WeeklyGoalChange] = [],
                        now: Date) -> GrowthState {
         var calendar = Calendar(identifier: .iso8601)  // 월요일 시작 — streakWeeks와 동일 방식
         calendar.timeZone = .current
@@ -95,7 +104,7 @@ enum GrowthEngine {
         let cycleRuns = runs.filter { $0.start >= cycleStartedAt && $0.start <= now }
 
         let xp = totalXp(runs: cycleRuns, cycleStartedAt: cycleStartedAt,
-                          weeklyGoal: weeklyGoal, weeklyGoalChange: weeklyGoalChange,
+                          weeklyGoal: weeklyGoal, weeklyGoalChanges: weeklyGoalChanges,
                           calendar: calendar, now: now)
         let computedStage = stage(forXp: xp)
         let savedStage = GrowthStage(rawValue: maxStage) ?? .egg
@@ -125,21 +134,20 @@ enum GrowthEngine {
         return result
     }
 
-    /// 주간 목표를 바꿀 때 저장할 변경 기록 — (변경 시각, 변경 직전 목표) (이슈 #108).
+    /// 주간 목표를 바꿀 때 저장할 변경 이력 — 기존 이력 뒤에 (변경 시각, 변경 직전 목표)를 붙인다 (이슈 #108, #116).
     ///
-    /// 기존 기록이 없거나 다른 ISO 주의 기록이면 (now, 변경 직전 값)으로 새로 쓴다.
-    /// 같은 주 안에서 여러 번 바꾸면 기존 기록을 그대로 둔다 — 변경한 주는 그 주 첫 변경 전
+    /// 같은 ISO 주에 이미 항목이 있으면 이력을 그대로 둔다 — 변경한 주는 그 주 첫 변경 전
     /// 목표로 판정해야 하므로(3→2→1로 나눠 바꿔도 그 주는 3으로 판정) `before`를 덮지 않는다.
-    static func recordWeeklyGoalChange(previous: (at: Date, before: Int)?, oldGoal: Int,
-                                       now: Date) -> (at: Date, before: Int) {
+    /// 다른 주의 항목은 지우지 않는다 — 각 변경이 "변경한 주까지는 변경 전 목표"를 따로 지킨다.
+    static func recordWeeklyGoalChange(history: [WeeklyGoalChange], oldGoal: Int,
+                                       now: Date) -> [WeeklyGoalChange] {
         var calendar = Calendar(identifier: .iso8601)  // weeklyBonusXp와 같은 주 경계
         calendar.timeZone = .current
-        if let previous,
-           calendar.dateInterval(of: .weekOfYear, for: previous.at)?.start
-               == calendar.dateInterval(of: .weekOfYear, for: now)?.start {
-            return previous
+        let nowWeekStart = calendar.dateInterval(of: .weekOfYear, for: now)?.start
+        if history.contains(where: { calendar.dateInterval(of: .weekOfYear, for: $0.at)?.start == nowWeekStart }) {
+            return history
         }
-        return (now, oldGoal)
+        return history + [WeeklyGoalChange(at: now, before: oldGoal)]
     }
 
     /// 현재 단계 안에서의 진행률 — (단계 내 XP, 다음 단계까지 남은 XP, 게이지 비율)
@@ -156,11 +164,11 @@ enum GrowthEngine {
 
     /// 이번 사이클 총 XP = 세션 XP 합(하루 상한 적용) + 주간 목표 달성 보너스 + 4주 연속 보너스
     private static func totalXp(runs: [RunSummary], cycleStartedAt: Date, weeklyGoal: Int,
-                                 weeklyGoalChange: (at: Date, before: Int)?,
+                                 weeklyGoalChanges: [WeeklyGoalChange],
                                  calendar: Calendar, now: Date) -> Int {
         sessionXp(runs: runs, calendar: calendar)
             + weeklyBonusXp(runs: runs, cycleStartedAt: cycleStartedAt, weeklyGoal: weeklyGoal,
-                             weeklyGoalChange: weeklyGoalChange, calendar: calendar, now: now)
+                             weeklyGoalChanges: weeklyGoalChanges, calendar: calendar, now: now)
     }
 
     /// 러닝 세션 XP — 날짜별로 묶어 하루 상한 40을 적용한 합
@@ -190,11 +198,13 @@ enum GrowthEngine {
     /// 완결된 주(사이클 시작 주 ~ 이전 주. 진행 중인 이번 주는 제외 — streakWeeks와 동일한 원칙)만 판정한다.
     ///
     /// 주간 목표 변경은 다음 주부터 적용한다 (이슈 #108, 사용자 결정 2026-09-30) — 변경한 주까지는
-    /// 변경 전 목표(`before`), 그다음 주부터 현재 목표로 판정한다. 과거 주를 전부 현재 목표로
+    /// 변경 전 목표(`before`), 그다음 주부터 현재 목표로 판정한다. 변경이 여러 번이면 각 변경마다
+    /// 같은 규칙을 적용한다 (이슈 #116): 주 W의 목표 = W 이후(같은 주 포함)에 한 변경 중 가장 이른
+    /// 변경의 `before`, 그런 변경이 없으면(모든 변경보다 뒤인 주) 현재 목표. 과거 주를 전부 현재 목표로
     /// 다시 판정하면 목표를 1로 낮추는 즉시 지난 주들에 +30·연속 +50이 붙어 단계가 한 번에 오르고,
     /// maxStage는 되돌리지 않으므로 그 상승이 영구화된다.
     private static func weeklyBonusXp(runs: [RunSummary], cycleStartedAt: Date, weeklyGoal: Int,
-                                       weeklyGoalChange: (at: Date, before: Int)?,
+                                       weeklyGoalChanges: [WeeklyGoalChange],
                                        calendar: Calendar, now: Date) -> Int {
         guard weeklyGoal > 0,
               let cycleStart = calendar.dateInterval(of: .weekOfYear, for: cycleStartedAt)?.start,
@@ -219,16 +229,18 @@ enum GrowthEngine {
             cursor = next
         }
 
-        // 변경 시각이 속한 주의 시작 — 이 주 이하(변경한 주 포함)는 변경 전 목표로 판정한다
-        let changeWeekStart = weeklyGoalChange.flatMap { calendar.dateInterval(of: .weekOfYear, for: $0.at)?.start }
+        // 변경마다 (변경 시각이 속한 주의 시작, 변경 전 목표) — 시각 오름차순이라 같은 주가 겹쳐도 첫 변경이 앞선다
+        let changeWeeks: [(weekStart: Date, before: Int)] = weeklyGoalChanges
+            .sorted { $0.at < $1.at }
+            .compactMap { change in
+                calendar.dateInterval(of: .weekOfYear, for: change.at).map { ($0.start, change.before) }
+            }
 
         var bonus = 0
         var consecutive = 0
         for week in weeks {
-            var goal = weeklyGoal
-            if let change = weeklyGoalChange, let changeWeekStart, week <= changeWeekStart {
-                goal = change.before
-            }
+            // 이 주 이후(같은 주 포함)에 한 가장 이른 변경의 변경 전 목표 — 없으면 현재 목표
+            let goal = changeWeeks.first { week <= $0.weekStart }?.before ?? weeklyGoal
             // 변경 전 목표가 0 이하(미설정)면 그 주는 달성으로 치지 않는다
             let achieved = goal > 0 && (countsByWeek[week] ?? 0) >= goal
             if achieved {

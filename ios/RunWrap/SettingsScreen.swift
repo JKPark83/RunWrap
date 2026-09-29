@@ -7,9 +7,6 @@ struct SettingsScreen: View {
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     @AppStorage(ProfileKey.purposes) private var purposesRaw = ""
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
-    // 주간 목표 변경 기록 (이슈 #108) — 0이면 변경 없음. 바뀐 목표는 다음 주부터 보너스에 적용된다
-    @AppStorage(ProfileKey.weeklyGoalChangedAt) private var weeklyGoalChangedAtRaw = 0.0
-    @AppStorage(ProfileKey.weeklyGoalBefore) private var weeklyGoalBefore = 0
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
     // 대회 날짜 — 0이면 미설정. Date를 직접 저장할 수 없어 timeIntervalSince1970로 둔다
@@ -298,14 +295,12 @@ struct SettingsScreen: View {
         .padding(.vertical, 12)
     }
 
-    /// 주간 목표 변경을 기록한다 (이슈 #108) — 판정 규칙은 GrowthEngine.recordWeeklyGoalChange
+    /// 주간 목표 변경을 이력에 남긴다 (이슈 #108, #116) — 판정 규칙은 GrowthEngine.recordWeeklyGoalChange.
+    /// 바뀐 목표는 다음 주부터 보너스에 적용된다. 옛 두 키는 읽기 헬퍼가 이관한다
     private func recordWeeklyGoalChange(from oldValue: Int) {
-        let previous = weeklyGoalChangedAtRaw > 0
-            ? (at: Date(timeIntervalSince1970: weeklyGoalChangedAtRaw), before: weeklyGoalBefore)
-            : nil
-        let change = GrowthEngine.recordWeeklyGoalChange(previous: previous, oldGoal: oldValue, now: Date())
-        weeklyGoalChangedAtRaw = change.at.timeIntervalSince1970
-        weeklyGoalBefore = change.before
+        let history = WeeklyGoalChangeLog.load(defaults: .standard)
+        WeeklyGoalChangeLog.save(GrowthEngine.recordWeeklyGoalChange(history: history, oldGoal: oldValue, now: Date()),
+                                 defaults: .standard)
     }
 
     /// 목적 복수 선택 토글 — 최소 1개는 남긴다 (전부 끄면 문장 강조점을 정할 수 없다)

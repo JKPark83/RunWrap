@@ -158,7 +158,7 @@ struct OnboardingPersistTests {
         #expect(defaults.integer(forKey: ProfileKey.raceGoalSec) == 6_300)
     }
 
-    @Test("재진단 저장 — 주간 목표가 바뀌면 변경 시각과 이전 목표를 남긴다 (이슈 #108)")
+    @Test("재진단 저장 — 주간 목표가 바뀌면 변경 시각과 이전 목표를 이력에 남긴다 (이슈 #108)")
     func rediagnosisRecordsWeeklyGoalChange() {
         let defaults = seededDefaults("rediagnosisGoalChange")
         defaults.set(2, forKey: ProfileKey.weeklyGoal)  // 재진단 전 주 2회
@@ -166,8 +166,22 @@ struct OnboardingPersistTests {
         model().persist(isRediagnosis: true, now: now, defaults: defaults)  // Q5 fourPlus → 4회
 
         #expect(defaults.integer(forKey: ProfileKey.weeklyGoal) == 4)
-        #expect(defaults.double(forKey: ProfileKey.weeklyGoalChangedAt) == now.timeIntervalSince1970)
-        #expect(defaults.integer(forKey: ProfileKey.weeklyGoalBefore) == 2)
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults) == [WeeklyGoalChange(at: now, before: 2)])
+    }
+
+    @Test("재진단 저장 — #108의 옛 기록(다른 주)이 있으면 이관한 뒤 지우지 않고 새 변경을 뒤에 붙인다 (이슈 #116)")
+    func rediagnosisAppendsToMigratedHistory() {
+        let defaults = seededDefaults("rediagnosisGoalHistory")
+        defaults.set(2, forKey: ProfileKey.weeklyGoal)  // 재진단 전 주 2회 — 8/12에 3→2로 바꾼 옛 기록
+        let earlier = ISO8601DateFormatter().date(from: "2026-08-12T00:00:00Z")!
+        defaults.set(earlier.timeIntervalSince1970, forKey: WeeklyGoalChangeLog.legacyChangedAtKey)
+        defaults.set(3, forKey: WeeklyGoalChangeLog.legacyBeforeKey)
+
+        model().persist(isRediagnosis: true, now: now, defaults: defaults)  // Q5 fourPlus → 4회
+
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults) == [WeeklyGoalChange(at: earlier, before: 3),
+                                                                 WeeklyGoalChange(at: now, before: 2)])
+        #expect(defaults.object(forKey: WeeklyGoalChangeLog.legacyChangedAtKey) == nil)
     }
 
     @Test("재진단 저장 — 주간 목표가 그대로면 변경 기록을 남기지 않는다")
@@ -177,7 +191,7 @@ struct OnboardingPersistTests {
 
         model().persist(isRediagnosis: true, now: now, defaults: defaults)
 
-        #expect(defaults.double(forKey: ProfileKey.weeklyGoalChangedAt) == 0)
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults).isEmpty)
     }
 
     @Test("첫 온보딩 저장 — 새 사이클을 연다: 시작=지금, 단계=알, 새 식별자, 온보딩 시각=지금, 사이클 목표=Q7·Q8")
