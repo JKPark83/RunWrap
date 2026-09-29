@@ -13,7 +13,7 @@ struct ReportDetailScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
                     Eyebrow(text: "최근 7일 · \(report.dateRange)")
-                    Text(report.headline)
+                    Text(report.headline(level: level))
                         .font(.system(size: 26, weight: .bold))
                         .lineSpacing(5)
                         .foregroundStyle(RR.text)
@@ -36,7 +36,7 @@ struct ReportDetailScreen: View {
                     if let balance = guide.balance { balanceSection(balance) }
                 }
 
-                if let suggestion = report.suggestion {
+                if let suggestion = report.suggestion(level: level) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text("다음 주 제안")
                             .font(.system(size: 13, weight: .bold))

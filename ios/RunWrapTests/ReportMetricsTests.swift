@@ -190,6 +190,49 @@ struct ReportMetricsTests {
         #expect(report.visibleCards(level: .advanced).isEmpty)
     }
 
+    /// 문장 게이트 픽스처 — 거리·ACWR만 있는 리포트 (EF 없음)
+    private func sentenceReport(distanceTone: RRTone, recent: Double,
+                                acwr: WeeklyReport.AcwrCard?) -> WeeklyReport {
+        let distance = WeeklyReport.DistanceCard(tone: distanceTone, recent7Km: recent, previous7Km: 20,
+                                                 capKm: 22, changePct: (recent - 20) / 20 * 100)
+        return WeeklyReport(dateRange: "8.4 – 8.10", weeks: [], distance: distance, acwr: acwr,
+                            efficiency: nil, streakWeeks: 3, weekRunCount: 3)
+    }
+
+    @Test("첫 문장 게이트 — 런린이는 숨긴 ACWR 과부하 톤으로 문장을 고르지 않는다 (이슈 #124)")
+    func headlineIgnoresHiddenCards() {
+        // 거리 +0% steady, ACWR 20 ÷ 12.5 = 1.6 overload
+        let acwr = WeeklyReport.AcwrCard(tone: .overload, acute: 20, chronic: 12.5, ratio: 1.6)
+        let report = sentenceReport(distanceTone: .steady, recent: 20, acwr: acwr)
+        #expect(report.headline(level: .beginner) == "안정적으로 리듬을 지킨 한 주였습니다.")
+        #expect(report.headline(level: .intermediate) == "몸보다 훈련량이 앞서 나간 한 주였습니다.")
+    }
+
+    @Test("다음 주 제안 게이트 — 런린이는 km 수치 없이 문장만, ACWR 근거도 쓰지 않는다 (이슈 #124)")
+    func beginnerSuggestionHasNoNumbers() throws {
+        // 거리 +23% overload → 런린이는 감량 문장만
+        let overload = sentenceReport(distanceTone: .overload, recent: 24.6, acwr: nil)
+        let text = try #require(overload.suggestion(level: .beginner))
+        #expect(!text.contains("km"))
+        #expect(text == "이번 주보다 조금 덜 달려도 괜찮아요. 롱런 하나를 가볍게 바꿔 보세요.")
+
+        // 거리 steady + ACWR 1.6 — ACWR 카드가 숨겨진 런린이는 과부하 근거로 쓰지 않는다
+        let acwr = WeeklyReport.AcwrCard(tone: .overload, acute: 20, chronic: 12.5, ratio: 1.6)
+        let hiddenAcwr = sentenceReport(distanceTone: .steady, recent: 20, acwr: acwr)
+        #expect(hiddenAcwr.suggestion(level: .beginner)
+                == "지금 리듬 그대로 이어가면 됩니다. 다음 주에도 증가 폭 10% 이내를 지켜보세요.")
+        // 런잘알은 ACWR 근거로 감량 — 상한 min(22, 12.5 × 1.3 = 16.25) → 16, 하한 16.25 × 0.93 ≈ 15.1 → 15
+        #expect(hiddenAcwr.suggestion(level: .intermediate)
+                == "주간 15–16 km로 줄이면 안전 구간으로 돌아옵니다. 롱런 하나를 회복 주행으로 바꾸면 충분해요.")
+    }
+
+    @Test("다음 주 제안 — 런잘알은 기존 수치 문장을 유지한다 (상한 22km, 하한 22 × 0.93 ≈ 20)")
+    func intermediateSuggestionKeepsNumbers() {
+        let report = sentenceReport(distanceTone: .overload, recent: 24.6, acwr: nil)
+        #expect(report.suggestion(level: .intermediate)
+                == "주간 20–22 km로 줄이면 안전 구간으로 돌아옵니다. 롱런 하나를 회복 주행으로 바꾸면 충분해요.")
+    }
+
     @Test("월간 통계 — 8월 집계와 지난달 같은 날짜까지 비교")
     func monthlyStatsAggregates() {
         let august = [run(daysAgo: 1, km: 10, minPerKm: 6, hr: 150),    // 8.9

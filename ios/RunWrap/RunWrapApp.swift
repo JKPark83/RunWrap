@@ -52,7 +52,8 @@ struct RunWrapApp: App {
         // 데모 수치는 캐시하지 않는다 — 주간 알림 본문으로 나가면 안 된다 (이슈 #44)
         if case .loaded(let runs) = health.state, !runs.isEmpty, !DemoMode.isActive {
             let report = ReportEngine().weeklyReport(from: runs)
-            ReportCache.save(ReportSnapshot.make(report: report, runs: runs, now: Date()))
+            ReportCache.save(ReportSnapshot.make(report: report, runs: runs,
+                                                 level: Self.currentLevel, now: Date()))
         } else if case .loaded(let runs) = health.state, runs.isEmpty, !DemoMode.isActive {
             // 기록이 비었으면(삭제·권한 회수) 옛 스냅샷이 알림으로 나가지 않게 지운다 (이슈 #61)
             ReportCache.clear()
@@ -84,8 +85,14 @@ struct RunWrapApp: App {
         // 주간 알림 본문도 최신 데이터로 — 데모 수치는 캐시하지 않는다 (이슈 #44)
         if !DemoMode.isActive {
             let report = ReportEngine().weeklyReport(from: runs)
-            ReportCache.save(ReportSnapshot.make(report: report, runs: runs, now: Date()))
+            ReportCache.save(ReportSnapshot.make(report: report, runs: runs,
+                                                 level: Self.currentLevel, now: Date()))
         }
         await NotificationScheduler.rescheduleWeekly()
+    }
+
+    /// 저장된 러너 레벨 — 화면의 @AppStorage 기본값과 같이 미설정이면 런린이 (이슈 #124)
+    private static var currentLevel: RunnerLevel {
+        RunnerLevel(rawValue: UserDefaults.standard.string(forKey: ProfileKey.levelV2) ?? "") ?? .beginner
     }
 }
