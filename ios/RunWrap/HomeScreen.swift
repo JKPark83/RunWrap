@@ -115,16 +115,13 @@ struct HomeScreen: View {
             }
         }
         .onAppear {
-            // 데모(합성 데이터)는 표시만 한다 — 최고 단계·세러모니·사이클 전환을 저장하면
-            // 데모를 꺼도 부풀려진 단계와 가짜 새가 남고 CloudKit까지 올라간다 (이슈 #44).
-            // 세러모니가 뜨지 않으면 startNewCycle도 불리지 않는다
-            if !DemoMode.isActive {
-                syncMaxStage(growth.stage)
-                // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
-                // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다
-                if CollectionEngine.hasReachedAdult(stage: growth.stage) { showsCeremony = true }
-            }
+            syncStage(growth.stage)
             checkNewPBs(runs: runs)
+        }
+        // 포그라운드 복귀·당겨서 새로고침으로 단계가 오르면 홈이 이미 떠 있어 onAppear가 다시 불리지 않는다 —
+        // 단계 변화에도 같은 기록·백업·세러모니를 건다 (이슈 #60)
+        .onChange(of: growth.stage) { _, newStage in
+            syncStage(newStage)
         }
         .fullScreenCover(isPresented: $showsCeremony) {
             CeremonyScreen(species: pendingSpecies,
@@ -485,6 +482,19 @@ struct HomeScreen: View {
         if cycleStartedAtRaw > 0 { return Date(timeIntervalSince1970: cycleStartedAtRaw) }
         if onboardedAtRaw > 0 { return Date(timeIntervalSince1970: onboardedAtRaw) }
         return .distantPast
+    }
+
+    /// 표시 단계를 최고 단계에 기록하고, 성조면 세러모니를 띄운다 — 홈 진입·단계 변화 두 곳에서 부른다 (이슈 #60)
+    private func syncStage(_ stage: GrowthStage) {
+        // 데모(합성 데이터)는 표시만 한다 — 최고 단계·세러모니·사이클 전환을 저장하면
+        // 데모를 꺼도 부풀려진 단계와 가짜 새가 남고 CloudKit까지 올라간다 (이슈 #44).
+        // 세러모니가 뜨지 않으면 startNewCycle도 불리지 않는다
+        guard !DemoMode.isActive else { return }
+        syncMaxStage(stage)
+        // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
+        // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다.
+        // 이미 떠 있으면 다시 세우지 않는다
+        if !showsCeremony && CollectionEngine.hasReachedAdult(stage: stage) { showsCeremony = true }
     }
 
     /// 이번 사이클 최고 단계를 올려 둔다 — 다음 실행에서 표시 단계가 내려가지 않게 하는 하한.
