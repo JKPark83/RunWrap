@@ -20,15 +20,16 @@ struct ReportMetricsTests {
     func distanceCardValues() throws {
         let runs = [run(daysAgo: 1, km: 12.3), run(daysAgo: 3, km: 12.3),
                     run(daysAgo: 8, km: 10), run(daysAgo: 10, km: 10)]
-        let card = try #require(engine.weeklyReport(from: runs).distance)
+        let report = engine.weeklyReport(from: runs)
+        let card = try #require(report.distance)
         #expect(card.tone == .overload)
         #expect(abs(card.recent7Km - 24.6) < 0.01)
         #expect(abs(card.previous7Km - 20) < 0.01)
         #expect(abs(card.capKm - 22) < 0.01)
         #expect(abs(card.changePct - 23) < 0.01)
         #expect(abs(card.overKm - 2.6) < 0.01)
-        #expect(card.weeks.count == 6)
-        #expect(card.weeks.last?.isCurrent == true)
+        #expect(report.weeks.count == 6)
+        #expect(report.weeks.last?.isCurrent == true)
     }
 
     @Test("최근 7일 창 — 헤더 날짜(6일 전 자정~지금)와 거리·횟수 창이 일치한다 (이슈 #75)")
@@ -125,12 +126,29 @@ struct ReportMetricsTests {
         // now = 8.10(월). 56일 전 = 6.15(월) 주 → 6.15…8.10 주가 9개
         let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 10),
                     run(daysAgo: 56, km: 5)]
-        let card = try #require(engine.weeklyReport(from: runs).distance)
-        #expect(card.weeks.count == 9)
-        #expect(card.weeks.first?.label == "6월 3째주")   // 6.15 주 — 목요일 6.18
-        #expect(card.weeks.last?.label == "8월 2째주")    // 이번 주 — 목요일 8.13
-        #expect(card.weeks.last?.isCurrent == true)
-        #expect(abs((card.weeks.first?.km ?? 0) - 5) < 0.01)  // 가장 오래된 주의 합계
+        let weeks = engine.weeklyReport(from: runs).weeks
+        #expect(weeks.count == 9)
+        #expect(weeks.first?.label == "6월 3째주")   // 6.15 주 — 목요일 6.18
+        #expect(weeks.last?.label == "8월 2째주")    // 이번 주 — 목요일 8.13
+        #expect(weeks.last?.isCurrent == true)
+        #expect(abs((weeks.first?.km ?? 0) - 5) < 0.01)  // 가장 오래된 주의 합계
+    }
+
+    @Test("주간 차트 독립 — 기준 7일 3km 미만이라 거리 카드가 nil이어도 주 막대는 채운다 (이슈 #91)")
+    func weeksSurviveDistanceGuard() {
+        // now = 8.10(월) 18:00 KST. 이전 7일(7.28~8.3)은 8일 전 2km뿐 → 증가율 가드로 distance nil.
+        // 차트는 달력 주 합계 — 8일 전 = 8.2(일) → 7.27 주 막대 2km,
+        // 1일 전 = 8.9(일) → 8.3 주 막대 10km. 이번 주(8.10 주)는 기록 없음 0km. 3주뿐이라 최소 6주로 채운다.
+        let report = engine.weeklyReport(from: [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 2)])
+        #expect(report.distance == nil)
+        #expect(report.weeks.count == 6)
+        #expect(report.weeks.last?.isCurrent == true)
+        #expect(abs(report.weeks.map(\.km).reduce(0, +) - 12) < 0.01)  // 10 + 2 — 가드와 무관하게 전부 합산
+    }
+
+    @Test("주간 차트 — 기록이 하나도 없으면 빈 배열")
+    func weeksEmptyWithoutRuns() {
+        #expect(engine.weeklyReport(from: []).weeks.isEmpty)
     }
 
     @Test("표본 부족 가드 — 기준 주 3km 미만·3주 미만 기록이면 카드가 없다")

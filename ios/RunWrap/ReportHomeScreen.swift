@@ -181,8 +181,9 @@ struct ReportHomeContent: View {
                     walkRunCard(walkRun)
                 }
 
-                if let distance = report.distance, ReportGate.shows(.distance, level: level) {
-                    distanceCard(distance)
+                // 차트(이력)는 증가율 가드와 무관하게 그린다 — 비율·톤·상한만 distance가 있을 때 (이슈 #91)
+                if !report.weeks.isEmpty, ReportGate.shows(.distance, level: level) {
+                    distanceCard(report.distance, weeks: report.weeks)
                 }
                 if let acwr = report.acwr, ReportGate.shows(.acwr, level: level) {
                     acwrCard(acwr)
@@ -597,36 +598,47 @@ struct ReportHomeContent: View {
 
     // MARK: 주간 거리 카드
 
-    private func distanceCard(_ card: WeeklyReport.DistanceCard) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// `card`가 nil이면(이전 7일 3km 미만 — 증가율 가드) 차트만 그리고 증감 대신 안내 한 줄을 둔다
+    private func distanceCard(_ card: WeeklyReport.DistanceCard?, weeks: [WeeklyReport.WeekBar]) -> some View {
+        let overloaded = card?.tone == .overload
+        let cap = overloaded ? card?.capKm : nil
+        return VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "figure.run", title: "주간 거리", code: "DISTANCE",
-                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone,
-                       info: CardInfoText.distance)
+                       tint: card?.tone.color ?? RR.brand, soft: card?.tone.softColor ?? RR.brandSoft,
+                       tone: card?.tone, info: CardInfoText.distance)
 
-            distanceHeadline(card)
-                .font(.system(size: 23, weight: .bold))
-                .lineSpacing(4)
-                .padding(.top, 13)
+            if let card {
+                distanceHeadline(card)
+                    .font(.system(size: 23, weight: .bold))
+                    .lineSpacing(4)
+                    .padding(.top, 13)
+            } else {
+                Text("비교할 이전 7일 기록이 모이면 증감을 알려드려요")
+                    .font(.system(size: 14))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 13)
+            }
 
-            WeeklyBarsChart(weeks: card.weeks,
-                            currentColor: card.tone == .overload ? RR.dang : RR.brand,
-                            cap: card.tone == .overload ? card.capKm : nil,
-                            capLabel: card.tone == .overload
-                                ? String(format: "+10%% 상한 %.1f km", card.capKm) : nil)
+            WeeklyBarsChart(weeks: weeks,
+                            currentColor: overloaded ? RR.dang : RR.brand,
+                            cap: cap,
+                            capLabel: cap.map { String(format: "+10%% 상한 %.1f km", $0) })
                 .padding(.top, 16)
 
-            Divider().overlay(RR.line).padding(.top, 12)
+            if let card {
+                Divider().overlay(RR.line).padding(.top, 12)
 
-            HStack(spacing: 8) {
-                metric(label: "최근 7일", value: Format.km(card.recent7Km), unit: "km", color: RR.text)
-                metric(label: "이전 7일", value: Format.km(card.previous7Km), unit: "km", color: RR.text2)
-                if card.overKm > 0 {
-                    metric(label: "초과분", value: "+" + Format.km(card.overKm), unit: "km", color: RR.dang)
-                } else {
-                    metric(label: "상한 여유", value: Format.km(-card.overKm), unit: "km", color: RR.pos)
+                HStack(spacing: 8) {
+                    metric(label: "최근 7일", value: Format.km(card.recent7Km), unit: "km", color: RR.text)
+                    metric(label: "이전 7일", value: Format.km(card.previous7Km), unit: "km", color: RR.text2)
+                    if card.overKm > 0 {
+                        metric(label: "초과분", value: "+" + Format.km(card.overKm), unit: "km", color: RR.dang)
+                    } else {
+                        metric(label: "상한 여유", value: Format.km(-card.overKm), unit: "km", color: RR.pos)
+                    }
                 }
+                .padding(.top, 13)
             }
-            .padding(.top, 13)
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
         .rrCard()

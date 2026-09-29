@@ -18,7 +18,7 @@ struct ProgressStatsTests {
 
     // MARK: PR
 
-    @Test("PR 판정 — [D, D×1.10] 범위 안 최소 기록과 달성일을 고른다")
+    @Test("PR 판정 — [D×0.995, D×1.10] 범위 안 최소 기록과 달성일을 고른다")
     func personalRecordsPicksBest() throws {
         let bestFiveK = run(daysAgo: 40, km: 5.4, minPerKm: 5.0)   // 페이스 300 → 5K 환산 1500초
         let runs = [run(daysAgo: 10, km: 5.2, minPerKm: 5.5),      // 페이스 330 → 1650초 (밀림)
@@ -34,6 +34,18 @@ struct ProgressStatsTests {
 
         let tenK = try #require(entries.first { $0.label == "10K" })
         #expect(abs(tenK.timeSec - 3480) < 0.01)    // 348초/km × 10.0km
+    }
+
+    @Test("PR 하한 — 워치에 5.00으로 보이는 4.997km는 5K 후보, 4.97km는 아니다 (이슈 #91)")
+    func personalRecordsLowerBoundTolerance() throws {
+        // 하한 5 × 0.995 = 4.975km. 4.997km(페이스 300) → 5K 환산 300 × 5.0 = 1500초
+        let rounded = run(daysAgo: 3, km: 4.997, minPerKm: 5.0)
+        let fiveK = try #require(PersonalRecords.compute(runs: [rounded]).first { $0.label == "5K" })
+        #expect(abs(fiveK.timeSec - 1500) < 0.01)   // 환산은 여전히 페이스 × 공인 거리
+        #expect(fiveK.run.id == rounded.id)
+
+        // 4.97km < 4.975km → 후보 아님
+        #expect(PersonalRecords.compute(runs: [run(daysAgo: 3, km: 4.97, minPerKm: 5.0)]).isEmpty)
     }
 
     @Test("PR — 해당 거리 기록이 하나도 없으면 빈 배열")
