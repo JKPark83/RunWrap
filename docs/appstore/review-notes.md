@@ -1,4 +1,4 @@
-# App Review 심사 노트 초안 (런미새 1.0)
+# App Review 심사 노트 초안 (런미새 1.3 이상)
 
 App Store Connect → 앱 심사 정보 → **비고(App Review Notes)** 칸에 붙여 넣을 원문입니다.
 심사자는 대부분 영어권이므로 **영문을 본문으로 넣고 국문은 참고용**으로 둡니다.
@@ -51,15 +51,32 @@ HEALTH DATA (Guideline 5.1.3)
 
 - HealthKit access is READ-ONLY. requestAuthorization is always called with
   toShare: [] — the app never writes to Health.
-- Read types are requested per feature (workouts/heart rate always; body mass
-  only if the user picks a weight-related goal).
+- All read types are requested together at the first Health connection
+  (onboarding): running workouts (plus non-running workouts from the last
+  14 days for a cross-training note), route, heart rate and running-form metrics,
+  together with recovery signals such as sleep, HRV, resting heart rate,
+  heart rate recovery, respiratory rate and wrist temperature; date of birth
+  for max-HR estimation only. Body mass is never requested.
 - All health data is processed on device. It is NEVER transmitted off the
-  device. The app has exactly two network calls, neither of which carries any
-  personal or health data:
-    1. open-meteo.com — weather for the running-outfit suggestion (coarse
-       coordinates only, nothing stored).
-    2. raw.githubusercontent.com — a public JSON file listing upcoming Korean
+  device. The app talks to the following hosts only; none of them receives
+  health data:
+    1. api.open-meteo.com — weather for the running-outfit suggestion
+       (coordinates rounded to 2 decimals, ~1 km; nothing stored).
+    2. apis.data.go.kr — Korean public air-quality API (AirKorea). Only the
+       name of the nearest monitoring station, picked on device from a
+       bundled list, is sent; no coordinates.
+    3. raw.githubusercontent.com — a public JSON file listing upcoming Korean
        running races.
+    4. Race poster/thumbnail images, loaded directly from the external image
+       URLs listed in the race JSON — the organizer's website or its image
+       CDN, or a news/portal image host (e.g. Naver, Kakao) that covered the
+       race. Hosts vary per race.
+    5. iCloud (CloudKit private database) — one progress snapshot per user
+       (level, goals, growth stage, bird collection) so progress survives a
+       reinstall. No health data; the developer cannot read it; skipped when
+       the user is not signed in to iCloud.
+    6. Apple Maps (MapKit) — map tiles for the course/session maps and the
+       share card.
 - The app has no analytics SDK, no ads, no third-party dependencies at all.
 
 MEDICAL DISCLAIMER (Guideline 1.4.1)
@@ -77,9 +94,9 @@ Also reachable inside the app: 리포트 tab -> gear icon -> "개인정보" sect
 
 OTHER PERMISSIONS
 
-- Location (when in use): to fetch weather for the outfit suggestion on the
-  "홈" tab, and to list nearby water fountains / restrooms / convenience
-  stores on the "코스" tab. Declining it hides those cards; nothing else
+- Location (when in use): to fetch weather and air quality for the outfit
+  suggestion on the "홈" tab, and to list nearby water fountains / restrooms /
+  convenience stores on the "코스" tab. Declining it hides those cards; nothing else
   breaks.
 - Photo library (add only): to save a generated running story card. Optional.
 - Notifications: optional reminders (hydration on hot days, weekly report).
@@ -123,8 +140,12 @@ real reports.
 심사 중 앱이 미완성으로 보이지 않게 하려고 만들었습니다.
 
 **건강 데이터** — 읽기 전용(`toShare: []`), 전부 온디바이스 처리, 외부 전송 없음.
-네트워크 호출은 날씨(open-meteo)와 대회 목록(GitHub raw) 둘뿐이고 개인 데이터를 싣지
-않습니다. 분석 SDK·광고·외부 의존성 없음.
+읽기 권한은 첫 연결(온보딩)에 한 번에 요청하며(러닝 기록, 크로스 트레이닝 문장용 최근 2주 비러닝 운동 포함)
+체중은 요청하지 않습니다.
+외부 통신은 날씨(api.open-meteo.com, 약 1km 좌표), 대기질(apis.data.go.kr, 측정소 이름만),
+대회 목록(raw.githubusercontent.com), 대회 이미지(대회 JSON의 외부 이미지 URL — 주최측·언론사·포털 CDN), iCloud 진행도
+백업(CloudKit 개인 DB, 건강 데이터 없음), Apple 지도 타일이 전부이고, 어느 것도 건강 데이터를
+싣지 않습니다. 분석 SDK·광고·외부 의존성 없음.
 
 **면책 고지(1.4.1)** — 해석 카드마다 "의학적 조언이 아니며 통증·이상 시 전문가 상담"
 문구가 붙습니다. 개인정보 처리방침 7항에도 같은 내용이 있습니다.

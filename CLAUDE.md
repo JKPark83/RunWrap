@@ -26,10 +26,14 @@
 - `xcodebuild`를 직접 쓰지 않는다. 아래 MCP 도구를 쓴다.
 - `ios/RunWrap/Races.json`을 손으로 고치지 않는다 — `.github/workflows/race-info.yml`이
   매일 05:00 KST에 크롤 결과로 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
-- 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo)와
-  대회정보(`RaceStore` → GitHub raw) 둘뿐이고, 둘 다 개인 데이터를 싣지 않는다.
-- 비밀값을 커밋하지 않는다. 이 앱은 API 키가 필요한 서비스를 쓰지 않는다 —
-  키가 필요해지는 설계라면 먼저 물어본다. (`DEVELOPMENT_TEAM`은 비밀이 아닌 팀 ID다.)
+- 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo, 소수 2자리 좌표),
+  대기질(`AirQualityClient` → data.go.kr, 측정소 이름만), 대회정보(`RaceStore` → GitHub raw),
+  대회 이미지(대회 JSON의 외부 URL), 진행도 백업(`ProgressBackupStore` → 사용자 본인 iCloud 개인 DB)
+  다섯뿐이고, 어디에도 건강 데이터를 싣지 않는다. 새 외부 통신을 추가하면 `docs/privacy.html`과
+  `docs/appstore/review-notes.md`를 같이 고친다.
+- 비밀값을 커밋하지 않는다. 유일한 API 키는 대기질(data.go.kr)용으로, gitignore된
+  `ios/RunWrap/AirQualityKey.json`에만 두고 CI가 시크릿(`AIRKOREA_SERVICE_KEY`)으로 생성한다.
+  다른 키가 필요해지는 설계라면 먼저 물어본다. (`DEVELOPMENT_TEAM`은 비밀이 아닌 팀 ID다.)
 - `.gpx` 같은 xml 계열 리소스는 xcodegen이 자동으로 빼므로, 추가할 때 `project.yml`에
   `buildPhase: resources`로 명시해야 한다.
 
