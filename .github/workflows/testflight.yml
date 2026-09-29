@@ -33,6 +33,8 @@ concurrency:
 env:
   BUNDLE_ID: com.jkpark.runwrap
   TEAM_ID: WDNVP9B8A9
+  # 로컬과 같은 버전으로 고정 (L81) — test.yml의 같은 값과 함께 올린다.
+  XCODEGEN_VERSION: 2.45.4
 
 jobs:
   upload:
@@ -65,10 +67,15 @@ jobs:
             echo "AIRKOREA_SERVICE_KEY 시크릿 없음 — 대기질 기능 없이 빌드"
           fi
 
-      - name: xcodegen으로 프로젝트 생성
+      # 릴리스 zip의 bin/xcodegen은 ../share/xcodegen(설정 프리셋)을 함께 찾으므로 압축 구조 그대로 둔다.
+      - name: xcodegen ${{ env.XCODEGEN_VERSION }} 설치 → 프로젝트 생성
         run: |
-          brew install --quiet xcodegen
-          cd ios && xcodegen generate
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          XCODEGEN="$RUNNER_TEMP/xcodegen/bin/xcodegen"
+          "$XCODEGEN" --version
+          cd ios && "$XCODEGEN" generate
 
       # 시뮬레이터 유닛 테스트 — 서명 없이 돌린다(엔진 로직 테스트라 엔타이틀먼트가 필요 없다).
       - name: 테스트

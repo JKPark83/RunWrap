@@ -18,6 +18,7 @@
 - `ios/` — SwiftUI 앱 (xcodegen 프로젝트, 외부 의존성 없음)
 - `tools/` — 데이터 파이프라인: `race-info`(대회 크롤러) · `course-poi`(급수·화장실·편의점 POI 빌드)
 - `.github/workflows/race-info.yml` — 매일 05:00 KST 대회 정보 크롤 → `ios/RunWrap/Races.json` 갱신
+- `.github/workflows/test.yml` — dev·main으로 가는 PR과 dev push마다 유닛 테스트·크롤러 테스트·Races.json 스키마 검사
 
 앱은 4개 탭 — **홈 · 리포트 · 코스 · 대회**. (리포트 탭 안에 `이번 주 / 발전상` 세그먼트)
 
@@ -29,6 +30,7 @@ xcodegen generate
 open RunWrap.xcodeproj
 ```
 
+- 준비물: Xcode 26, xcodegen **2.45.4** (CI 고정 버전 — `.github/workflows/test.yml`의 `XCODEGEN_VERSION`)
 - iOS 17+, 아이폰 세로 전용. HealthKit 읽기 전용
 - `*.xcodeproj` / `Info.plist` / `RunWrap.entitlements`는 전부 생성물이다 —
   `ios/project.yml`만 고치고 xcodegen을 다시 돌린다
