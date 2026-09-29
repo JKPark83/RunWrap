@@ -22,7 +22,8 @@ struct ReportGateTests {
 
     /// 4주 이상 꾸준히 달린 이력 — ACWR·EF 가드를 모두 통과하는 표본
     private var richRuns: [RunSummary] {
-        (0..<28).map { day in
+        // 이슈 #49: ACWR 가드가 28일이라 0..<28(최고령 27일)은 걸린다 — 0...28로 4주를 채운다
+        (0...28).map { day in
             run(daysAgo: Double(day), km: 5, hr: 150 - Double(day) * 0.3)
         }
     }
@@ -82,11 +83,11 @@ struct ReportGateTests {
 
     // MARK: 가드 우선순위 — 미노출 가드가 레벨 게이트보다 위
 
-    @Test("미노출 가드 우선 — 런잘알이어도 기록이 3주 미만이면 ACWR이 나오지 않는다")
+    @Test("미노출 가드 우선 — 런잘알이어도 기록이 4주 미만이면 ACWR이 나오지 않는다")
     func sampleGuardBeatsLevelGateForAcwr() {
         // 게이트는 열려 있다
         #expect(ReportGate.shows(.acwr, level: .intermediate))
-        // 하지만 엔진이 nil을 내면 그릴 게 없다 — 최근 10일치뿐이라 3주 가드에 걸린다
+        // 하지만 엔진이 nil을 내면 그릴 게 없다 — 최근 10일치뿐이라 4주 가드에 걸린다
         let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 5, km: 10), run(daysAgo: 9, km: 10)]
         #expect(ReportEngine(now: now, level: .intermediate).weeklyReport(from: runs).acwr == nil)
     }
@@ -240,8 +241,10 @@ struct ReportVoiceTests {
 
     @Test("런친놈의 ACWR 문장에는 구간명이 함께 붙는다 — §4 '수치+구간'")
     func advancedAcwrShowsBand() throws {
-        // 3주 이상 이력 + 주 10km 유지 → ACWR 1.0 언저리(적정 구간)
-        let runs = (0..<28).map { run(daysAgo: Double($0), km: 2.5) }
+        // 4주 이상 이력 + 주 10km 유지 → ACWR 1.0(적정 구간)
+        // 이슈 #49: 가드 28일이라 0...28로 늘린다. 0일(=now 정각) 기록은 반개구간이라 제외 —
+        // acute 1~7일 17.5, chronic 1~28일 70/4=17.5 → 1.0
+        let runs = (0...28).map { run(daysAgo: Double($0), km: 2.5) }
         let compact = try #require(headline(.acwr, level: .advanced, runs: runs))
         #expect(compact.hasPrefix("ACWR "))
         #expect(compact.contains("적정 구간"))
@@ -249,7 +252,8 @@ struct ReportVoiceTests {
 
     @Test("런린이의 ACWR 문장에는 지표 약어(ACWR)가 나오지 않는다 — 용어 풀어쓰기")
     func beginnerAcwrAvoidsJargon() throws {
-        let runs = (0..<28).map { run(daysAgo: Double($0), km: 2.5) }
+        // 이슈 #49: 가드 28일 — 위 테스트와 같은 0...28 이력 (ACWR 1.0)
+        let runs = (0...28).map { run(daysAgo: Double($0), km: 2.5) }
         let plain = try #require(headline(.acwr, level: .beginner, runs: runs))
         #expect(plain.contains("ACWR") == false)
     }

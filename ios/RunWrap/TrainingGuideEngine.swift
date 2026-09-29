@@ -21,8 +21,9 @@ import Foundation
 ///   고정하고 인터벌을 끈다 (기획서 §4.9 + v2 확장).
 /// - 강도 밸런스: (easy+LSD) : 스피드 세션 수를 80/20 원칙과 비교 (Seiler 80/20).
 ///
-/// 가드는 ReportEngine.acwr와 동일 — 기록이 3주 미만이거나 만성 부하가 주 3km 미만이면
-/// 진단·처방 전체를 내지 않는다(nil). 예측·페이스 존은 유효 표본(5km 이상, 외삽 3배 이내)이
+/// 가드: 기록이 3주 미만이거나 만성 부하가 주 3km 미만이면 진단·처방 전체를 내지 않는다(nil).
+/// ACWR(4주)보다 느슨한 3주 기준이다 — 여기서 만성 부하는 비율이 아니라 처방 볼륨의 기준이라
+/// 분모가 작게 잡혀도 처방이 적게 나오는 안전한 쪽으로 틀린다 (이슈 #49). 예측·페이스 존은 유효 표본(5km 이상, 외삽 3배 이내)이
 /// 8주 안에 하나도 없으면 따로 내지 않는다 — 틀린 페이스는 없느니만 못하다.
 
 struct TrainingGuide: Equatable {
@@ -579,7 +580,8 @@ struct TrainingGuideEngine {
     func guide(runs: [RunSummary],
                race: RaceDistance, goalSec: Double?, raceDate: Date? = nil,
                batteryTone: RRTone?) -> TrainingGuide? {
-        // 가드: ReportEngine.acwr와 동일 기준
+        // 가드: 3주(21일) — ACWR의 28일보다 느슨하다. 만성 부하가 처방 볼륨 기준이라
+        // 분모가 작으면 처방이 적게 나오는 안전한 쪽으로 틀린다 (이슈 #49)
         guard let oldest = runs.map(\.start).min(),
               oldest <= date(daysAgo: 21) else { return nil }
         let chronic = totalKm(runs, fromDaysAgo: 28, toDaysAgo: 0) / 4

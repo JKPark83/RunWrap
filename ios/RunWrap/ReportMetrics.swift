@@ -122,11 +122,9 @@ extension ReportEngine {
     }
 
     private func acwrCard(_ runs: [RunSummary]) -> WeeklyReport.AcwrCard? {
-        guard let oldest = runs.map(\.start).min(),
-              oldest <= now.addingTimeInterval(-21 * 86_400) else { return nil }
-        let acute = windowKm(runs, fromDaysAgo: 7, toDaysAgo: 0)
-        let chronic = windowKm(runs, fromDaysAgo: 28, toDaysAgo: 0) / 4
-        guard chronic >= 3 else { return nil }
+        // 가드·산식은 리포트 문장과 공유한다 (이슈 #49 — 기록 4주 미만이면 nil)
+        guard let load = Self.acwrLoad(runs: runs, now: now) else { return nil }
+        let (acute, chronic) = load
         let ratio = acute / chronic
         let tone: RRTone = ratio >= 1.5 ? .overload
             : ratio >= 1.3 ? .caution
