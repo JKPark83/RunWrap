@@ -17,6 +17,7 @@ struct RootView: View {
     /// 직접 입력한 대회 기록 (이슈 #35) — 설정이 입력하고 리포트가 소비해서 루트가 쥔다
     @StateObject private var raceRecords = RaceRecordStore()
     @AppStorage("didConnectHealth") private var didConnectHealth = false
+    @Environment(\.scenePhase) private var scenePhase
     /// 온보딩 설문 완료 여부 — 빈 문자열이면 아직 레벨이 없다 (= 설문 미완료)
     @AppStorage(ProfileKey.levelV2) private var levelRaw = ""
     /// v0.6 이하 사용자에게 재온보딩 사유를 한 번 알려준다
@@ -139,6 +140,13 @@ struct RootView: View {
         }
         .onChange(of: health.state) { _, newState in
             if case .loaded = newState { didConnectHealth = true }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // 포그라운드 복귀 — 날씨가 낡았으면 다시 받아 수분 알람까지 재예약한다 (이슈 #69).
+            // WeatherStore를 쥔 곳이 여기라 RunWrapApp이 아니라 루트에서 건다.
+            // 기동 로딩 전·중이면 refresh()가 스스로 건너뛴다
+            guard phase == .active, !levelRaw.isEmpty else { return }
+            Task { await weather.refreshIfStale() }
         }
     }
 
