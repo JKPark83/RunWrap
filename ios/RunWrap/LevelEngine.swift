@@ -44,10 +44,11 @@ enum LevelEngine {
         let fourWeeksAgo = now.addingTimeInterval(-28 * 86_400)
         let recentRuns = runs.filter { $0.start >= fourWeeksAgo && $0.start <= now }
 
-        // 런린이 → 런잘알: 최근 4주 내 10km 이상을 60분 이내에 달린 기록이 있으면 후보
+        // 런린이 → 런잘알: 최근 4주 내 10km 이상을 60분 이내에 달린 기록이 있으면 후보.
+        // 페이스 가드(paceSecPerKm)를 통과한 기록만 — 0초·비현실 페이스 기록은 근거가 아니다 (이슈 #78)
         if current == .beginner {
             let qualifies = recentRuns.contains { run in
-                guard let km = run.distanceKm, km >= 10 else { return false }
+                guard let km = run.distanceKm, km >= 10, run.paceSecPerKm != nil else { return false }
                 return run.durationSec <= 3_600
             }
             return qualifies ? .intermediate : nil
