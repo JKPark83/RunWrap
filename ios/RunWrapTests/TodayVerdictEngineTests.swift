@@ -121,6 +121,20 @@ struct TodayVerdictEngineTests {
         #expect(rainy.weather.content == .value("체감 18°C · 비 · 반팔 티+반바지"))
     }
 
+    @Test("날씨 캡션 — 달리기 좋은 시간이 있으면 '18~20시가 좋아요', 없으면 nil (이슈 #173)")
+    func weatherBestWindowCaption() throws {
+        // now = KST 18:00 → 창 18:00~20:00, 판정문(값)은 추천과 무관하게 그대로
+        let window = RunWindow(start: now, end: now.addingTimeInterval(7_200),
+                               avgScore: 100, apparentC: 20, precipitationProbabilityPct: 10)
+        let withWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4),
+                                                                bestWindow: window)))
+        #expect(withWindow.weather.caption == "18~20시가 좋아요")
+        #expect(withWindow.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+
+        let withoutWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4))))
+        #expect(withoutWindow.weather.caption == nil)
+    }
+
     @Test("날씨 조각 — 강수량 0mm여도 이슬비 코드(WMO 51)면 raining (이슈 #109)")
     func weatherPartsRainCode() {
         let parts = TodayVerdictEngine.weatherParts(

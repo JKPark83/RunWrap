@@ -34,6 +34,10 @@ struct TodayScreen: View {
                     loadingCard
                 case .loaded(let weather):
                     weatherCard(weather)
+                    // 시간대별 예보가 24칸이 안 되면 카드 전체를 내지 않는다 (미노출 가드, 이슈 #173)
+                    if weather.hourly.count >= 24 {
+                        hourlyCard(weather.hourly)
+                    }
                     // 대기질은 부가 정보 — 로딩·실패 상태는 자리조차 만들지 않는다 (미노출 가드)
                     if case .loaded(let air) = airQuality.state {
                         airQualityCard(air)
@@ -164,6 +168,76 @@ struct TodayScreen: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 12)
+    }
+
+    // MARK: 시간대별 카드 (이슈 #173)
+
+    /// 달리기 좋은 시간 추천 + 24시간 띠. 추천 창에 든 칸은 improving 톤으로 칠한다
+    private func hourlyCard(_ hourly: [HourlyWeather]) -> some View {
+        let now = Date()
+        let window = RunWindowEngine.bestWindow(hourly: hourly, now: now)
+        return VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(text: "시간대별")
+
+            if let window {
+                Text("달리기 좋은 시간 \(RunWindowEngine.rangeLabel(window))")
+                    .font(RR.display(22))
+                    .foregroundStyle(RR.text)
+                    .padding(.top, 8)
+                Text("체감 \(Int(window.apparentC.rounded()))° · 비 \(window.precipitationProbabilityPct)%")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 4)
+            } else {
+                Text("오늘은 딱 좋은 시간대가 없어요 — 실내도 괜찮아요")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 8)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(hourly, id: \.time) { hour in
+                        hourCell(hour,
+                                 isNow: hour.time <= now && now < hour.time.addingTimeInterval(3_600),
+                                 inWindow: window.map { hour.time >= $0.start && hour.time < $0.end } ?? false)
+                    }
+                }
+            }
+            .padding(.top, 14)
+        }
+        .padding(18)
+        .rrCard()
+    }
+
+    /// 한 칸 — 시각·하늘 상태·체감온도·강수확률
+    private func hourCell(_ hour: HourlyWeather, isNow: Bool, inWindow: Bool) -> some View {
+        VStack(spacing: 7) {
+            Text(isNow ? "지금" : "\(RunWindowEngine.kst.component(.hour, from: hour.time))시")
+                .font(.system(size: 11, weight: isNow ? .bold : .regular))
+                .foregroundStyle(isNow ? RR.text : RR.text3)
+            Group {
+                if let condition = WeatherCondition.of(hour.weatherCode) {
+                    Image(systemName: condition.symbol)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(condition.tint, condition.tint2)
+                } else {
+                    Color.clear
+                }
+            }
+            .font(.system(size: 18))
+            .frame(height: 22)
+            Text("\(Int(hour.apparentC.rounded()))°")
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundStyle(RR.text)
+            Text("\(hour.precipitationProbabilityPct)%")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(hour.precipitationProbabilityPct >= 30 ? RR.sky : RR.text3)
+        }
+        .frame(width: 46)
+        .padding(.vertical, 10)
+        .background(inWindow ? RRTone.improving.softColor : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: 대기질 카드 (이슈 #8)

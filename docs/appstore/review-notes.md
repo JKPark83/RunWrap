@@ -60,8 +60,9 @@ HEALTH DATA (Guideline 5.1.3)
 - All health data is processed on device. It is NEVER transmitted off the
   device. The app talks to the following hosts only; none of them receives
   health data:
-    1. api.open-meteo.com — weather for the running-outfit suggestion
-       (coordinates rounded to 2 decimals, ~1 km; nothing stored).
+    1. api.open-meteo.com — weather for the running-outfit suggestion and
+       the 24-hour hourly forecast for the best-time-to-run suggestion, in
+       the same request (coordinates rounded to 2 decimals, ~1 km; nothing stored).
     2. apis.data.go.kr — Korean public air-quality API (AirKorea). Only the
        name of the nearest monitoring station, picked on device from a
        bundled list, is sent; no coordinates.
@@ -146,7 +147,7 @@ real reports.
 **건강 데이터** — 읽기 전용(`toShare: []`), 전부 온디바이스 처리, 외부 전송 없음.
 읽기 권한은 첫 연결(온보딩)에 한 번에 요청하며(러닝 기록, 크로스 트레이닝 문장용 최근 2주 비러닝 운동 포함)
 체중은 요청하지 않습니다.
-외부 통신은 날씨(api.open-meteo.com, 약 1km 좌표), 대기질(apis.data.go.kr, 측정소 이름만),
+외부 통신은 날씨(api.open-meteo.com, 약 1km 좌표 — 같은 요청으로 24시간 시간대별 예보까지), 대기질(apis.data.go.kr, 측정소 이름만),
 대회 목록(raw.githubusercontent.com), 대회 이미지(대회 JSON의 외부 이미지 URL — 주최측·언론사·포털 CDN), iCloud 진행도
 백업(CloudKit 개인 DB, 건강 데이터 없음), Apple 지도 타일이 전부이고, 어느 것도 건강 데이터를
 싣지 않습니다. 분석 SDK·광고·외부 의존성 없음.
