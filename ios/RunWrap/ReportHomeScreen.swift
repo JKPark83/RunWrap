@@ -88,6 +88,7 @@ struct ReportHomeScreen: View {
                                               hrMaxBpm: heartRate.reliableHrMax,
                                               vo2MaxSamples: health.vo2Max,
                                               raceRecords: raceRecords.records),
+                                          trainingPlan: trainingPlan(runs: runs, level: level),
                                           segment: segment)
                             .refreshable { await health.load() }
                     case .month:
@@ -134,6 +135,15 @@ struct ReportHomeScreen: View {
                    raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                    batteryTone: batteryTone)
     }
+
+    /// 주차별 훈련 계획 (이슈 #189) — 목표 종목·대회 날짜가 모두 있을 때만 계산한다.
+    /// 표본·지평 가드는 엔진이 nil로 처리한다
+    private func trainingPlan(runs: [RunSummary], level: RunnerLevel) -> TrainingPlan? {
+        guard let race = RaceDistance(rawValue: raceGoalRaw), raceDateRaw > 0 else { return nil }
+        return TrainingPlanEngine.plan(runs: runs, race: race, level: level,
+                                       raceDate: Date(timeIntervalSince1970: raceDateRaw),
+                                       now: Date())
+    }
 }
 
 // MARK: - 리포트 본문
@@ -162,6 +172,9 @@ struct ReportHomeContent: View {
     var walkRun: WalkRunEngine.Plan? = nil
     /// 대회 목표 상태 — 배터리 카드 아래 독립 카드 재료 (이슈 #21·#119). 샘플 시트에서는 nil
     var raceStatus: RaceOutlookEngine.Status? = nil
+    /// 주차별 훈련 계획 — race 카드의 계획 화면 링크 재료 (이슈 #189).
+    /// 표본 부족·대회 24주 초과면 엔진이 nil을 준다. 샘플 시트에서는 nil
+    var trainingPlan: TrainingPlan? = nil
     /// 샘플 리포트 시트에서는 상세 이동 대신 배너를 단다
     var isSample = false
     /// [이번 주 | 발전상] 세그먼트 — 샘플 시트에서는 넘기지 않아 nil이다
@@ -602,6 +615,7 @@ struct ReportHomeContent: View {
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
+                trainingPlanLink(daysToRace: days)
             }
             .padding(.top, 12)
         case .ready(let outlook):
@@ -625,8 +639,38 @@ struct ReportHomeContent: View {
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
+                trainingPlanLink(daysToRace: outlook.daysToRace)
             }
             .padding(.top, 12)
+        }
+    }
+
+    /// 주차별 훈련 계획 화면 링크 (이슈 #189) — 계획이 nil이면 이유를 한 줄로 안내한다.
+    /// 이유 구분은 D-day만으로 한다: 24주보다 멀면 지평 가드, 아니면 표본 가드
+    @ViewBuilder
+    private func trainingPlanLink(daysToRace: Int) -> some View {
+        if isSample {
+            EmptyView()
+        } else if let trainingPlan {
+            NavigationLink {
+                TrainingPlanScreen(plan: trainingPlan)
+            } label: {
+                HStack(spacing: 4) {
+                    Text("주차별 훈련 계획 보기")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(RR.brand)
+            }
+            .padding(.top, 2)
+        } else {
+            Text(daysToRace / 7 > TrainingPlanEngine.maxHorizonWeeks
+                 ? "대회 \(TrainingPlanEngine.maxHorizonWeeks)주 전부터 주차별 계획을 보여드려요"
+                 : "러닝 기록이 3주 이상 쌓이면 주차별 훈련 계획도 보여드려요")
+                .font(.system(size: 11.5))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text3)
         }
     }
 
