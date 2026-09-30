@@ -56,7 +56,12 @@ struct SessionDetailScreen: View {
                                         in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
 
-                    statsGrid
+                    VStack(spacing: 0) {
+                        statsGrid
+                        effortRow
+                    }
+                    .padding(.horizontal, 18)
+                    .rrCard()
                     if !shoes.shoes.isEmpty {
                         shoeRow
                     }
@@ -254,8 +259,24 @@ struct SessionDetailScreen: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
-        .rrCard()
+    }
+
+    /// 그리드 아래 한 줄 — Apple 운동 노력도가 있을 때만 (iOS 18+, 이슈 #178)
+    @ViewBuilder
+    private var effortRow: some View {
+        if let effort = store.detail?.effort {
+            HStack(spacing: 6) {
+                Image(systemName: "flame")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RR.text3)
+                Text("노력도 \(Int(effort.score.rounded()))/10 · \(effort.label) · \(effort.sourceLabel)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(RR.text2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+            .overlay(alignment: .top) { Divider().overlay(RR.line) }
+        }
     }
 
     // MARK: 러닝화 (이슈 #171)

@@ -28,6 +28,27 @@ struct WorkoutDetail {
     var groundContactMs: Double?
     var strideLengthM: Double?
     var runningPowerW: Double?
+
+    /// Apple 운동 노력도 — iOS 18 미만이거나 기록이 없으면 nil(미노출) (이슈 #178)
+    var effort: EffortScore?
+}
+
+/// Apple 운동 노력도 (이슈 #178) — 워치에서 입력한 1~10 척도. 직접 입력 > Apple 추정
+struct EffortScore: Equatable {
+    let score: Double
+    let isEstimated: Bool
+
+    /// Apple 척도 구간: 1~3 편안 · 4~6 보통 · 7~8 힘듦 · 9~10 전력
+    var label: String { Self.label(for: score) }
+    var sourceLabel: String { isEstimated ? "Apple 추정" : "직접 입력" }
+
+    /// 구간 경계는 정수 척도 사이(3.5·6.5·8.5)에 둔다 — 추정값이 소수로 와도 가까운 구간에 붙는다
+    static func label(for score: Double) -> String {
+        if score < 3.5 { return "편안" }
+        if score < 6.5 { return "보통" }
+        if score < 8.5 { return "힘듦" }
+        return "전력"
+    }
 }
 
 @MainActor
@@ -98,6 +119,11 @@ final class WorkoutDetailStore: ObservableObject {
             return nil
         }
 
+        // 운동 노력도는 실내·실외 모두 기록된다 — iOS 18 전용 API (이슈 #178)
+        if #available(iOS 18, *) {
+            detail.effort = await fetchEffortScore(of: workout)
+        }
+
         // 실내(트레드밀) 세션에는 경로·고도가 없다 — 쿼리 자체를 생략한다 (계획서 M1)
         if !run.isIndoor {
             detail.route = (try? await fetchRoute(of: workout)) ?? []
@@ -158,6 +184,36 @@ final class WorkoutDetailStore: ObservableObject {
             detail.cadenceSpm = steps / (workout.duration / 60)
         }
         return detail
+    }
+
+    /// 워크아웃에 연결된 노력도 — 직접 입력이 있으면 그것, 없으면 Apple 추정, 둘 다 없으면 nil.
+    /// 노력도는 워크아웃이 끝난 뒤 따로 저장되는 샘플이라 관계 쿼리로 연결을 읽는다 (이슈 #178).
+    /// 콜백형 HKWorkoutEffortRelationshipQuery는 장기 실행 쿼리(stop 필요)라 1회성 async 래퍼인
+    /// 쿼리 디스크립터를 쓴다. 실패는 조용히 nil — 부가 정보라 화면을 막지 않는다
+    @available(iOS 18, *)
+    private func fetchEffortScore(of workout: HKWorkout) async -> EffortScore? {
+        let descriptor = HKWorkoutEffortRelationshipQueryDescriptor(
+            predicate: HKQuery.predicateForObject(with: workout.uuid),
+            anchor: nil, option: .default)  // 전부 받아 아래 규칙(직접 입력 > 추정)으로 고른다
+        guard let result = try? await descriptor.result(for: store) else { return nil }
+        let samples = result.relationships
+            .flatMap { $0.samples ?? [] }
+            .compactMap { $0 as? HKQuantitySample }
+        // 같은 종류가 여러 개면(수정 입력 등) 가장 최근 것
+        func latest(_ id: HKQuantityTypeIdentifier) -> HKQuantitySample? {
+            let type = HKQuantityType(id)
+            let matching = samples.filter { $0.quantityType == type }
+            return matching.max { $0.endDate < $1.endDate }
+        }
+        if let manual = latest(.workoutEffortScore) {
+            return EffortScore(score: manual.quantity.doubleValue(for: .appleEffortScore()),
+                               isEstimated: false)
+        }
+        if let estimated = latest(.estimatedWorkoutEffortScore) {
+            return EffortScore(score: estimated.quantity.doubleValue(for: .appleEffortScore()),
+                               isEstimated: true)
+        }
+        return nil
     }
 
     /// 워크아웃 구간 샘플 평균 — 다이내믹스는 세션 평균 하나면 충분하다 (계획서 M4)
@@ -393,6 +449,9 @@ final class WorkoutDetailStore: ObservableObject {
                                                pauses: scenario.pauses,
                                                end: scenario.end)
         }
+
+        // 노력도 합성 — 4~8 정수(Apple 추정). 맨 끝에서 뽑아 위 값들의 재현성을 깨지 않는다 (이슈 #178)
+        detail.effort = EffortScore(score: Double(4 + Int(rng.unit() * 5)), isEstimated: true)
         return detail
     }
 
