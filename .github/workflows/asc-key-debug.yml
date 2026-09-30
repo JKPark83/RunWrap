@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Xcode 목록·버전
         run: ls /Applications | grep -i xcode; xcodebuild -version; sw_vers
       - name: 키 파일 작성 + 형식 점검 (값은 출력하지 않음)
@@ -58,7 +61,7 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           BUNDLE_IDS: com.jkpark.runwrap,com.jkpark.runwrap.widget
         run: |
-          pip3 install --quiet "pyjwt[crypto]"
+          pip install --quiet "pyjwt[crypto]"
           export ASC_KEY_P8_PATH=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
           export DIST_CERT_SHA1=$(security find-certificate -c "Apple Distribution" -Z build.keychain | awk '/SHA-1/ {print $NF}')
           echo "cert sha1: $DIST_CERT_SHA1"
