@@ -5,7 +5,7 @@ import SwiftUI
 /// 포그라운드 재계산이 1차 경로, HealthKit 옵저버(러닝 종료 즉시 알림)는 보조 경로.
 @main
 struct RunWrapApp: App {
-    @StateObject private var health = HealthStore()
+    @StateObject private var health: HealthStore
     /// 도감 — 파일에서 한 번 읽어 앱 수명 동안 들고 간다 (기획서 §5)
     @StateObject private var collection = CollectionStore()
     /// 진행도 CloudKit 백업·복원 (이슈 #29) — 신규 설치 복원은 RootView가,
@@ -13,20 +13,26 @@ struct RunWrapApp: App {
     @StateObject private var backup = ProgressBackupStore()
     @Environment(\.scenePhase) private var scenePhase
 
+    /// 워크아웃 옵저버는 기동 직후 등록해야 백그라운드 전달로 깨어났을 때 콜백을 받는다
+    /// (애플 문서: HKObserverQuery·enableBackgroundDelivery는 didFinishLaunching에서 설정).
+    /// App의 init은 프로세스 기동 직후 메인 스레드에서 돌아 그 시점과 같다 — 뷰의 .task는
+    /// 백그라운드 기동에서 늦거나 돌지 않을 수 있어 여기로 옮겼다 (이슈 #155).
+    /// UIKit 앱 델리게이트 어댑터는 쓰지 않는다 — SwiftUI 수명주기만으로 같은 시점을 잡을 수 있다
+    init() {
+        let health = HealthStore()
+        _health = StateObject(wrappedValue: health)
+        health.startObservingWorkouts { [weak health] in
+            guard let health else { return }
+            await Self.handleWorkoutUpdate(health: health)
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(health)
                 .environmentObject(collection)
                 .environmentObject(backup)
-                .task {
-                    // 기동 시 옵저버 재등록 — 워치 러닝이 끝나면 백그라운드에서 깨워준다
-                    let health = health
-                    health.startObservingWorkouts { [weak health] in
-                        guard let health else { return }
-                        await Self.handleWorkoutUpdate(health: health)
-                    }
-                }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
