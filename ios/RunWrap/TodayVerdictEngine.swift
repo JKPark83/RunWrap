@@ -27,6 +27,8 @@ struct TodayVerdict: Equatable {
         let content: Content
         /// 값이 있고 상태 판정이 가능할 때만 — 유도 문구 줄은 항상 nil
         let tone: RRTone?
+        /// 값 아래 덧붙이는 짧은 한 줄 — 날씨 줄의 "18~20시가 좋아요" (이슈 #173). 없으면 nil
+        var caption: String? = nil
     }
 
     /// 제목줄 판정 — 배터리가 없으면 판정하지 않는다(nil). 화면은 배지를 감춘다
@@ -46,7 +48,8 @@ enum TodayVerdictEngine {
         case loading
         case denied         // 위치 권한 거부 — 앱 안에서 다시 물을 수 없어 설정으로 보내야 한다
         case unavailable    // 위치·날씨 조회 실패
-        case current(CurrentWeather)
+        /// bestWindow: 오늘 달리기 좋은 시간(RunWindowEngine) — 추천이 없으면 nil (이슈 #173)
+        case current(CurrentWeather, bestWindow: RunWindow? = nil)
     }
 
     /// - Parameters:
@@ -122,9 +125,12 @@ enum TodayVerdictEngine {
         case .unavailable:
             return .init(kind: .weather, label: label,
                          content: .hint("날씨를 불러오지 못했어요"), tone: nil)
-        case .current(let current):
+        case .current(let current, let bestWindow):
+            // 추천 시간은 판정문에 이어 붙이지 않고 캡션으로 — 홈 타일은 문구 대신 그림으로 값을 그려서
+            // 문구 끝에 붙이면 보이지 않는다
             return .init(kind: .weather, label: label,
-                         content: .value(weatherPhrase(current, now: now)), tone: nil)
+                         content: .value(weatherPhrase(current, now: now)), tone: nil,
+                         caption: bestWindow.map { "\(RunWindowEngine.rangeLabel($0))가 좋아요" })
         }
     }
 

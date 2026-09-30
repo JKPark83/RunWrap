@@ -117,7 +117,8 @@ struct HomeScreen: View {
     private var weatherInput: TodayVerdictEngine.WeatherInput {
         switch weather.state {
         case .idle, .loading: .loading
-        case .loaded(let current): .current(current)
+        case .loaded(let current):
+            .current(current, bestWindow: RunWindowEngine.bestWindow(hourly: current.hourly, now: Date()))
         case .denied: .denied
         case .unavailable: .unavailable
         }
@@ -998,7 +999,7 @@ private struct VerdictCard: View {
     @ViewBuilder
     private var weatherArt: some View {
         switch weather {
-        case .current(let current):
+        case .current(let current, _):
             let parts = TodayVerdictEngine.weatherParts(current, now: Date())
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -1019,6 +1020,14 @@ private struct VerdictCard: View {
                     Text(parts.raining ? "비 · \(outfit)" : outfit)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(RR.text2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
+                // 달리기 좋은 시간 (이슈 #173) — 추천이 없으면 줄을 내지 않는다
+                if let caption = verdict.weather.caption {
+                    Text(caption)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(RRTone.improving.color)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                 }
