@@ -40,6 +40,7 @@ final class RaceStore: ObservableObject {
         // 로컬(캐시 → 번들)을 먼저 보여주고 원격은 뒤에서 갱신 — 첫 화면이 네트워크를 기다리지 않는다
         if let local = Self.readLocal() {
             state = .loaded(local)
+            await rescheduleRaceAlarms()
         }
         await refresh()
         if case .loading = state { state = .failed }
@@ -55,6 +56,25 @@ final class RaceStore: ObservableObject {
         state = .loaded(file)
         lastRefreshedAt = Date()
         lastRefreshFailed = false
+        await rescheduleRaceAlarms()
+    }
+
+    /// 즐겨찾기 대회 접수 알림 재예약 (이슈 #172) — 목록이 로드될 때, 즐겨찾기·설정 토글이 바뀔 때 부른다.
+    /// 목록이 아직 없으면 켜진 알림을 빈 목록으로 지우지 않도록 건너뛴다 (꺼진 경우엔 거두기만 한다)
+    func rescheduleRaceAlarms() async {
+        let defaults = UserDefaults.standard
+        let enabled = defaults.bool(forKey: NotifyKey.raceEnabled)
+        let now = Date()
+        var entries: [RaceEngine.Entry] = []
+        if case .loaded(let file) = state {
+            entries = RaceEngine.entries(from: file.races, now: now)
+        } else if enabled {
+            return
+        }
+        await NotificationScheduler.rescheduleRaceAlarms(
+            entries: entries,
+            favorites: RaceFavorites.decode(defaults.string(forKey: RaceKey.favorites) ?? ""),
+            enabled: enabled, now: now)
     }
 
     /// GitHub Actions가 매일 크롤해 커밋하는 원본 파일의 raw URL (계획서 M13-4).

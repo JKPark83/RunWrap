@@ -200,3 +200,30 @@ enum RecapKey {
     /// 마지막으로 닫은 연간 결산 ("yyyy") — 빈 문자열이면 없음
     static let dismissedYear = "recap.dismissedYear"
 }
+
+/// 대회 탭 즐겨찾기·목표 대회 (이슈 #172) — 기기 로컬 표시 상태라 백업(ProgressSnapshot) 대상이 아니다
+enum RaceKey {
+    /// 즐겨찾기한 대회 번호 (`[Int]` JSON 문자열) — 읽기·쓰기는 `RaceFavorites`로만 한다
+    static let favorites = "race.favorites"
+    /// 목표 대회 번호 (Race.id) — 0이면 미지정. 홈 목표 대회 카드의 기준
+    static let targetID = "race.targetId"
+}
+
+/// 즐겨찾기 목록 직렬화 (이슈 #172) — @AppStorage에 배열을 둘 수 없어 JSON 문자열로 접는다
+enum RaceFavorites {
+    /// 저장 문자열 → 대회 번호. 비었거나 깨진 값은 즐겨찾기 없음으로 읽는다
+    static func decode(_ s: String) -> [Int] {
+        guard let data = s.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
+    }
+
+    static func encode(_ ids: [Int]) -> String {
+        guard let data = try? JSONEncoder().encode(ids) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// 있으면 빼고 없으면 뒤에 붙인다 — 별 버튼 한 번의 동작
+    static func toggled(_ ids: [Int], _ id: Int) -> [Int] {
+        ids.contains(id) ? ids.filter { $0 != id } : ids + [id]
+    }
+}

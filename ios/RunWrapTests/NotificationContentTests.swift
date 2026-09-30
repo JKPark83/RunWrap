@@ -262,4 +262,62 @@ struct NotificationContentTests {
         // 파일이 없을 때 다시 지워도 조용히 넘어간다
         ReportCache.clear(in: dir)
     }
+
+    // MARK: 대회 접수 알림 (이슈 #172)
+
+    private func raceEntries(_ races: [Race]) -> [RaceEngine.Entry] {
+        RaceEngine.entries(from: races, now: now)
+    }
+
+    @Test("대회 접수 알림 — 접수 시작일 09:00 KST, 이미 지난 마감 3일 전 알림은 뺀다 (이슈 #172)")
+    func raceAlarmsStartAndPastEnd() throws {
+        // now = 2026-08-10T09:00Z = 8/10 18:00 KST
+        // 대회 1: 접수 8/20~9/5 → 시작 8/20 09:00 KST, 마감 3일 전 9/2 09:00 KST
+        // 대회 2: 마감 8/12만 → 3일 전 8/9 09:00 KST는 이미 지나 0건
+        let alarms = NotificationScheduler.raceAlarms(favorites: raceEntries([
+            Race(id: 1, name: "서울달리기", date: "2026-09-20",
+                 registerStart: "2026-08-20", registerEnd: "2026-09-05"),
+            Race(id: 2, name: "한강 10K", date: "2026-09-27", registerEnd: "2026-08-12"),
+        ]), now: now)
+
+        #expect(alarms.map(\.id) == ["runwrap.race.1.start", "runwrap.race.1.end"])
+        let start = try #require(alarms.first)
+        #expect(start.body == "서울달리기 접수가 오늘 시작돼요")
+        #expect(start.fire.timeZone == TimeZone(identifier: "Asia/Seoul"))
+        #expect([start.fire.year, start.fire.month, start.fire.day, start.fire.hour, start.fire.minute]
+            == [2026, 8, 20, 9, 0])
+        // 성분이 가리키는 절대 시각 — 8/20 09:00 KST = 8/20 00:00Z (기기 시간대와 무관)
+        #expect(Calendar(identifier: .gregorian).date(from: start.fire)
+            == ISO8601DateFormatter().date(from: "2026-08-20T00:00:00Z"))
+        // 알림 트리거도 성분의 KST 시간대를 따르는지 — 고정 날짜는 실제 시계로 이미 지나
+        // nextTriggerDate가 nil이므로, 같은 성분의 연도만 2099로 옮겨 확인한다 (09:00 KST = 00:00Z)
+        var future = start.fire
+        future.year = 2099
+        let trigger = UNCalendarNotificationTrigger(dateMatching: future, repeats: false)
+        #expect(trigger.nextTriggerDate() == ISO8601DateFormatter().date(from: "2099-08-20T00:00:00Z"))
+
+        let end = try #require(alarms.last)
+        #expect(end.body == "서울달리기 접수 마감 3일 전이에요")
+        #expect([end.fire.month, end.fire.day, end.fire.hour] == [9, 2, 9])
+    }
+
+    @Test("대회 접수 알림 — 접수기간을 모르는 대회는 0건 (이슈 #172)")
+    func raceAlarmsNoPeriod() {
+        let alarms = NotificationScheduler.raceAlarms(
+            favorites: raceEntries([Race(id: 3, name: "기간 미상", date: "2026-10-01")]), now: now)
+        #expect(alarms.isEmpty)
+    }
+
+    @Test("대회 접수 알림 — 대회일 순으로 limit개 대회까지만, 알림 없는 대회는 개수에 안 센다 (이슈 #172)")
+    func raceAlarmsLimit() {
+        // 입력 순서와 무관하게 대회일 순: 9/5(기간 미상, 0건) → 9/12(id 11) → 9/19(id 12) → 9/26(id 13)
+        // limit 2 → 알림이 있는 앞의 두 대회(11, 12)의 시작 알림만 남고 13은 잘린다
+        let alarms = NotificationScheduler.raceAlarms(favorites: raceEntries([
+            Race(id: 13, name: "C", date: "2026-09-26", registerStart: "2026-08-21"),
+            Race(id: 11, name: "A", date: "2026-09-12", registerStart: "2026-08-21"),
+            Race(id: 10, name: "미상", date: "2026-09-05"),
+            Race(id: 12, name: "B", date: "2026-09-19", registerStart: "2026-08-21"),
+        ]), now: now, limit: 2)
+        #expect(alarms.map(\.id) == ["runwrap.race.11.start", "runwrap.race.12.start"])
+    }
 }

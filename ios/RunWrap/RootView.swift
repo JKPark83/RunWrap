@@ -18,6 +18,8 @@ struct RootView: View {
     @StateObject private var raceRecords = RaceRecordStore()
     /// 러닝화 (이슈 #171) — 설정이 등록하고 홈·세션 상세가 쓰며, 러닝 목록 로드 때 자동 배정을 걸어 루트가 쥔다
     @StateObject private var shoes = ShoeStore()
+    /// 대회 목록 (이슈 #172) — 대회 탭과 홈 목표 대회 카드·설정 접수 알림이 같이 써서 루트가 쥔다
+    @StateObject private var raceStore = RaceStore()
     @AppStorage("didConnectHealth") private var didConnectHealth = false
     @Environment(\.scenePhase) private var scenePhase
     /// 온보딩 설문 완료 여부 — 빈 문자열이면 아직 레벨이 없다 (= 설문 미완료)
@@ -85,6 +87,7 @@ struct RootView: View {
         .environmentObject(weather)
         .environmentObject(raceRecords)
         .environmentObject(shoes)
+        .environmentObject(raceStore)
         .tint(RR.brand)
         // 복원 선택 (이슈 #44) — 첫 업로드 직전에 서버의 이전 진행도를 발견했을 때 묻는다.
         // 메인 탭이 아니라 루트에 붙인다: 건강 데이터가 실패·미지원이어도 답할 수 있어야

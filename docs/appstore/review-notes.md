@@ -101,6 +101,9 @@ OTHER PERMISSIONS
   breaks.
 - Photo library (add only): to save a generated running story card. Optional.
 - Notifications: optional reminders (hydration on hot days, weekly report).
+- Calendars (write-only): asked only when the user taps "캘린더에 추가" on a race
+  detail screen, to save that one race as a calendar event. The app cannot read
+  existing events. Declining it only shows a hint to allow it in Settings.
 
 LOCALIZATION
 
@@ -147,6 +150,9 @@ real reports.
 대회 목록(raw.githubusercontent.com), 대회 이미지(대회 JSON의 외부 이미지 URL — 주최측·언론사·포털 CDN), iCloud 진행도
 백업(CloudKit 개인 DB, 건강 데이터 없음), Apple 지도 타일이 전부이고, 어느 것도 건강 데이터를
 싣지 않습니다. 분석 SDK·광고·외부 의존성 없음.
+
+**캘린더(쓰기 전용)** — 대회 상세의 "캘린더에 추가"를 누를 때만 요청하며, 그 대회 1건을 이벤트로 저장합니다.
+기존 일정은 읽지 않고, 거부하면 설정에서 허용하라는 안내만 뜹니다.
 
 **면책 고지(1.4.1)** — 해석 카드마다 "의학적 조언이 아니며 통증·이상 시 전문가 상담"
 문구가 붙습니다. 개인정보 처리방침 7항에도 같은 내용이 있습니다.
