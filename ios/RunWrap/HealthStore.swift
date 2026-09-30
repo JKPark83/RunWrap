@@ -32,6 +32,9 @@ final class HealthStore: ObservableObject {
         (TrainingGuideEngine.fallbackHrMaxBpm, .fallback)
     /// 안정 심박(bpm) 최근값 — 최근 28일 중 가장 최근 표본. Karvonen 존의 재료 (이슈 #56)
     @Published private(set) var restingHRBpm: Double?
+    /// 최근 28일 러닝의 세션별 심박 bpm 히스토그램 — 기간별 심박존 분포(80/20) 카드 재료.
+    /// 존 경계는 화면이 표시 시점의 심박 기준으로 적용한다 (이슈 #165)
+    @Published private(set) var zoneHistograms: [UUID: ZoneHistogram] = [:]
     /// 이미 목록이 떠 있을 때 새로 고침이 실패한 사유 — 기존 목록을 .failed로 덮지 않으려고
     /// 따로 싣는다. 아직 표시하는 화면은 없고, 추후 토스트 안내용으로 발행한다 (이슈 #58)
     @Published private(set) var lastError: String?
@@ -57,6 +60,7 @@ final class HealthStore: ObservableObject {
         hrMaxEstimate = TrainingGuideEngine.hrMaxEstimate(runs: DemoData.runs, now: Date(), birthYear: nil)
         // 시뮬레이터에서도 Karvonen 존을 고를 수 있게 합성 활력징후의 안정 심박을 그대로 쓴다
         restingHRBpm = DemoData.vitals.restingHR?.today
+        zoneHistograms = DemoData.zoneHistograms
     }
 
     /// 최초 연결: 권한 요청 → 바로 조회
@@ -128,6 +132,7 @@ final class HealthStore: ObservableObject {
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
             hrrTrend = await fetchHrrTrend()
+            await backfillZoneHistograms(workouts: workouts)
         } catch {
             // 이미 떠 있던 목록은 지키고 사유만 싣는다 — 잠금 중 백그라운드 새로 고침 한 번의
             // 실패가 화면 전체를 오류로 바꾸면 안 된다 (이슈 #58). 목록이 없던 첫 로드만 .failed
@@ -234,6 +239,56 @@ final class HealthStore: ObservableObject {
                                           quantitySamplePredicate: predicate,
                                           options: .cumulativeSum) { _, stats, _ in
                 continuation.resume(returning: stats?.sumQuantity()?.doubleValue(for: .count()))
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - 심박존 히스토그램 백필 (기간별 강도 배분, 이슈 #165)
+
+    /// 최근 28일 러닝의 세션별 bpm 히스토그램을 채운다. 캐시에 있는 워크아웃은 쿼리하지 않고,
+    /// 없는 것만 심박 샘플을 읽는다. 샘플이 없는 세션은 빈 히스토그램으로 남겨 매번 다시 묻지 않는다.
+    /// 쿼리 자체가 실패한 세션(잠금 중 등)은 비워 두고 다음 조회 때 다시 시도한다.
+    /// 창은 ZoneDistributionEngine과 같은 28일 전 자정 ~ 지금, 창 밖 항목은 버린다.
+    private func backfillZoneHistograms(workouts: [HKWorkout], now: Date = .now) async {
+        let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-28 * 86_400))
+        let recent = workouts.filter { $0.startDate >= windowStart }
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+        var cache = ZoneTimeCache.load()
+        for workout in recent where cache[workout.uuid] == nil {
+            guard let samples = try? await workoutQuantitySamples(.heartRate, in: workout) else { continue }
+            // 방금 끝난 워크아웃은 워치의 심박 샘플이 아직 동기화 전일 수 있다 — 빈 히스토그램을
+            // 굳히면 그 세션은 영원히 존 없음으로 남으므로, 1시간은 지나야 빈 결과를 캐시한다
+            if samples.isEmpty, now.timeIntervalSince(workout.endDate) < 3_600 { continue }
+            cache[workout.uuid] = ZoneHistogram.make(samples: samples.map {
+                (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
+            })
+        }
+        cache = ZoneTimeCache.prune(cache, keepingIDs: Set(recent.map(\.uuid)))
+        ZoneTimeCache.save(cache)
+        zoneHistograms = cache
+    }
+
+    // MARK: - 워크아웃 표본 조회 (백필 공용)
+
+    /// 워크아웃에 연결된 수량 샘플 — 연결 샘플 우선, 없으면 같은 기록 기기의 시간 범위 폴백.
+    /// WorkoutDetailStore.fetchQuantitySamples와 같은 규칙 (이슈 #165 #166)
+    private func workoutQuantitySamples(_ id: HKQuantityTypeIdentifier,
+                                        in workout: HKWorkout) async throws -> [HKQuantitySample] {
+        let linked = try await quantitySamples(id, predicate: .linked(to: workout))
+        if !linked.isEmpty { return linked }
+        return try await quantitySamples(id, predicate: .sameSourceDuring(workout))
+    }
+
+    private func quantitySamples(_ id: HKQuantityTypeIdentifier,
+                                 predicate: NSPredicate) async throws -> [HKQuantitySample] {
+        let byStart = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: HKQuantityType(id), predicate: predicate,
+                                      limit: HKObjectQueryNoLimit,
+                                      sortDescriptors: [byStart]) { _, samples, error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume(returning: (samples as? [HKQuantitySample]) ?? []) }
             }
             store.execute(query)
         }

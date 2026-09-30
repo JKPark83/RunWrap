@@ -305,7 +305,7 @@ final class WorkoutDetailStore: ObservableObject {
 
     /// 합성 시드 — run.id.hashValue는 프로세스마다 달라져(Hasher 무작위 시드) 쓰지 않는다.
     /// uuid 16바이트 + 시작 시각 비트 패턴을 FNV-1a(64비트)로 섞는다 (이슈 #102)
-    static func syntheticSeed(for run: RunSummary) -> UInt64 {
+    nonisolated static func syntheticSeed(for run: RunSummary) -> UInt64 {
         let idBytes = withUnsafeBytes(of: run.id.uuid) { Array($0) }
         let startBytes = withUnsafeBytes(of: run.start.timeIntervalSince1970.bitPattern.littleEndian) { Array($0) }
         var hash: UInt64 = 0xCBF2_9CE4_8422_2325          // FNV-1a 64비트 오프셋 basis
@@ -452,7 +452,7 @@ final class WorkoutDetailStore: ObservableObject {
     }
 }
 
-private extension NSPredicate {
+extension NSPredicate {
     /// 이 워크아웃에 연결된 샘플만
     static func linked(to workout: HKWorkout) -> NSPredicate {
         HKQuery.predicateForObjects(from: workout)

@@ -23,6 +23,8 @@ enum ReportCard: CaseIterable {
     case vo2Max
     /// 주법 (케이던스·보폭·상하 진폭)
     case form
+    /// 기간별 심박존 분포 · 80/20 강도 배분 (이슈 #165)
+    case zoneBalance
     /// 크로스 트레이닝 요약 — 전 레벨 공통
     case crossTraining
     /// 훈련 가이드 — 전 레벨 공통 (처방 내용은 TrainingGuideEngine이 레벨로 조정)
@@ -39,12 +41,13 @@ enum ReportGate {
     /// | 거리·체력 배터리·크로스·가이드 | ● | ● | ● |
     /// | 주간 거리 수치 | 문장만 | ● | ● |
     /// | ACWR · EF · VO₂max · 주법 | – | ● | ● |
+    /// | 강도 배분(80/20) | – | ● | ● |
     /// | 걷뛰 | ● | – | – |
     static func shows(_ card: ReportCard, level: RunnerLevel) -> Bool {
         switch card {
         case .distance, .battery, .crossTraining, .trainingGuide:
             true
-        case .acwr, .efficiency, .vo2Max, .form:
+        case .acwr, .efficiency, .vo2Max, .form, .zoneBalance:
             level != .beginner
         case .walkRun:
             level == .beginner
