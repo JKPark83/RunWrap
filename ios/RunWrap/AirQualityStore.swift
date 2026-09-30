@@ -159,6 +159,15 @@ final class AirQualityStore: ObservableObject {
             .appendingPathComponent("AirQuality.json")
     }
 
+    /// 위젯 스냅샷용 대표 등급 (이슈 #183) — 앱이 마지막으로 받은 캐시가 아직 신선할 때만.
+    /// 위젯 갱신 시점엔 위치·네트워크를 새로 타지 않으므로 캐시만 읽고, 낡았으면 판정에 끼우지 않는다(nil)
+    nonisolated static func cachedFreshGrade(now: Date) -> AirGrade? {
+        guard let cached = readCache(), let quality = cached.quality,
+              AirQualityEngine.isFresh(dataTime: quality.dataTime, fetchedAt: cached.fetchedAt,
+                                       now: now) else { return nil }
+        return AirQualityEngine.representativeGrade(quality)
+    }
+
     private nonisolated static func readCache() -> Cache? {
         guard let cacheURL, let data = try? Data(contentsOf: cacheURL) else { return nil }
         return try? JSONDecoder().decode(Cache.self, from: data)

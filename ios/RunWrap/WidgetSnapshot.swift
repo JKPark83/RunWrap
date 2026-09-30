@@ -9,9 +9,9 @@ import Foundation
 struct WidgetSnapshot: Codable, Equatable {
     let generatedAt: Date
     let batteryLevel: Int?        // 0–100. 회복 신호가 없어 배터리를 못 내면 nil
-    let batteryTone: RRTone?      // 헤드라인 톤과 같다 (TodayVerdictEngine.headline은 배터리 톤 하나로 판정)
+    let batteryTone: RRTone?      // 배터리 톤 (숫자 색). 헤드라인 톤은 대기질 상한(#183)으로 달라질 수 있다
     let batteryLabel: String?     // BatteryReport.statusLabel
-    let headline: String          // TodayVerdictEngine.headline(battery:).1 — 배터리 없으면 중립 문구
+    let headline: String          // TodayVerdictEngine.headline(battery:air:).1 — 배터리 없으면 중립 문구
     let weekKm: Double            // 6일 전 자정 ~ now (ReportSnapshot과 같은 창, 이슈 #75)
     let runCount: Int             // 같은 창의 러닝 횟수
     let showsDistanceNumbers: Bool // 런린이는 거리 수치 대신 횟수만 (ReportGate.showsNumbers(.distance))

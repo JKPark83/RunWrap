@@ -5,13 +5,14 @@ import Foundation
 /// TodayVerdictEngine 같은 엔진 타입이 없다. 앱 코드를 위젯으로 끌고 가지 않으려고 만드는 쪽만 여기 둔다.
 extension WidgetSnapshot {
     /// 배터리 + 원본 기록에서 스냅샷을 만든다 (순수 함수 — 테스트 대상).
-    /// 헤드라인은 홈 판단 카드와 같은 판정(TodayVerdictEngine.headline)이라 위젯이 홈의 거울이 된다
+    /// 헤드라인은 홈 판단 카드와 같은 판정(TodayVerdictEngine.headline)이라 위젯이 홈의 거울이 된다.
+    /// air: 신선한 대기질 캐시의 대표 등급 — 홈과 같은 대기질 상한을 건다 (이슈 #183)
     static func make(battery: BatteryReport?, runs: [RunSummary], level: RunnerLevel,
-                     now: Date) -> WidgetSnapshot {
+                     air: AirGrade? = nil, now: Date) -> WidgetSnapshot {
         // ReportSnapshot.make와 같은 달력 창 — 알림과 위젯의 "이번 주"가 어긋나지 않게 (이슈 #75)
         let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
         let weekRuns = runs.filter { $0.start >= windowStart && $0.start < now }
-        let (_, headline) = TodayVerdictEngine.headline(battery: battery)
+        let (_, headline) = TodayVerdictEngine.headline(battery: battery, air: air)
         return WidgetSnapshot(generatedAt: now,
                               batteryLevel: battery?.level,
                               batteryTone: battery?.tone,
