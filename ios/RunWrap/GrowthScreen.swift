@@ -141,14 +141,15 @@ struct GrowthScreen: View {
     // MARK: PB 목록
 
     private func recordsCard(_ records: [PersonalRecords.Entry]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // 행마다 전체 주간 리포트를 다시 돌리지 않는다 — 목록 전체에 한 번만 (이슈 #158)
+        let context = weeklyOverloadContext
+        return VStack(alignment: .leading, spacing: 0) {
             Eyebrow(text: "내 PB 목록")
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
             ForEach(Array(records.enumerated()), id: \.element.label) { index, entry in
                 NavigationLink {
-                    SessionDetailScreen(run: entry.run,
-                                        weeklyContext: weeklyContext(for: entry.run))
+                    SessionDetailScreen(run: entry.run, weeklyContext: context)
                 } label: {
                     recordRow(entry)
                 }
@@ -195,8 +196,9 @@ struct GrowthScreen: View {
         return formatter.string(from: date)
     }
 
-    /// 세션 상세의 맥락 배지용 — 이번 주 리포트가 과부하일 때만 전달 (StatsScreen과 동일)
-    private func weeklyContext(for run: RunSummary) -> WeeklyReport.DistanceCard? {
+    /// 세션 상세의 맥락 배지용 — 이번 주 리포트가 과부하일 때만 전달 (StatsScreen과 동일).
+    /// 세션과 무관한 값이라 목록을 그릴 때 한 번만 계산한다 (이슈 #158)
+    private var weeklyOverloadContext: WeeklyReport.DistanceCard? {
         guard case .loaded(let runs) = health.state,
               let card = ReportEngine().weeklyReport(from: runs).distance,
               card.tone == .overload else { return nil }
