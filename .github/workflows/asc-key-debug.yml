@@ -2,34 +2,73 @@ name: ASC key debug (temporary)
 on:
   push:
     branches: [chore/asc-key-debug]
+env:
+  XCODEGEN_VERSION: 2.45.4
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Probe provisioning endpoints with the CI key (no secret output)
+      - uses: actions/checkout@v4
+      - name: Xcode 목록·버전
+        run: ls /Applications | grep -i xcode; xcodebuild -version; sw_vers
+      - name: 키 파일 작성 + 형식 점검 (값은 출력하지 않음)
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          F=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          echo "bytes=$(wc -c < $F) lines=$(wc -l < $F) CR=$(grep -c $'\r' $F || true)"
+          openssl pkey -in "$F" -noout -text 2>&1 | grep -E 'Private-Key|ASN1 OID|NIST' || echo "openssl parse failed"
+      - name: altool로 키 검증
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: xcrun altool --list-providers --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | sed 's/'"$ASC_ISSUER_ID"'/***/g' | head -20 || true
+      - name: xcodegen
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          cd ios && "$RUNNER_TEMP/xcodegen/bin/xcodegen" generate
+      - name: 배포 인증서 설치
+        env:
+          DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_P12_PASSWORD }}
+          DIST_CERT_PASSWORD2: ${{ secrets.DIST_CERT_PASSWORD }}
+        run: |
+          PW="${DIST_CERT_PASSWORD:-$DIST_CERT_PASSWORD2}"
+          echo "$DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          security create-keychain -p ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          security import "$RUNNER_TEMP/dist.p12" -k build.keychain -P "$PW" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci build.keychain
+          security list-keychains -d user -s build.keychain login.keychain
+          security find-identity -v -p codesigning build.keychain
+      - name: 아카이브 시도 (실패 허용)
+        id: archive
+        continue-on-error: true
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          pip install --quiet "pyjwt[crypto]"
-          python3 - <<'PY'
-          import os, time, json, urllib.request, urllib.error, jwt
-          key = os.environ["ASC_KEY_P8"]
-          print("p8 lines:", len(key.splitlines()), "starts:", key.strip().startswith("-----BEGIN PRIVATE KEY-----"), "ends:", key.strip().endswith("-----END PRIVATE KEY-----"))
-          now = int(time.time())
-          tok = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"},
-                           key, algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
-          base = "https://api.appstoreconnect.apple.com/v1"
-          for path in ["/apps?limit=1", "/certificates?limit=1", "/bundleIds?limit=1", "/profiles?limit=1", "/devices?limit=1", "/userInvitations?limit=1"]:
-              req = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + tok})
-              try:
-                  with urllib.request.urlopen(req) as r:
-                      print(path, "->", r.status)
-              except urllib.error.HTTPError as e:
-                  body = e.read().decode()[:400]
-                  print(path, "->", e.code, body)
-          PY
+          xcodebuild archive -project ios/RunWrap.xcodeproj -scheme RunWrap \
+            -destination generic/platform=iOS -archivePath build/RunWrap.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM=WDNVP9B8A9 2>&1 | grep -E 'error:|warning:|Signing Identity|Provisioning Profile|ARCHIVE' | head -40
+      - name: 시스템 로그에서 인증 거부 사유 추출
+        if: always()
+        run: |
+          log show --last 12m --info --debug \
+            --predicate 'process == "xcodebuild" OR subsystem CONTAINS "DVTDeveloperAccount" OR subsystem CONTAINS "DVTServices" OR subsystem CONTAINS "IDEProvisioning"' 2>/dev/null \
+            | grep -i -E 'bearer|authentic|401|403|status code|appstoreconnect|developerservices|error' \
+            | sed -E 's/[A-Za-z0-9_-]{100,}/<redacted>/g' | head -80
