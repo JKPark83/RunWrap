@@ -17,6 +17,8 @@ enum ReportCard: CaseIterable {
     case battery
     /// 훈련 부하 (ACWR)
     case acwr
+    /// 훈련 부하 추세 CTL·ATL·TSB (이슈 #177)
+    case trainingLoad
     /// 심박 효율 (EF)
     case efficiency
     /// 심폐 체력 (VO₂max) 추세
@@ -40,14 +42,14 @@ enum ReportGate {
     /// |---|---|---|---|
     /// | 거리·체력 배터리·크로스·가이드 | ● | ● | ● |
     /// | 주간 거리 수치 | 문장만 | ● | ● |
-    /// | ACWR · EF · VO₂max · 주법 | – | ● | ● |
+    /// | ACWR · CTL·ATL·TSB · EF · VO₂max · 주법 | – | ● | ● |
     /// | 강도 배분(80/20) | – | ● | ● |
     /// | 걷뛰 | ● | – | – |
     static func shows(_ card: ReportCard, level: RunnerLevel) -> Bool {
         switch card {
         case .distance, .battery, .crossTraining, .trainingGuide:
             true
-        case .acwr, .efficiency, .vo2Max, .form, .zoneBalance:
+        case .acwr, .trainingLoad, .efficiency, .vo2Max, .form, .zoneBalance:
             level != .beginner
         case .walkRun:
             level == .beginner
