@@ -26,7 +26,7 @@
   둘 다 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
 - `xcodebuild`를 직접 쓰지 않는다. 아래 MCP 도구를 쓴다.
 - `ios/RunWrap/Races.json`을 손으로 고치지 않는다 — `.github/workflows/race-info.yml`이
-  매일 05:00 KST에 크롤 결과로 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
+  매일 02:00 KST(UTC 17:00)에 크롤을 시작해 아침 전에 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
 - 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo, 소수 2자리 좌표),
   대기질(`AirQualityClient` → data.go.kr, 측정소 이름만), 대회정보(`RaceStore` → GitHub raw),
   대회 이미지(대회 JSON의 외부 URL), 진행도 백업(`ProgressBackupStore` → 사용자 본인 iCloud 개인 DB)

@@ -64,7 +64,7 @@
 
 ## 4. M13-4 — GitHub Actions 일일 배치 (`.github/workflows/race-info.yml`)
 
-- 매일 05:00 KST(cron `0 20 * * *`) + 수동 실행(workflow_dispatch).
+- 매일 02:00 KST(cron `0 17 * * *`, 스케줄 지연 감안해 05:00 전 완료 목표) + 수동 실행(workflow_dispatch).
 - 크롤 → `generatedAt` 변동은 무시하고 **races 내용이 바뀐 날만** github-actions[bot]으로 커밋
   (커밋 소음 방지). 크롤 실패(성공률 80% 미만 포함)면 잡 실패로 개편을 알아챈다.
 - 저장소에 푸시된 뒤부터 동작한다 — 첫 확인은 workflow_dispatch 수동 실행으로.

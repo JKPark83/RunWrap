@@ -42,13 +42,16 @@ jobs:
         run: cd tools/race-info && python3 -B -m unittest -v
 
       # 앱의 Race 디코딩에서 id(Int)·name·date(yyyy-MM-dd)는 비옵셔널이다 —
-      # 한 건이라도 빠지면 번들 사본 디코딩 전체가 실패하므로 여기서 먼저 잡는다.
+      # 빠진 건은 앱이 조용히 건너뛰므로(관대 디코딩, #144) 여기서 먼저 잡는다.
+      # schemaVersion은 선택 필드(없으면 1)지만, 있으면 정수여야 파일 전체가 읽힌다.
       - name: Races.json 스키마 검사
         run: |
           python3 - <<'EOF'
           import json, re, sys
           data = json.load(open("ios/RunWrap/Races.json"))
           errors = [f"최상위 키 없음: {k}" for k in ("generatedAt", "source", "races") if k not in data]
+          if "schemaVersion" in data and type(data["schemaVersion"]) is not int:
+              errors.append(f"schemaVersion이 정수가 아님: {data['schemaVersion']!r}")
           for i, race in enumerate(data.get("races", [])):
               if not isinstance(race.get("id"), int):
                   errors.append(f"races[{i}] id가 정수가 아님: {race.get('id')!r}")
