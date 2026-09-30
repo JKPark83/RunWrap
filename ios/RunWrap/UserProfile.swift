@@ -191,3 +191,12 @@ enum GrowthKey {
     /// 쓰기는 `ProgressSnapshot.markLocalChanged`로만 한다. 서버 본을 적용할 때는 그 본의 `updatedAt`을 기록한다
     static let localChangedAt = "progress.localChangedAt"
 }
+
+/// 결산 리캡 홈 카드 닫힘 기록 (이슈 #167) — 열어 보거나 X를 누른 기간을 남겨 다시 띄우지 않는다.
+/// 기기 로컬 표시 상태라 백업(ProgressSnapshot) 대상이 아니다
+enum RecapKey {
+    /// 마지막으로 닫은 월간 결산 ("yyyy-MM", RecapEngine.dismissKey) — 빈 문자열이면 없음
+    static let dismissedMonth = "recap.dismissedMonth"
+    /// 마지막으로 닫은 연간 결산 ("yyyy") — 빈 문자열이면 없음
+    static let dismissedYear = "recap.dismissedYear"
+}
