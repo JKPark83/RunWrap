@@ -452,6 +452,7 @@ final class WorkoutDetailStore: ObservableObject {
     }
 }
 
+/// HealthStore의 베스트 에포트 백필도 같은 규칙을 쓴다 (이슈 #166)
 extension NSPredicate {
     /// 이 워크아웃에 연결된 샘플만
     static func linked(to workout: HKWorkout) -> NSPredicate {

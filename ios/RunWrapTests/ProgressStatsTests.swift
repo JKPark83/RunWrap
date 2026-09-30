@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import RunWrap
 
-/// 발전상 레이어 검증 — PR 범위 판정과 월별 시리즈의 표본 가드
+/// 발전상 레이어 검증 — PR(베스트 에포트 최소값, 이슈 #166) 선택과 월별 시리즈의 표본 가드
 /// now = 2026-08-10(월) 18:00 KST — daysAgo 1~9 = 8월, 33~40 = 7월.
 struct ProgressStatsTests {
     let now = ISO8601DateFormatter().date(from: "2026-08-10T09:00:00Z")!
@@ -18,40 +18,63 @@ struct ProgressStatsTests {
 
     // MARK: PR
 
-    @Test("PR 판정 — [D×0.995, D×1.10] 범위 안 최소 기록과 달성일을 고른다")
+    @Test("PR 판정 — 세션별 베스트 에포트 중 최소 기록과 달성일을 고른다 (이슈 #166)")
     func personalRecordsPicksBest() throws {
-        let bestFiveK = run(daysAgo: 40, km: 5.4, minPerKm: 5.0)   // 페이스 300 → 5K 환산 1500초
-        let runs = [run(daysAgo: 10, km: 5.2, minPerKm: 5.5),      // 페이스 330 → 1650초 (밀림)
-                    bestFiveK,
-                    run(daysAgo: 20, km: 10.5, minPerKm: 5.8),     // 페이스 348 → 10K 환산 3480초
-                    run(daysAgo: 5, km: 5.8, minPerKm: 4.0)]       // 5.8 > 5.5 — 5K 범위 밖, 10K 미달
-        let entries = PersonalRecords.compute(runs: runs)
-        #expect(entries.count == 2)  // 하프·풀 기록 없음 → 항목 자체 미포함
+        let bestFiveK = run(daysAgo: 40, km: 5.4, minPerKm: 5.0)
+        let slower = run(daysAgo: 10, km: 5.2, minPerKm: 5.5)
+        let long = run(daysAgo: 20, km: 10.5, minPerKm: 5.8)
+        let uncomputed = run(daysAgo: 5, km: 5.8, minPerKm: 4.0)   // 백필 전 — 표에 없다
+        let efforts: BestEffortTable = [
+            slower.id: [1_000: 320, 5_000: 1_650],
+            bestFiveK.id: [1_000: 290, 5_000: 1_500],
+            long.id: [1_000: 330, 5_000: 1_700, 10_000: 3_480],
+        ]
+        let entries = PersonalRecords.compute(runs: [slower, bestFiveK, long, uncomputed],
+                                              efforts: efforts)
+        #expect(entries.map(\.label) == ["1K", "5K", "10K"])  // 하프·풀 기록 없음 → 항목 자체 미포함
+
+        let oneK = try #require(entries.first { $0.label == "1K" })
+        #expect(oneK.timeSec == 290)                // min(320, 290, 330)
+        #expect(oneK.distanceKm == 1)
 
         let fiveK = try #require(entries.first { $0.label == "5K" })
-        #expect(abs(fiveK.timeSec - 1500) < 0.01)   // 300초/km × 5.0km
+        #expect(fiveK.timeSec == 1_500)             // min(1650, 1500, 1700)
         #expect(fiveK.date == bestFiveK.start)
+        #expect(fiveK.run.id != uncomputed.id)      // 평균 페이스가 가장 빨라도 계산 전이면 후보 아님
 
         let tenK = try #require(entries.first { $0.label == "10K" })
-        #expect(abs(tenK.timeSec - 3480) < 0.01)    // 348초/km × 10.0km
+        #expect(tenK.timeSec == 3_480)
+        #expect(tenK.run.id == long.id)
     }
 
-    @Test("PR 하한 — 워치에 5.00으로 보이는 4.997km는 5K 후보, 4.97km는 아니다 (이슈 #91)")
-    func personalRecordsLowerBoundTolerance() throws {
-        // 하한 5 × 0.995 = 4.975km. 4.997km(페이스 300) → 5K 환산 300 × 5.0 = 1500초
-        let rounded = run(daysAgo: 3, km: 4.997, minPerKm: 5.0)
-        let fiveK = try #require(PersonalRecords.compute(runs: [rounded]).first { $0.label == "5K" })
-        #expect(abs(fiveK.timeSec - 1500) < 0.01)   // 환산은 여전히 페이스 × 공인 거리
-        #expect(fiveK.run.id == rounded.id)
+    @Test("PR — 긴 세션 안 구간 기록도 후보, 못 채운 거리는 후보 아님 (이슈 #91·#166)")
+    func personalRecordsFromLongRunSegment() throws {
+        // 예전 산식은 완주 거리 ∈ [D×0.995, D×1.10]만 봤다 — 12km 세션은 5K·10K 모두 범위 밖이었다.
+        // 베스트 에포트는 세션 안 가장 빠른 5km 구간(1,400초)을 그대로 5K 기록으로 쓴다
+        let long = run(daysAgo: 3, km: 12, minPerKm: 5.5)
+        // 4.97km 세션은 엔진이 5K를 못 채워 1K만 낸다 → 5K 후보가 아니다
+        let short = run(daysAgo: 4, km: 4.97, minPerKm: 5.0)
+        let efforts: BestEffortTable = [
+            long.id: [1_000: 270, 5_000: 1_400, 10_000: 3_200],
+            short.id: [1_000: 285],
+        ]
+        let entries = PersonalRecords.compute(runs: [long, short], efforts: efforts)
+        let fiveK = try #require(entries.first { $0.label == "5K" })
+        #expect(fiveK.timeSec == 1_400)
+        #expect(fiveK.run.id == long.id)
+        let oneK = try #require(entries.first { $0.label == "1K" })
+        #expect(oneK.timeSec == 270)                // min(270, 285)
 
-        // 4.97km < 4.975km → 후보 아님
-        #expect(PersonalRecords.compute(runs: [run(daysAgo: 3, km: 4.97, minPerKm: 5.0)]).isEmpty)
+        // 4.97km 세션만 있으면 5K 항목이 없다
+        #expect(PersonalRecords.compute(runs: [short], efforts: efforts)
+            .contains { $0.label == "5K" } == false)
     }
 
-    @Test("PR — 해당 거리 기록이 하나도 없으면 빈 배열")
+    @Test("PR — 베스트 에포트가 없거나(미계산) 빈 dict(1K 미만)면 빈 배열")
     func personalRecordsEmpty() {
-        let entries = PersonalRecords.compute(runs: [run(daysAgo: 3, km: 3)])
-        #expect(entries.isEmpty)
+        let short = run(daysAgo: 3, km: 0.8)
+        #expect(PersonalRecords.compute(runs: [short], efforts: [:]).isEmpty)
+        #expect(PersonalRecords.compute(runs: [short], efforts: [short.id: [:]]).isEmpty)
     }
 
     // MARK: 페이스 타당 범위 가드 (이슈 #76)
@@ -81,15 +104,17 @@ struct ProgressStatsTests {
 
     @Test("회귀 — 시간 0초인 5.2km 기록이 섞여도 5K PB는 그대로, 월 EF는 유한하다")
     func zeroDurationRunDoesNotBecomePBOrInfiniteEF() throws {
-        let runs = [run(daysAgo: 1, km: 5.2, minPerKm: 5.0),   // 페이스 300 → 5K 1500초
+        let runs = [run(daysAgo: 1, km: 5.2, minPerKm: 5.0),   // 5K 베스트 에포트 1500초
                     run(daysAgo: 5, km: 8, minPerKm: 6),       // EF (60000/360)/150 ≈ 1.1111
                     run(daysAgo: 9, km: 8, minPerKm: 6),
                     run(daysAgo: 33, km: 8, minPerKm: 6)]
         let broken = RunSummary(id: UUID(), start: now.addingTimeInterval(-3 * 86_400),
                                 durationSec: 0, distanceMeters: 5_200, avgHeartRate: 150)
 
-        // 가드 전에는 페이스 0 → 5K 0초가 영구 PB가 됐다
-        let fiveK = try #require(PersonalRecords.compute(runs: runs + [broken])
+        // 가드 전에는 페이스 0 → 5K 0초가 영구 PB가 됐다. 이제 PR은 세션 시간이 아니라
+        // 거리 샘플의 베스트 에포트를 쓴다 — 시간 0초 세션은 샘플이 없어 빈 dict (이슈 #166)
+        let efforts: BestEffortTable = [runs[0].id: [1_000: 290, 5_000: 1_500], broken.id: [:]]
+        let fiveK = try #require(PersonalRecords.compute(runs: runs + [broken], efforts: efforts)
             .first { $0.label == "5K" })
         #expect(abs(fiveK.timeSec - 1500) < 0.01)
         #expect(fiveK.run.id != broken.id)

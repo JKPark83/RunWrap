@@ -281,6 +281,19 @@ enum DemoData {
                           o3Grade: .moderate, khaiGrade: .moderate)
     }
 
+    /// 합성 베스트 에포트 (이슈 #166) — 세션 거리 안에 드는 목표 거리마다
+    /// 평균 페이스 × D × (0.93~0.99). 세션 안 가장 빠른 구간은 평균보다 조금 빠르다는 근사.
+    /// 시드는 세션 인덱스라 결정론적이다 (runs가 static let이라 순서도 고정).
+    static let bestEfforts: BestEffortTable = Dictionary(uniqueKeysWithValues:
+        runs.enumerated().map { index, run -> (UUID, [Double: Double]) in
+            var rng = SplitMix64(seed: 0xBE57 &+ UInt64(index))
+            guard let pace = run.paceSecPerKm, let meters = run.distanceMeters else { return (run.id, [:]) }
+            let efforts = BestEffortEngine.targets.filter { $0.meters <= meters }.map { target in
+                (target.meters, pace * target.meters / 1_000 * (0.93 + rng.unit() * 0.06))
+            }
+            return (run.id, Dictionary(uniqueKeysWithValues: efforts))
+        })
+
     /// 합성 크로스 트레이닝 — 이번 주 자전거 90분 + 근력 45분 (계 2시간 15분).
     /// 걷기 25분 세션은 CrossTrainingEngine의 30분 미만 걷기 가드에 걸러지는 걸 확인하는 재료.
     static var crossTrainings: [CrossTraining] {

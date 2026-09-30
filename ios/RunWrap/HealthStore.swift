@@ -38,6 +38,11 @@ final class HealthStore: ObservableObject {
     /// 이미 목록이 떠 있을 때 새로 고침이 실패한 사유 — 기존 목록을 .failed로 덮지 않으려고
     /// 따로 싣는다. 아직 표시하는 화면은 없고, 추후 토스트 안내용으로 발행한다 (이슈 #58)
     @Published private(set) var lastError: String?
+    /// 워크아웃별 베스트 에포트(이슈 #166) — 거리별 최고 기록(PersonalRecords)의 재료.
+    /// 영구 캐시(BestEffortCache)를 먼저 싣고, 빠진 워크아웃은 기동마다 점진 백필한다
+    @Published private(set) var bestEfforts: BestEffortTable = [:]
+    /// 베스트 에포트가 아직 계산되지 않은 워크아웃 수 — 성장기 PB 카드의 "분석 중" 캡션용
+    @Published private(set) var bestEffortPending: Int = 0
     /// 현재 목록이 데모 합성 데이터인지 — 데모를 끄고 처음 조회할 때 실패하면 합성 목록을
     /// "기존 목록"으로 지켜선 안 되므로(#44의 캐시 보호가 풀린다) .failed로 보낸다 (이슈 #58)
     private var isDemoLoaded = false
@@ -61,6 +66,8 @@ final class HealthStore: ObservableObject {
         // 시뮬레이터에서도 Karvonen 존을 고를 수 있게 합성 활력징후의 안정 심박을 그대로 쓴다
         restingHRBpm = DemoData.vitals.restingHR?.today
         zoneHistograms = DemoData.zoneHistograms
+        bestEfforts = DemoData.bestEfforts
+        bestEffortPending = 0
     }
 
     /// 최초 연결: 권한 요청 → 바로 조회
@@ -128,11 +135,15 @@ final class HealthStore: ObservableObject {
             // 권한 응답 후(온보딩 connect)·데모 해제 후 첫 조회 성공 — 기동 때 권한 전이라 실패했거나
             // 데모라 건너뛴 옵저버를 여기서 다시 건다. 이미 살아 있으면 no-op (이슈 #154)
             restartObservingWorkoutsIfNeeded()
+            // 캐시된 베스트 에포트를 먼저 반영 — 계산은 함수 끝의 백필이 목록 표시와 별개로 한다 (이슈 #166)
+            bestEfforts = BestEffortCache.load()
+            bestEffortPending = workouts.filter { bestEfforts[$0.uuid] == nil }.count
             vitals = await fetchVitals()
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
             hrrTrend = await fetchHrrTrend()
             await backfillZoneHistograms(workouts: workouts)
+            backfillBestEfforts(workouts: workouts)
         } catch {
             // 이미 떠 있던 목록은 지키고 사유만 싣는다 — 잠금 중 백그라운드 새로 고침 한 번의
             // 실패가 화면 전체를 오류로 바꾸면 안 된다 (이슈 #58). 목록이 없던 첫 로드만 .failed
@@ -213,6 +224,72 @@ final class HealthStore: ObservableObject {
         }
     }
 
+    // MARK: - 베스트 에포트 백필 (이슈 #166)
+
+    /// 한 번에 계산할 워크아웃 수 — 워크아웃마다 거리 샘플 쿼리가 필요해 기동당 비용을 묶는다
+    private static let bestEffortBatchSize = 60
+    /// 백필 Task가 도는 중인지 — 새로 고침이 겹쳐도 같은 워크아웃을 두 번 계산하지 않는다
+    private var isBackfillingBestEfforts = false
+    /// 이번 기동에 쿼리가 실패한 워크아웃 — 남은 개수에서 빼 PB 감지가 영원히 막히지 않게 한다.
+    /// 캐시에는 넣지 않으므로 다음 기동에 다시 시도한다
+    private var bestEffortFailedIDs = Set<UUID>()
+
+    /// 캐시에 없는 워크아웃을 최신부터 최대 60개 계산해 저장한다. load()는 기다리지 않는다 —
+    /// 목록 표시를 막지 않고, 끝나면 published 값만 갱신한다. 쿼리 실패(기기 잠금 등)한
+    /// 워크아웃은 캐시에 넣지 않아 다음 기동에 다시 시도한다.
+    private func backfillBestEfforts(workouts: [HKWorkout]) {
+        guard !isBackfillingBestEfforts else { return }
+        let pending = workouts.filter { bestEfforts[$0.uuid] == nil }   // workouts는 최신순
+        bestEffortPending = pending.count
+        guard !pending.isEmpty else { return }
+        isBackfillingBestEfforts = true
+        Task {
+            var computed: BestEffortTable = [:]
+            for workout in pending.prefix(Self.bestEffortBatchSize) {
+                guard let samples = try? await workoutQuantitySamples(.distanceWalkingRunning,
+                                                                      in: workout) else {
+                    bestEffortFailedIDs.insert(workout.uuid)
+                    continue
+                }
+                computed[workout.uuid] = BestEffortEngine.bestEfforts(distanceSamples: samples.map {
+                    (start: $0.startDate, end: $0.endDate, meters: $0.quantity.doubleValue(for: .meter()))
+                })
+            }
+            let table = bestEfforts.merging(computed) { _, new in new }
+            BestEffortCache.save(table)
+            bestEfforts = table
+            bestEffortPending = workouts.filter {
+                table[$0.uuid] == nil && !bestEffortFailedIDs.contains($0.uuid)
+            }.count
+            isBackfillingBestEfforts = false
+        }
+    }
+
+    // MARK: - 워크아웃 표본 조회 (백필 공용)
+
+    /// 워크아웃에 연결된 수량 샘플 — 연결 샘플 우선, 없으면 같은 기록 기기의 시간 범위 폴백.
+    /// WorkoutDetailStore.fetchQuantitySamples와 같은 규칙 (이슈 #165 #166)
+    private func workoutQuantitySamples(_ id: HKQuantityTypeIdentifier,
+                                        in workout: HKWorkout) async throws -> [HKQuantitySample] {
+        let linked = try await quantitySamples(id, predicate: .linked(to: workout))
+        if !linked.isEmpty { return linked }
+        return try await quantitySamples(id, predicate: .sameSourceDuring(workout))
+    }
+
+    private func quantitySamples(_ id: HKQuantityTypeIdentifier,
+                                 predicate: NSPredicate) async throws -> [HKQuantitySample] {
+        let byStart = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: HKQuantityType(id), predicate: predicate,
+                                      limit: HKObjectQueryNoLimit,
+                                      sortDescriptors: [byStart]) { _, samples, error in
+                if let error { continuation.resume(throwing: error) }
+                else { continuation.resume(returning: (samples as? [HKQuantitySample]) ?? []) }
+            }
+            store.execute(query)
+        }
+    }
+
     // MARK: - 케이던스 백필 (주법 추이)
 
     /// 워크아웃 평균 케이던스(spm) = 걸음 수 합 ÷ 분.
@@ -267,31 +344,6 @@ final class HealthStore: ObservableObject {
         cache = ZoneTimeCache.prune(cache, keepingIDs: Set(recent.map(\.uuid)))
         ZoneTimeCache.save(cache)
         zoneHistograms = cache
-    }
-
-    // MARK: - 워크아웃 표본 조회 (백필 공용)
-
-    /// 워크아웃에 연결된 수량 샘플 — 연결 샘플 우선, 없으면 같은 기록 기기의 시간 범위 폴백.
-    /// WorkoutDetailStore.fetchQuantitySamples와 같은 규칙 (이슈 #165 #166)
-    private func workoutQuantitySamples(_ id: HKQuantityTypeIdentifier,
-                                        in workout: HKWorkout) async throws -> [HKQuantitySample] {
-        let linked = try await quantitySamples(id, predicate: .linked(to: workout))
-        if !linked.isEmpty { return linked }
-        return try await quantitySamples(id, predicate: .sameSourceDuring(workout))
-    }
-
-    private func quantitySamples(_ id: HKQuantityTypeIdentifier,
-                                 predicate: NSPredicate) async throws -> [HKQuantitySample] {
-        let byStart = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(sampleType: HKQuantityType(id), predicate: predicate,
-                                      limit: HKObjectQueryNoLimit,
-                                      sortDescriptors: [byStart]) { _, samples, error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume(returning: (samples as? [HKQuantitySample]) ?? []) }
-            }
-            store.execute(query)
-        }
     }
 
     // MARK: - 활력징후 (체력 배터리)

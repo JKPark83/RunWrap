@@ -143,6 +143,10 @@ struct HomeScreen: View {
         .onChange(of: growth.stage) { _, newStage in
             syncStage(newStage)
         }
+        // 베스트 에포트 백필이 끝나면(남은 개수 0) 미뤄 둔 PB 감지를 다시 건다 (이슈 #166)
+        .onChange(of: health.bestEffortPending) { _, pending in
+            if pending == 0 { checkNewPBs(runs: runs) }
+        }
         .fullScreenCover(isPresented: $showsCeremony) {
             CeremonyScreen(species: pendingSpecies,
                             goalLabel: pendingGoalLabel,
@@ -592,7 +596,10 @@ struct HomeScreen: View {
     /// 세러모니와 겹치면 이번에는 베이스라인을 남겨 두고 미룬다 — 다음 진입 때 다시 잡힌다.
     private func checkNewPBs(runs: [RunSummary]) {
         guard !DemoMode.isActive else { return }   // 합성 데이터 기록으로는 축하하지 않는다
-        let current = PersonalRecords.compute(runs: runs)
+        // 베스트 에포트 백필 중이면 미룬다 — 일부만 계산된 기록으로 시드하면, 나중에 계산된
+        // 옛 세션의 기록이 "새 PB"로 축하된다 (이슈 #166)
+        guard health.bestEffortPending == 0 else { return }
+        let current = PersonalRecords.compute(runs: runs, efforts: health.bestEfforts)
         guard !current.isEmpty else { return }
         let fresh = PBEngine.newRecords(current: current, baseline: PBBaselineCache.load())
         guard fresh.isEmpty || !showsCeremony else { return }
