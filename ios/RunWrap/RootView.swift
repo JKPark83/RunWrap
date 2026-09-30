@@ -16,6 +16,8 @@ struct RootView: View {
     @StateObject private var weather = WeatherStore()
     /// 직접 입력한 대회 기록 (이슈 #35) — 설정이 입력하고 리포트가 소비해서 루트가 쥔다
     @StateObject private var raceRecords = RaceRecordStore()
+    /// 러닝화 (이슈 #171) — 설정이 등록하고 홈·세션 상세가 쓰며, 러닝 목록 로드 때 자동 배정을 걸어 루트가 쥔다
+    @StateObject private var shoes = ShoeStore()
     @AppStorage("didConnectHealth") private var didConnectHealth = false
     @Environment(\.scenePhase) private var scenePhase
     /// 온보딩 설문 완료 여부 — 빈 문자열이면 아직 레벨이 없다 (= 설문 미완료)
@@ -82,6 +84,7 @@ struct RootView: View {
         }
         .environmentObject(weather)
         .environmentObject(raceRecords)
+        .environmentObject(shoes)
         .tint(RR.brand)
         // 복원 선택 (이슈 #44) — 첫 업로드 직전에 서버의 이전 진행도를 발견했을 때 묻는다.
         // 메인 탭이 아니라 루트에 붙인다: 건강 데이터가 실패·미지원이어도 답할 수 있어야
@@ -146,6 +149,15 @@ struct RootView: View {
         }
         .onChange(of: health.state) { _, newState in
             if case .loaded = newState { didConnectHealth = true }
+        }
+        // 러닝화 자동 배정 (이슈 #171) — 렌더 중이 아니라 목록이 로드된 시점에.
+        // initial: 데모 모드는 HealthStore init에서 이미 loaded라 변화가 오지 않는다.
+        // 실기기 데모 모드에서는 합성 러닝 ID가 실제 shoes.json에 쌓이므로 배정을 건너뛴다(시뮬레이터는 예외).
+        .onChange(of: health.state, initial: true) { _, newState in
+            #if !targetEnvironment(simulator)
+            if DemoMode.isEnabled { return }
+            #endif
+            if case .loaded(let runs) = newState { shoes.syncAssignments(runs: runs) }
         }
         .onChange(of: backup.mergedResult) { _, merged in
             // 백업 병합이 서버 쪽 도감·대회 기록을 살렸다 — 메모리도 맞춰야 다음 저장이 되살린 항목을 지우지 않는다 (이슈 #128)
