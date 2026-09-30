@@ -211,3 +211,25 @@ struct OnboardingPersistTests {
         #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 6_300)
     }
 }
+
+/// 온보딩 원답 파일 정리 (이슈 #156) — 원답은 더 이상 저장하지 않고, 이전 버전이 남긴 파일은 지운다.
+@Suite("온보딩 원답 파일 정리")
+struct OnboardingAnswersStoreTests {
+    @Test("이전 버전이 남긴 원답 파일을 지우고, 파일이 없어도 조용히 넘어간다")
+    func removesLegacyFile() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("onboarding-answers-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent(OnboardingAnswersStore.filename)
+        try Data("{}".utf8).write(to: file)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+
+        OnboardingAnswersStore.removeLegacyFile(in: dir)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        // 두 번째 호출 — 파일이 없어도 오류 없이 끝나고 디렉터리도 그대로다
+        OnboardingAnswersStore.removeLegacyFile(in: dir)
+        #expect(FileManager.default.fileExists(atPath: dir.path))
+    }
+}

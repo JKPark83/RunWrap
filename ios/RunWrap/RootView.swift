@@ -108,6 +108,8 @@ struct RootView: View {
         .animation(.easeOut(duration: 0.35), value: isBooting)
         .task {
             detectReturningUser()
+            // 이전 버전이 남긴 온보딩 원답 파일 정리 — 없으면 아무것도 안 한다 (이슈 #156)
+            OnboardingAnswersStore.removeLegacyFile()
             if levelRaw.isEmpty {
                 // 신규 설치 — 온보딩보다 CloudKit 복원이 먼저다 (이슈 #29).
                 // 성공하면 레벨 저장값이 채워져 onChange(levelRaw)가 데이터 로딩을 이어받는다

@@ -25,10 +25,12 @@ struct AirQualityClient {
 
     /// 홈 진입 후 백그라운드로 도는 조회지만 날씨와 같은 10초 상한을 둔다 —
     /// 오래 기다린 끝의 낡은 수치보다 "안 보여주기"가 낫다 (미노출 가드).
-    /// 전체 상한은 current()의 재시도 루프가 지키고, 세션은 시도 1회 타임아웃만 건다
+    /// 전체 상한은 current()의 재시도 루프가 지키고, 세션은 시도 1회 타임아웃만 건다.
+    /// Request 타임아웃은 바이트가 올 때마다 다시 시작되므로 Resource로 시도 1회 전체 상한도 건다 (이슈 #157)
     private static let bounded: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = maxAttemptTimeout
+        configuration.timeoutIntervalForResource = maxAttemptTimeout
         return URLSession(configuration: configuration)
     }()
 
