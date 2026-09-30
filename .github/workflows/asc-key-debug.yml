@@ -1,6 +1,7 @@
 name: ASC key debug (temporary)
 on:
-  workflow_dispatch:
+  push:
+    branches: [chore/asc-key-debug]
 jobs:
   probe:
     runs-on: ubuntu-latest
