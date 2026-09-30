@@ -6,6 +6,9 @@ import Foundation
 ///
 /// 왜 2주 미만은 미노출인가: 1주 연속은 "이번(지난) 주에 한 번 달렸다"와 같은 말이라
 /// 연속이라 부를 근거가 없다. 표본이 부족하면 지표를 내지 않는 원칙대로 nil을 준다.
+///
+/// 캡션은 이번 주에 이미 달렸는지(`WeeklyReport.ranThisWeek`)로 가른다 (이슈 #195) — 연속 주 수는
+/// 진행 중인 이번 주를 끊김으로 세지 않아, 주 수만으로는 "이번 주 몫을 채웠는지"를 알 수 없다.
 
 struct StreakCard: Equatable {
     let weeks: Int
@@ -21,7 +24,7 @@ enum StreakEngine {
     static let milestones: Set<Int> = [4, 8, 12, 26, 52]
 
     /// 연속 주 수가 2 미만이면 nil — 카드를 아예 그리지 않는다
-    static func card(streakWeeks: Int) -> StreakCard? {
+    static func card(streakWeeks: Int, ranThisWeek: Bool) -> StreakCard? {
         guard streakWeeks >= minWeeks else { return nil }
         let headline = "\(streakWeeks)주 연속 달리는 중"
         if milestones.contains(streakWeeks) {
@@ -30,9 +33,11 @@ enum StreakEngine {
                               caption: "\(streakWeeks)주 이정표! \(milestonePhrase(streakWeeks))",
                               tone: .improving)
         }
-        // 진행 중인 이번 주는 끊김으로 세지 않는다(ReportEngine.streakWeeks) — 이번 주 한 번이면 이어진다
+        // 진행 중인 이번 주는 끊김으로 세지 않는다(ReportEngine.streakWeeks) — 이번 주 한 번이면 이어진다.
+        // 이미 달린 주에 "한 번만 나가면"은 틀린 말이라 다음 주로 넘긴다 (이슈 #195)
         return StreakCard(weeks: streakWeeks, headline: headline,
-                          caption: "이번 주도 한 번만 나가면 이어집니다",
+                          caption: ranThisWeek ? "이번 주 몫은 채우셨어요, 다음 주에 이어 가요"
+                                               : "이번 주도 한 번만 나가면 이어집니다",
                           tone: .steady)
     }
 

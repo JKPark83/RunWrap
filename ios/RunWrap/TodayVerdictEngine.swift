@@ -37,6 +37,9 @@ struct TodayVerdict: Equatable {
 
     /// 제목줄 판정 — 배터리가 없으면 판정하지 않는다(nil). 화면은 배지를 감춘다
     let tone: RRTone?
+    /// 배지 라벨 덮어쓰기 — 대기질이 판정을 정했을 때만 값이 있다 (이슈 #195).
+    /// nil이면 화면은 톤 기본 라벨을 쓴다
+    let badgeLabel: String?
     let headline: String
     let battery: Line
     let weather: Line
@@ -80,12 +83,14 @@ enum TodayVerdictEngine {
 
         let (tone, headline) = Self.headline(battery: battery, air: air)
         return TodayVerdict(tone: tone,
+                            badgeLabel: badgeLabel(battery: battery, air: air),
                             headline: headline,
                             battery: batteryLine(battery),
                             weather: weatherLine(weather, air: air, now: now),
                             session: sessionLine(runs: runs, battery: battery, guide: guide,
                                                  hasRaceGoal: hasRaceGoal,
-                                                 weeklyGoal: weeklyGoal, level: level, now: now),
+                                                 weeklyGoal: weeklyGoal, level: level,
+                                                 air: air, now: now),
                             recovery: recoveryLine(runs: runs, now: now))
     }
 
@@ -123,6 +128,24 @@ enum TodayVerdictEngine {
         case .caution: (.caution, "가볍게만 다녀오세요")
         case .steady: (.steady, "평소대로 가셔도 돼요")
         case .improving: (.improving, "몸이 좋습니다, 밀어붙여도 돼요")
+        }
+    }
+
+    /// 배지 라벨 (이슈 #195) — 대기질 상한이 판정을 정했을 때만 이유를 배지에 적는다.
+    /// 톤 기본 라벨("주의"·"과부하")만 보이면 배터리가 나쁜 것으로 읽히기 때문이다.
+    /// 조건은 `headline(battery:air:)`의 상한 분기와 같다 — 배터리가 이미 더 보수적이면 배터리 판정이라 nil.
+    /// 헤드라인 튜플은 위젯 팩토리가 그대로 쓰므로 건드리지 않고 따로 낸다
+    static func badgeLabel(battery: BatteryReport?, air: AirGrade?) -> String? {
+        switch air {
+        case .veryBad:
+            return "실외 자제"
+        case .bad:
+            switch battery?.tone {
+            case .overload, .caution: return nil
+            case .steady, .improving, nil: return "공기 나쁨"
+            }
+        case .good, .moderate, nil:
+            return nil
         }
     }
 
@@ -214,13 +237,25 @@ enum TodayVerdictEngine {
     /// 오늘의 훈련은 `TrainingGuideEngine.todayWorkout`이 정한다 (형태·거리·페이스).
     /// 여기서는 그 결과를 홈 카드 한 줄 문구로 접는다 — "이지런 5.0km · 5′20″" 꼴.
     /// 이지런 이름은 배터리 톤에 따라 가볍게/이지런/빌드업으로 갈라 쓴다 (기존 규칙 유지).
+    ///
+    /// 대기질은 헤드라인(#183)과 같은 상한을 이 줄에도 건다 (이슈 #195) — 제목이 "가볍게만"이라면서
+    /// 권장 세션이 인터벌이면 한 카드 안에서 말이 어긋난다. 공기는 회복 상태와 무관하게 실외 강도를 막는다.
+    /// - 매우나쁨: 처방·유도 문구와 무관하게 "오늘은 실내에서"(overload)
+    /// - 나쁨: 배터리 톤이 steady·improving·nil이면 caution으로 낮춰 처방한다 (이지런·"가볍게").
+    ///   overload·caution이면 그쪽이 더 보수적이므로 그대로
+    /// - 좋음·보통·nil: 변화 없음
     private static func sessionLine(runs: [RunSummary], battery: BatteryReport?,
                                     guide: TrainingGuide?, hasRaceGoal: Bool,
                                     weeklyGoal: Int, level: RunnerLevel,
-                                    now: Date) -> TodayVerdict.Line {
+                                    air: AirGrade?, now: Date) -> TodayVerdict.Line {
         let label = "오늘 권장"
         func line(_ content: TodayVerdict.Line.Content, _ tone: RRTone?) -> TodayVerdict.Line {
             .init(kind: .session, label: label, content: content, tone: tone)
+        }
+
+        // 실외 활동 자제 등급 — 처방이 없어 유도 문구를 낼 자리여도 이 줄이 이긴다
+        if air == .veryBad {
+            return line(.value("오늘은 실내에서"), .overload)
         }
 
         guard let guide else {
@@ -229,9 +264,14 @@ enum TodayVerdictEngine {
                                           : "목표 대회를 정해 보세요"), nil)
         }
 
+        // 처방·문구가 함께 쓰는 유효 톤 — 나쁨이면 배터리가 좋아도 caution으로 상한을 건다
+        let effectiveTone: RRTone? = switch (air, battery?.tone) {
+        case (.bad, .steady), (.bad, .improving), (.bad, nil): .caution
+        default: battery?.tone
+        }
         let today = TrainingGuideEngine(now: now, level: level)
             .todayWorkout(runs: runs, guide: guide,
-                          batteryTone: battery?.tone, weeklyGoal: weeklyGoal)
+                          batteryTone: effectiveTone, weeklyGoal: weeklyGoal)
         switch today.kind {
         case .rest:
             // 방전 임박에는 거리를 내지 않는다 — 오늘의 처방은 쉬는 것이다
@@ -241,8 +281,8 @@ enum TodayVerdictEngine {
         case .doneKm:
             return line(.value("이번 주 목표를 채우셨어요"), .improving)
         case .easy, .lsd, .tempo, .interval:
-            return line(.value(sessionPhrase(today, batteryTone: battery?.tone)),
-                        battery?.tone ?? .steady)
+            return line(.value(sessionPhrase(today, batteryTone: effectiveTone)),
+                        effectiveTone ?? .steady)
         }
     }
 

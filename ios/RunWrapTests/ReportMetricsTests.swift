@@ -196,7 +196,7 @@ struct ReportMetricsTests {
         let distance = WeeklyReport.DistanceCard(tone: distanceTone, recent7Km: recent, previous7Km: 20,
                                                  capKm: 22, changePct: (recent - 20) / 20 * 100)
         return WeeklyReport(dateRange: "8.4 – 8.10", weeks: [], distance: distance, acwr: acwr,
-                            efficiency: nil, streakWeeks: 3, weekRunCount: 3)
+                            efficiency: nil, streakWeeks: 3, ranThisWeek: true, weekRunCount: 3)
     }
 
     @Test("첫 문장 게이트 — 런린이는 숨긴 ACWR 과부하 톤으로 문장을 고르지 않는다 (이슈 #124)")
@@ -392,6 +392,16 @@ struct ReportMetricsTests {
     @Test("streak — 기록이 없으면 0")
     func streakEmpty() {
         #expect(ReportEngine.streakWeeks(runs: [], now: now) == 0)
+    }
+
+    @Test("이번 주 러닝 여부 — 이번 주 월요일 러닝이면 true, 지난주만이면 false (이슈 #195)")
+    func ranThisWeek() {
+        // now = 8.10(월) 18:00 KST — daysAgo 0.2는 같은 날 새벽, 3은 지난주 8.7
+        #expect(ReportEngine.ranThisWeek(runs: [run(daysAgo: 0.2, km: 5), run(daysAgo: 3, km: 5)],
+                                         now: now))
+        #expect(!ReportEngine.ranThisWeek(runs: [run(daysAgo: 3, km: 5), run(daysAgo: 9, km: 5)],
+                                          now: now))
+        #expect(!ReportEngine.ranThisWeek(runs: [], now: now))
     }
 
     @Test("VO₂max 추이 — 주 평균 45.2, 4주 전 44.0 대비 +1.2 개선 톤")

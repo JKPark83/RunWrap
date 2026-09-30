@@ -65,7 +65,7 @@ struct NotificationContentTests {
         // 런린이는 ReportGate.showsNumbers(.distance) = false → make가 showsDistanceNumbers false로 채운다
         let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
                                   distance: nil, acwr: nil, efficiency: nil,
-                                  streakWeeks: 2, weekRunCount: 3)
+                                  streakWeeks: 2, ranThisWeek: true, weekRunCount: 3)
         let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
                                durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
         let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .beginner, now: now)
@@ -81,7 +81,7 @@ struct NotificationContentTests {
         // 창 안 10km 1건 → weekKm 10.0, 횟수는 report.weekRunCount 3
         let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
                                   distance: nil, acwr: nil, efficiency: nil,
-                                  streakWeeks: 2, weekRunCount: 3)
+                                  streakWeeks: 2, ranThisWeek: true, weekRunCount: 3)
         let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
                                durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
         let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .intermediate, now: now)
@@ -144,7 +144,7 @@ struct NotificationContentTests {
     func snapshotMake() {
         let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
                                   distance: nil, acwr: nil, efficiency: nil,
-                                  streakWeeks: 2, weekRunCount: 3)
+                                  streakWeeks: 2, ranThisWeek: true, weekRunCount: 3)
         // 창은 6일 전 자정 ~ now (weekRunCount와 같은 창, 이슈 #75).
         // 2일 전 10km는 창 안, 9일 전 10km는 창 밖.
         // 8일째 날(창 시작 1분 전) 7km는 롤링 7×86_400 안이지만 창 밖 → weekKm 10
