@@ -4,6 +4,8 @@ build/
 # xcodegen이 project.yml의 info/entitlements 섹션에서 생성
 ios/RunWrap/Info.plist
 ios/RunWrap/RunWrap.entitlements
+ios/RunWrapWidget/Info.plist
+ios/RunWrapWidget/RunWrapWidget.entitlements
 
 # 에어코리아 data.go.kr 인증키 — 비밀값, 커밋 금지 (이슈 #8).
 # 형식: {"serviceKey": "<디코딩 인증키>"} — AirQualityStore가 번들에서 읽는다.

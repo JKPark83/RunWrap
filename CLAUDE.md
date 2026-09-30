@@ -8,12 +8,12 @@
 | 항목 | 값 |
 |---|---|
 | 스킴 / 프로젝트 | `RunWrap` / `ios/RunWrap.xcodeproj` (워크스페이스 없음) |
-| 타깃 | `RunWrap`(앱), `RunWrapTests`(유닛 테스트) |
+| 타깃 | `RunWrap`(앱), `RunWrapWidget`(위젯 확장), `RunWrapTests`(유닛 테스트) |
 | 배포 타깃 | iOS 17.0 · 아이폰 세로 전용(`TARGETED_DEVICE_FAMILY = 1`) |
 | 기본 시뮬레이터 | iPhone 17 Pro |
 | 의존성 | **없음** — SPM·CocoaPods·Carthage 모두 미사용. 애플 프레임워크만 쓴다 |
 | UI | 전부 SwiftUI. UIKit은 `Theme.swift` 한 곳뿐(다이내믹 컬러 프로바이더용) |
-| 영속화 | `ReportCache`가 Application Support에 `Codable`+JSON으로 저장, 그 외는 `@AppStorage`. SwiftData·Core Data 미사용 |
+| 영속화 | `ReportCache`가 Application Support에 `Codable`+JSON으로 저장, 그 외는 `@AppStorage`. 위젯 스냅샷은 App Group(`group.com.jkpark.runwrap`) JSON. SwiftData·Core Data 미사용 |
 | 테스트 | Swift Testing 139개 / 16스위트 (`ios/RunWrapTests`) |
 | 프로젝트 생성 | xcodegen **2.45.4** — CI 고정 버전(`XCODEGEN_VERSION`, `test.yml`·`testflight.yml`). 로컬도 같은 버전을 쓴다 |
 | 포매터·린터 | 없음 (SwiftFormat·SwiftLint 미설치). 주변 코드 스타일을 눈으로 맞춘다 |
@@ -22,8 +22,9 @@
 
 - `*.xcodeproj/` 내부, 특히 `project.pbxproj`를 편집하지 않는다. **생성물이고 gitignore 대상**이다.
   타깃 멤버십이 어긋나면 `ios/project.yml`을 고쳐 xcodegen을 다시 돌린다.
-  같은 이유로 `ios/RunWrap/Info.plist`와 `ios/RunWrap/RunWrap.entitlements`도 직접 편집 금지 —
-  둘 다 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
+  같은 이유로 `ios/RunWrap/Info.plist`와 `ios/RunWrap/RunWrap.entitlements`,
+  `ios/RunWrapWidget/Info.plist`·`RunWrapWidget.entitlements`도 직접 편집 금지 —
+  모두 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
 - `xcodebuild`를 직접 쓰지 않는다. 아래 MCP 도구를 쓴다.
 - `ios/RunWrap/Races.json`을 손으로 고치지 않는다 — `.github/workflows/race-info.yml`이
   매일 02:00 KST(UTC 17:00)에 크롤을 시작해 아침 전에 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.

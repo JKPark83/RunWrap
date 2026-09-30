@@ -72,7 +72,7 @@ enum TodayVerdictEngine {
         // 읽히므로 카드 자체를 내지 않는다 (홈은 첫 러닝 안내만 남긴다)
         guard !runs.isEmpty else { return nil }
 
-        let (tone, headline) = verdictHeadline(battery: battery)
+        let (tone, headline) = Self.headline(battery: battery)
         return TodayVerdict(tone: tone,
                             headline: headline,
                             battery: batteryLine(battery),
@@ -87,7 +87,8 @@ enum TodayVerdictEngine {
 
     /// 판정은 체력 배터리 톤 하나로 한다 — 오늘의 결정을 가르는 건 회복 상태다.
     /// 배터리가 없으면 판정하지 않고 중립 문구만 둔다 ("틀린 인사이트는 없느니만 못하다").
-    private static func verdictHeadline(battery: BatteryReport?) -> (RRTone?, String) {
+    /// 위젯 스냅샷도 같은 판정을 쓴다 — 홈 카드와 위젯 문구가 어긋나지 않게 (이슈 #181)
+    static func headline(battery: BatteryReport?) -> (RRTone?, String) {
         guard let battery else { return (nil, "오늘은 어떻게 가실까요") }
         return switch battery.tone {
         case .overload: (.overload, "오늘은 쉬시는 게 이깁니다")

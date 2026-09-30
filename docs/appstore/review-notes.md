@@ -58,6 +58,10 @@ HEALTH DATA (Guideline 5.1.3)
   together with recovery signals such as sleep, HRV, resting heart rate,
   heart rate recovery, respiratory rate and wrist temperature; date of birth
   for max-HR estimation only. Body mass is never requested.
+- The widget extension (RunWrapWidget) has no HealthKit entitlement. It only
+  reads a derived snapshot (battery level, today's verdict sentence, weekly
+  distance) that the app writes to the App Group container. Nothing leaves
+  the device.
 - All health data is processed on device. It is NEVER transmitted off the
   device. The app talks to the following hosts only; none of them receives
   health data:
@@ -148,6 +152,7 @@ real reports.
 **건강 데이터** — 읽기 전용(`toShare: []`), 전부 온디바이스 처리, 외부 전송 없음.
 읽기 권한은 첫 연결(온보딩)에 한 번에 요청하며(러닝 기록, 크로스 트레이닝 문장용 최근 2주 비러닝 운동 포함)
 체중은 요청하지 않습니다.
+홈·잠금화면 위젯(RunWrapWidget)은 HealthKit 권한이 없고, 앱이 App Group 컨테이너에 써 둔 파생 요약(배터리 수치, 오늘 판정 문장, 주간 거리)만 읽습니다. 기기 밖으로 나가는 것은 없습니다.
 외부 통신은 날씨(api.open-meteo.com, 약 1km 좌표 — 같은 요청으로 24시간 시간대별 예보까지), 대기질(apis.data.go.kr, 측정소 이름만),
 대회 목록(raw.githubusercontent.com), 대회 이미지(대회 JSON의 외부 이미지 URL — 주최측·언론사·포털 CDN), iCloud 진행도
 백업(CloudKit 개인 DB, 건강 데이터 없음), Apple 지도 타일이 전부이고, 어느 것도 건강 데이터를
