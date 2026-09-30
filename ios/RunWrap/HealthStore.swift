@@ -121,6 +121,9 @@ final class HealthStore: ObservableObject {
             lastError = nil
             isDemoLoaded = false
             state = .loaded(summaries)
+            // 권한 응답 후(온보딩 connect)·데모 해제 후 첫 조회 성공 — 기동 때 권한 전이라 실패했거나
+            // 데모라 건너뛴 옵저버를 여기서 다시 건다. 이미 살아 있으면 no-op (이슈 #154)
+            restartObservingWorkoutsIfNeeded()
             vitals = await fetchVitals()
             vo2Max = await fetchVo2Max()
             crossTrainings = await fetchCrossTrainings()
@@ -141,25 +144,50 @@ final class HealthStore: ObservableObject {
     /// 새 워크아웃 저장을 감지하는 옵저버 — 러닝 종료 직후 알림(보조 경로)의 재료.
     /// 등록 직후에도 한 번 불리므로 중복 알림 필터링은 호출부(onUpdate) 몫이다.
     private var workoutObserver: HKObserverQuery?
+    /// 앱이 넘긴 옵저버 콜백 — 옵저버가 죽었을 때 스토어가 같은 콜백으로 다시 걸 수 있게 보관한다 (이슈 #154)
+    private var workoutUpdateHandler: (@Sendable () async -> Void)?
 
     /// 옵저버 등록 + 백그라운드 딜리버리 켜기 — 앱 기동마다 호출해도 안전 (재등록 가드).
     /// 데모 모드·시뮬레이터에서는 no-op (시뮬레이터는 백그라운드 딜리버리 자체를 지원하지 않는다).
+    /// 콜백이 오류를 받으면(권한 전 등록 등) 옵저버를 걷어 두고,
+    /// 다음 조회 성공 때 restartObservingWorkoutsIfNeeded가 다시 건다 (이슈 #154)
     func startObservingWorkouts(onUpdate: @escaping @Sendable () async -> Void) {
+        workoutUpdateHandler = onUpdate
         guard !DemoMode.isActive,
               HKHealthStore.isHealthDataAvailable(), workoutObserver == nil else { return }
         let query = HKObserverQuery(sampleType: .workoutType(),
-                                    predicate: HKQuery.predicateForWorkouts(with: .running)) { _, done, error in
+                                    predicate: HKQuery.predicateForWorkouts(with: .running)) { [weak self] query, done, error in
             // 계약: 성패와 무관하게 completionHandler를 반드시 부른다 —
             // 3회 미호출이 쌓이면 background delivery 자체가 끊긴다
             Task {
-                if error == nil { await onUpdate() }
+                if error == nil {
+                    await onUpdate()
+                } else {
+                    // 권한 전 등록 등으로 오류를 받은 옵저버는 다시 불리지 않는다 — 재등록 대상으로 돌린다
+                    await self?.discardWorkoutObserver(query)
+                }
                 done()
             }
         }
         store.execute(query)
         workoutObserver = query
-        // 실패해도 조용히 넘어간다 — 포그라운드 재계산이 1차 경로, 옵저버는 보조
+        // 실패해도 옵저버는 걷지 않는다 — 포그라운드에서는 옵저버가 그대로 동작하고, 여기서 걷으면
+        // 등록 직후 첫 콜백 → load() → 재등록 → 첫 콜백…의 재조회 루프가 생길 수 있다.
+        // 포그라운드 재계산이 1차 경로이므로 조용히 넘어간다
         store.enableBackgroundDelivery(for: .workoutType(), frequency: .immediate) { _, _ in }
+    }
+
+    /// 앱이 등록한 적 있는 콜백으로 옵저버를 다시 건다 — 등록한 적이 없거나 살아 있으면 no-op
+    private func restartObservingWorkoutsIfNeeded() {
+        guard let workoutUpdateHandler else { return }
+        startObservingWorkouts(onUpdate: workoutUpdateHandler)
+    }
+
+    /// 죽은 옵저버를 멈추고 비운다 — 그 사이 새로 건 옵저버는 건드리지 않는다
+    private func discardWorkoutObserver(_ query: HKObserverQuery) {
+        guard workoutObserver === query else { return }
+        store.stop(query)
+        workoutObserver = nil
     }
 
     private func fetchRunningWorkouts(limit: Int) async throws -> [HKWorkout] {
