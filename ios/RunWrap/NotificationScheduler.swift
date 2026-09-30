@@ -44,6 +44,10 @@ enum NotificationScheduler {
         guard let snapshot, !isStale(snapshot, at: trigger) else {
             return "이번 주 러닝을 정리했어요 — 리포트를 열어보세요"
         }
+        // 런린이는 주간 거리를 숫자 없이 문장만 본다 — 화면과 같은 게이트가 알림에도 걸린다 (이슈 #141)
+        guard snapshot.showsDistanceNumbers else {
+            return String(format: "최근 7일 %d회 — %@", snapshot.runCount, snapshot.headline)
+        }
         return String(format: "최근 7일 %d회 · %.1f km — %@",
                       snapshot.runCount, snapshot.weekKm, snapshot.headline)
     }

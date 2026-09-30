@@ -24,6 +24,9 @@ final class WeatherStore: ObservableObject {
     /// 마지막으로 결론이 난 시각(성공·실패 모두) — 포그라운드 복귀 갱신의 기준 (이슈 #69).
     /// 실패도 찍는다: 값이 있는 .loaded에서 일시 실패했을 때 복귀마다 다시 두드리지 않게
     private(set) var fetchedAt: Date?
+    /// 아이폰 전체 위치 서비스가 꺼졌는지 — LocationProvider 값을 비춘다 (이슈 #94).
+    /// '오늘' 시트의 거부 안내가 앱 권한과 시스템 스위치를 구분해 그리는 재료 (이슈 #159)
+    @Published private(set) var servicesDisabled = false
 
     /// 결론이 났는가 — 스플래시 해제 조건. 성공뿐 아니라 거부·실패도 결론이다:
     /// 어차피 더 기다려도 값이 생기지 않으므로 홈을 열고 힌트 문구로 안내한다.
@@ -37,6 +40,11 @@ final class WeatherStore: ObservableObject {
     /// km 정확도면 충분하다 — 날씨 격자 자체가 그 단위다 (LocationProvider 주석 참조)
     private let location = LocationProvider()
     private let client = WeatherClient()
+
+    init() {
+        // .denied 결론 뒤 비동기로 채워지는 값이라 한 번 읽지 않고 스트림으로 따라간다
+        location.$servicesDisabled.assign(to: &$servicesDisabled)
+    }
 
     /// 기동 로딩 — 위치의 결론(좌표·거부·실패)을 기다렸다가 날씨를 조회한다.
     /// 권한 다이얼로그가 떠 있는 동안은 .loading으로 머문다 — 무한 대기의

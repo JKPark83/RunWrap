@@ -9,6 +9,8 @@ struct ReportSnapshot: Codable, Equatable {
     let suggestion: String?    // 다음 주 제안
     let weekKm: Double         // 최근 7일 거리 합 (6일 전 자정 ~ 지금 — runCount와 같은 창, 이슈 #75)
     let runCount: Int          // 최근 7일 러닝 횟수
+    /// 주간 거리 수치를 알림에 실어도 되는가 — 런린이는 문장만 (ReportGate, 기획서 §4, 이슈 #141)
+    let showsDistanceNumbers: Bool
 
     /// 리포트 + 원본 기록에서 스냅샷을 만든다 (순수 함수 — 테스트 대상).
     /// 문장은 상세 화면과 같은 레벨 게이트로 고른다 — 숨긴 카드의 판정이 알림으로 새지 않게 (이슈 #124)
@@ -23,7 +25,23 @@ struct ReportSnapshot: Codable, Equatable {
                               headline: report.headline(level: level),
                               suggestion: report.suggestion(level: level),
                               weekKm: weekKm,
-                              runCount: report.weekRunCount)
+                              runCount: report.weekRunCount,
+                              showsDistanceNumbers: ReportGate.showsNumbers(.distance, level: level))
+    }
+}
+
+extension ReportSnapshot {
+    /// 기존 캐시 호환 (이슈 #141) — showsDistanceNumbers 키가 없던 파일은 예전처럼 수치 노출(true)로 읽는다.
+    /// 디코딩이 실패하면 캐시 전체가 nil이 돼 알림이 기본 문구로 떨어지므로 키 하나로 버리지 않는다.
+    /// 확장에 두는 이유: 본체에 두면 memberwise init이 사라진다
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+        headline = try container.decode(String.self, forKey: .headline)
+        suggestion = try container.decodeIfPresent(String.self, forKey: .suggestion)
+        weekKm = try container.decode(Double.self, forKey: .weekKm)
+        runCount = try container.decode(Int.self, forKey: .runCount)
+        showsDistanceNumbers = try container.decodeIfPresent(Bool.self, forKey: .showsDistanceNumbers) ?? true
     }
 }
 
