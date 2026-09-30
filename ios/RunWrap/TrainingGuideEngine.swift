@@ -544,13 +544,18 @@ struct TrainingGuideEngine {
             } else {
                 weight = 5
             }
-            let ratio = profile.intensity(of: sample.bpm)
-            let zone = ratio < 0.6 ? 0 : ratio < 0.7 ? 1 : ratio < 0.8 ? 2 : ratio < 0.9 ? 3 : 4
+            let zone = zoneIndex(intensity: profile.intensity(of: sample.bpm))
             seconds[zone] += max(weight, 0)
         }
         let total = seconds.reduce(0, +)
         guard total > 0 else { return [0, 0, 0, 0, 0] }
         return seconds.map { $0 / total }
+    }
+
+    /// 강도 비율 → 존 인덱스(0 = Z1 … 4 = Z5). 경계 0.6/0.7/0.8/0.9 —
+    /// 세션 존(heartRateZones)과 기간별 분포(ZoneDistributionEngine)가 같은 경계를 쓰게 한 곳에 둔다 (이슈 #165)
+    static func zoneIndex(intensity ratio: Double) -> Int {
+        ratio < 0.6 ? 0 : ratio < 0.7 ? 1 : ratio < 0.8 ? 2 : ratio < 0.9 ? 3 : 4
     }
 
     // MARK: - 현재 기력 (Daniels VDOT)

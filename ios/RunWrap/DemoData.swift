@@ -235,6 +235,39 @@ enum DemoData {
         }
     }
 
+    /// 합성 세션별 심박 히스토그램 (이슈 #165) — 기간별 심박존 분포(80/20) 카드 재료.
+    ///
+    /// 최근 28일(28일 전 자정 이후) 세션마다 두 개의 종 모양(σ 5bpm, ±12bpm로 자름) 분포를 섞는다:
+    /// 세션 평균 심박 중심의 "빠른 구간"과 HRmax 62% 중심의 "이지 구간".
+    /// 데모 세션 평균 심박(144~155)은 관찰 HRmax(≈180)의 80% 이상이라 평균 심박만으로 만들면
+    /// 이지 비율이 0%가 된다 — 세션마다 이지 구간 비중을 0.68~0.82로 시드 고정해
+    /// 28일 누적 이지 비율이 0.75 언저리(주의 톤)로 계산되게 한다. 총 초 = 세션 시간.
+    static var zoneHistograms: [UUID: ZoneHistogram] {
+        let now = Date()
+        let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-28 * 86_400))
+        // fillWithDemoData와 같은 추정 — %HRmax 기본 설정에서 이지 구간이 Z1~Z2에 머물게 한다
+        let easyCenter = (TrainingGuideEngine.hrMaxEstimate(runs: runs, now: now, birthYear: nil).bpm * 0.62)
+            .rounded()
+        let offsets = Array(-12...12)
+        let bell = offsets.map { exp(-Double($0 * $0) / (2 * 5 * 5)) }
+        let bellSum = bell.reduce(0, +)
+
+        var result: [UUID: ZoneHistogram] = [:]
+        for run in runs where run.start >= windowStart && run.start <= now {
+            var rng = SplitMix64(seed: WorkoutDetailStore.syntheticSeed(for: run) &+ 0x2020)
+            let easyFraction = 0.68 + rng.unit() * 0.14
+            let hardCenter = (run.avgHeartRate ?? 150).rounded()
+            var seconds: [Int: Double] = [:]
+            for (i, offset) in offsets.enumerated() {
+                let share = bell[i] / bellSum * run.durationSec
+                seconds[Int(easyCenter) + offset, default: 0] += share * easyFraction
+                seconds[Int(hardCenter) + offset, default: 0] += share * (1 - easyFraction)
+            }
+            result[run.id] = ZoneHistogram(secondsByBpm: seconds)
+        }
+        return result
+    }
+
     /// 합성 대기질 — 시뮬레이터에는 위치·측정소 실데이터가 없다 (이슈 #8).
     /// '보통' 시나리오: 배지·수치·등급·측정소 캡션이 모두 그려지는 구성을 확인하는 재료
     static var airQuality: AirQuality {

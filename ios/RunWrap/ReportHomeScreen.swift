@@ -66,6 +66,9 @@ struct ReportHomeScreen: View {
                                           cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
                                                                             runs: runs, now: Date()),
                                           form: FormTrend.compute(runs: runs, now: Date()),
+                                          zoneDistribution: ZoneDistributionEngine.compute(
+                                              histograms: health.zoneHistograms, runs: runs,
+                                              profile: heartRate, now: Date()),
                                           guide: trainingGuide(runs: runs, level: level,
                                                                batteryTone: battery?.tone),
                                           walkRun: WalkRunEngine.plan(
@@ -147,6 +150,8 @@ struct ReportHomeContent: View {
     var cross: CrossTrainingEngine.Summary? = nil
     /// 주간 케이던스 추이 — 최근 28일 케이던스 표본이 부족하면 엔진이 nil을 준다 (계획서 M4)
     var form: FormTrend? = nil
+    /// 최근 28일 심박존 분포·80/20 강도 배분 — 심박 기록 세션 8회 미만이면 엔진이 nil을 준다 (이슈 #165)
+    var zoneDistribution: ZoneDistribution? = nil
     /// 훈련 가이드 — 상세 화면 전달용. 홈 카드는 지금은 숨긴다 (이슈 #21)
     var guide: TrainingGuide? = nil
     /// 걷뛰 처방 — 런린이 전용 (§4). 사이클 시작 시각이 없으면 엔진이 nil을 준다
@@ -190,6 +195,9 @@ struct ReportHomeContent: View {
                 }
                 if let acwr = report.acwr, ReportGate.shows(.acwr, level: level) {
                     acwrCard(acwr)
+                }
+                if let zoneDistribution, ReportGate.shows(.zoneBalance, level: level) {
+                    zoneBalanceCard(zoneDistribution)
                 }
                 if let efficiency = report.efficiency, ReportGate.shows(.efficiency, level: level) {
                     efficiencyCard(efficiency)
@@ -741,6 +749,58 @@ struct ReportHomeContent: View {
         }
     }
 
+    // MARK: 강도 배분 카드 (80/20) — 이슈 #165
+
+    private func zoneBalanceCard(_ z: ZoneDistribution) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardHeader(icon: "heart.text.square.fill", title: "강도 배분", code: "80/20",
+                       tint: z.tone.color, soft: z.tone.softColor, tone: z.tone,
+                       info: CardInfoText.zoneBalance)
+
+            Text(zoneBalanceHeadline(z))
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(RR.text)
+                .lineSpacing(4)
+                .padding(.top, 13)
+
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(String(format: "%d", Int((z.easyShare * 100).rounded())))
+                    .font(.system(size: 42, weight: .bold, design: .monospaced))
+                    .foregroundStyle(z.tone.color)
+                Text("%")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+                Spacer()
+                Text("이지(Z1–Z2) 비율 · 목표 80%")
+                    .font(.system(size: 11))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.top, 8)
+
+            ZoneStackedBarsChart(weeks: z.weeks)
+                .padding(.top, 12)
+
+            ZoneBarView(fractions: z.zoneShare)
+                .padding(.top, 14)
+
+            Text("최근 28일 \(z.sessionCount)회 러닝의 심박 시간 · 존 경계는 설정의 심박 기준")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
+        }
+        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
+        .rrCard()
+    }
+
+    /// 문장 분기는 엔진이 정한 톤을 그대로 따른다 — 화면에서 임계값을 재판정하지 않는다
+    private func zoneBalanceHeadline(_ z: ZoneDistribution) -> String {
+        switch z.tone {
+        case .overload: "쉬운 날이 없으십니다. 80%는 대화가 되는 속도로"
+        case .caution: "이지런이 조금 빠르십니다 — 편한 날은 더 편하게"
+        default: "이지런을 이지하게, 잘 지키고 계십니다"
+        }
+    }
+
     // MARK: 심박 효율 카드
 
     private func efficiencyCard(_ card: WeeklyReport.EfficiencyCard) -> some View {
@@ -957,6 +1017,7 @@ private enum CardInfoText {
     static let battery = "밤사이 활력징후(심박 변이·안정 심박·심박 회복·수면)와 훈련 부하를 합쳐 오늘 쓸 수 있는 체력을 0~100으로 추정해요. 75 이상 충전 충분, 50~74 양호, 25~49 주의, 그 밑은 방전 임박 — 낮은 날은 훈련보다 충전이 먼저예요."
     static let distance = "최근 7일 거리를 그 전 7일과 비교해요. 한 주 증가 폭은 10% 이내가 안전하다는 경험칙(10% 룰)이 기준 — 그보다 빠르게 늘리면 몸이 적응할 시간이 부족해 부상 위험이 커져요."
     static let acwr = "최근 7일 부하 ÷ 최근 4주 주평균이에요. 지금 훈련량이 몸에 익숙한 양의 몇 배인지 보는 지표로, 0.8~1.3이 적정 구간이에요. 1.3을 넘으면 몸보다 훈련이 앞선 상태, 1.5 초과는 부상 위험 구간이에요."
+    static let zoneBalance = "최근 28일 러닝의 심박 시간을 존(Z1~Z5)별로 모았어요. 엘리트 지구력 선수는 훈련 시간의 약 80%를 대화가 되는 낮은 강도(Z1~Z2)에서 보낸다는 연구(Seiler, 2006)가 기준 — 80% 이상 유지, 70~80% 주의, 70% 밑은 쉬운 날까지 세게 달리는 상태예요. 존 경계는 설정의 심박 기준(최대 심박·Karvonen)을 따라요."
     static let efficiency = "같은 심박으로 얼마나 빨리 달리는지 — 속도를 심박으로 나눈 값이에요. 최근 2주를 그 전 2주와 비교해요. 절대값보다 방향이 중요해서, 오르고 있으면 같은 힘으로 더 멀리 가는 몸이 되고 있다는 뜻이에요."
     static let vo2Max = "운동 중 몸이 쓸 수 있는 산소의 최대치(mL/kg·분)로, 워치가 야외 러닝에서 추정해요. 지구력의 대표 지표라 높을수록 좋지만 나이·성별에 따라 기준이 달라서, 절대값보다 추세가 오르는지를 봐요. 함께 나오는 심박 회복은 러닝 직후 1분간 심박이 내려간 폭 — 클수록 회복 엔진이 좋은 거예요."
     static let cross = "최근 7일의 러닝 외 운동(자전거·근력 등)을 모아 보여드려요. 러닝 거리 부하(ACWR)에는 넣지 않는 보조 정보지만, 몸의 피로는 같이 쌓이니 회복을 챙길 때는 함께 계산해 주세요."
