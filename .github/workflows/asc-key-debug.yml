@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-26, macos-15]
+        runner: [macos-26]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -52,23 +52,46 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci build.keychain
           security list-keychains -d user -s build.keychain login.keychain
           security find-identity -v -p codesigning build.keychain
-      - name: 아카이브 시도 (실패 허용)
-        id: archive
-        continue-on-error: true
+      - name: REST로 배포 프로파일 생성·설치
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUNDLE_IDS: com.jkpark.runwrap,com.jkpark.runwrap.widget
+        run: |
+          pip3 install --quiet "pyjwt[crypto]"
+          export ASC_KEY_P8_PATH=~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          export DIST_CERT_SHA1=$(security find-certificate -c "Apple Distribution" -Z build.keychain | awk '/SHA-1/ {print $NF}')
+          echo "cert sha1: $DIST_CERT_SHA1"
+          python3 tools/ci/asc_profiles.py
+      - name: 아카이브 (수동 서명)
         run: |
           xcodebuild archive -project ios/RunWrap.xcodeproj -scheme RunWrap \
             -destination generic/platform=iOS -archivePath build/RunWrap.xcarchive \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER='RunWrap CI AppStore $(PRODUCT_BUNDLE_IDENTIFIER)' \
             DEVELOPMENT_TEAM=WDNVP9B8A9 2>&1 | grep -E 'error:|warning:|Signing Identity|Provisioning Profile|ARCHIVE' | head -40
-      - name: 시스템 로그에서 인증 거부 사유 추출
-        if: always()
+          test -d build/RunWrap.xcarchive
+      - name: .ipa 내보내기 (수동 서명, 업로드 안 함)
         run: |
-          log show --last 12m --info --debug \
-            --predicate 'process == "xcodebuild" OR subsystem CONTAINS "DVTDeveloperAccount" OR subsystem CONTAINS "DVTServices" OR subsystem CONTAINS "IDEProvisioning"' 2>/dev/null \
-            | grep -i -E 'bearer|authentic|401|403|status code|appstoreconnect|developerservices|error' \
-            | sed -E 's/[A-Za-z0-9_-]{100,}/<redacted>/g' | head -80
+          cat > /tmp/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>WDNVP9B8A9</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.jkpark.runwrap</key><string>RunWrap CI AppStore com.jkpark.runwrap</string>
+              <key>com.jkpark.runwrap.widget</key><string>RunWrap CI AppStore com.jkpark.runwrap.widget</string>
+            </dict>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath build/RunWrap.xcarchive -exportPath build/ipa \
+            -exportOptionsPlist /tmp/ExportOptions.plist 2>&1 | grep -E 'error:|warning:|EXPORT' | head -20
+          ls -la build/ipa
