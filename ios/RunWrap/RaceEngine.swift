@@ -25,7 +25,34 @@ struct Race: Decodable, Identifiable, Equatable {
 struct RaceFile: Decodable {
     let generatedAt: String   // ISO8601 "+09:00"
     let source: String        // "roadrun.co.kr"
+    let schemaVersion: Int    // 없으면 1 — 앱이 지원하는 것보다 크면 RaceStore가 원격 파일을 버린다 (#144)
     let races: [Race]
+}
+
+/// 관대 디코딩 (#144) — races 원소 하나가 깨져도(타입 불일치·필수 필드 누락) 그 원소만 건너뛴다.
+/// 크롤 결과 한 건의 오류로 파일 전체가 디코드에 실패해 대회 탭이 통째로 비는 것을 막는다.
+/// generatedAt·source는 그대로 필수다.
+extension RaceFile {
+    private enum CodingKeys: String, CodingKey {
+        case generatedAt, source, schemaVersion, races
+    }
+
+    /// 원소 단위 실패를 nil로 삼키는 래퍼 — 디코드 자체는 항상 성공해 배열 커서가 다음 원소로 넘어간다.
+    /// (빈 struct로 커서를 넘기는 패턴은 원소가 객체가 아니면(null·문자열) 커서가 멈춰 무한 루프가 된다)
+    private struct LenientRace: Decodable {
+        let race: Race?
+        init(from decoder: Decoder) throws {
+            race = try? Race(from: decoder)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try container.decode(String.self, forKey: .generatedAt)
+        source = try container.decode(String.self, forKey: .source)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        races = try container.decode([LenientRace].self, forKey: .races).compactMap(\.race)
+    }
 }
 
 /// 대회 접수 상태 판정·정렬 — Foundation만 쓰는 순수 로직 (계획서 M13-2)

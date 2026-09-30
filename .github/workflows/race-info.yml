@@ -10,7 +10,9 @@ name: race-info
 
 on:
   schedule:
-    - cron: "0 20 * * *"   # 매일 05:00 KST (UTC 20:00)
+    # 매일 02:00 KST (UTC 17:00) 시작 — GitHub 스케줄 지연(1~4h)과 크롤 40분을 감안해
+    # 05:00 KST 전에 끝나도록 앞당겼다 (#146)
+    - cron: "0 17 * * *"
   workflow_dispatch: {}     # 수동 실행용
 
 # 수동 실행과 스케줄 실행이 겹치면 둘 다 Races.json을 바꿔 rebase가 충돌한다 — 차례로 돌린다
@@ -24,6 +26,7 @@ permissions:
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    timeout-minutes: 90     # 평소 40분 크롤 — 사이트가 느려져도 기본 6시간을 붙잡지 않게 (#146)
     steps:
       - uses: actions/checkout@v4
 

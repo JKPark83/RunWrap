@@ -9,6 +9,9 @@ struct RaceListScreen: View {
     @State private var showOpenOnly = false
     /// 키워드 검색 — 대회명·지역·장소·종목을 대상으로 하고 접수중 필터와 AND로 겹친다
     @State private var query = ""
+    /// 목록 판정 기준 시각 — 자정·포그라운드 복귀 때 갱신해 D-day·접수 상태가 어제에 머물지 않게 한다 (#145)
+    @State private var now = Date()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -25,12 +28,23 @@ struct RaceListScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task { await store.load() }
+        // 포그라운드 복귀 — 날짜를 다시 잡고, 원격은 6시간이 지났을 때만 다시 받는다 (#145)
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            now = Date()
+            Task { await store.load() }
+        }
+        // 앱을 켜 둔 채 자정을 넘기면 D-day를 다시 계산한다 (알림은 임의 스레드에서 올 수 있다)
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+            .receive(on: RunLoop.main)) { _ in
+            now = Date()
+        }
     }
 
     // MARK: 목록
 
     private func raceList(_ file: RaceFile) -> some View {
-        let entries = RaceEngine.entries(from: file.races, now: Date())
+        let entries = RaceEngine.entries(from: file.races, now: now)
         let openCount = entries.filter(\.isOpen).count
         let keyword = query.trimmingCharacters(in: .whitespaces)
         let visible = entries
@@ -43,7 +57,10 @@ struct RaceListScreen: View {
                     Text("대회")
                         .font(RR.display(33))
                         .foregroundStyle(RR.text)
-                    Text(caption(openCount: openCount, updatedAt: file.generatedAt))
+                    Text(RaceFormat.caption(
+                        openCount: openCount, updatedAt: file.generatedAt,
+                        refreshFailed: store.lastRefreshFailed,
+                        stale: RaceFormat.isStale(generatedAt: file.generatedAt, now: now)))
                         .font(.system(size: 12))
                         .foregroundStyle(RR.text3)
                 }
@@ -120,14 +137,6 @@ struct RaceListScreen: View {
                 .background(selected ? RR.brand : RR.surface2, in: Capsule())
         }
         .buttonStyle(.plain)
-    }
-
-    private func caption(openCount: Int, updatedAt: String) -> String {
-        var text = "지금 접수받는 대회 \(openCount)곳"
-        if let updated = RaceFormat.updatedLabel(updatedAt) {
-            text += " · \(updated) 갱신"
-        }
-        return text
     }
 
     private func row(_ entry: RaceEngine.Entry) -> some View {
@@ -355,6 +364,33 @@ enum RaceFormat {
     static func updatedLabel(_ iso: String) -> String? {
         guard let date = ISO8601DateFormatter().date(from: iso) else { return nil }
         return make("M월 d일").string(from: date)
+    }
+
+    /// 자료 신선도 (#146) — generatedAt이 maxDays일보다 오래됐으면 true.
+    /// 배치가 며칠째 실패해도 앱이 조용히 옛 목록을 보여주지 않게 한다.
+    /// generatedAt은 races 내용이 바뀐 날만 커밋되므로(race-info.yml) 대회 변동이 없는 며칠은
+    /// 정상이다 — 3일이면 헛경고가 잦아 7일로 잡았다. 못 읽으면 false — 모르는 걸 경고하지 않는다.
+    static func isStale(generatedAt iso: String, now: Date, maxDays: Int = 7) -> Bool {
+        guard let date = ISO8601DateFormatter().date(from: iso) else { return false }
+        return now.timeIntervalSince(date) > TimeInterval(maxDays * 86_400)
+    }
+
+    /// 목록 헤더 캡션 (#145 #146) — 평소엔 "지금 접수받는 대회 N곳 · 8월 12일 갱신".
+    /// 새로고침 실패·자료 오래됨이면 둘째 줄에 존댓말 안내와 자료 날짜를 붙인다.
+    static func caption(openCount: Int, updatedAt: String,
+                        refreshFailed: Bool, stale: Bool) -> String {
+        let count = "지금 접수받는 대회 \(openCount)곳"
+        let updated = updatedLabel(updatedAt)
+        let notice: String? = switch (refreshFailed, stale) {
+        case (true, true): "새로 받지 못해 자료가 조금 오래됐어요"
+        case (true, false): "방금 새로 받진 못했어요"
+        case (false, true): "자료가 조금 오래됐어요"
+        case (false, false): nil
+        }
+        guard let notice else {
+            return updated.map { "\(count) · \($0) 갱신" } ?? count
+        }
+        return "\(count)\n" + (updated.map { "\(notice) · \($0) 자료" } ?? notice)
     }
 }
 

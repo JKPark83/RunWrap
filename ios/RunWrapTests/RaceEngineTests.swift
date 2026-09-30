@@ -154,5 +154,86 @@ struct RaceEngineTests {
         let minimal = file.races[1]
         #expect(minimal.startTime == nil && minimal.homepage == nil)
         #expect(minimal.imageUrl == nil)
+        #expect(file.schemaVersion == 1)   // 필드가 없으면 1로 기본 (#144)
+    }
+
+    @Test("관대 디코딩 — lat이 문자열인 원소 하나만 건너뛰고 나머지는 읽는다")
+    func lenientDecodingTypeMismatch() throws {
+        let json = Data("""
+        {"generatedAt":"2026-08-12T12:24:18+09:00","source":"roadrun.co.kr","races":[
+          {"id":1,"name":"첫 대회","date":"2026-09-01"},
+          {"id":2,"name":"깨진 대회","date":"2026-09-02","lat":"37.5"},
+          {"id":3,"name":"셋째 대회","date":"2026-09-03"}
+        ]}
+        """.utf8)
+        let file = try JSONDecoder().decode(RaceFile.self, from: json)
+        #expect(file.races.map(\.id) == [1, 3])
+    }
+
+    @Test("관대 디코딩 — 필수 필드(name)가 빠진 원소와 객체가 아닌 원소는 건너뛴다")
+    func lenientDecodingMissingField() throws {
+        // null 원소는 빈 struct로 커서를 넘기는 패턴이면 무한 루프가 나는 경우 — 래퍼 방식 회귀 방지
+        let json = Data("""
+        {"generatedAt":"2026-08-12T12:24:18+09:00","source":"roadrun.co.kr","schemaVersion":1,"races":[
+          {"id":1,"date":"2026-09-01"},
+          null,
+          {"id":2,"name":"정상 대회","date":"2026-09-02"}
+        ]}
+        """.utf8)
+        let file = try JSONDecoder().decode(RaceFile.self, from: json)
+        #expect(file.races.map(\.id) == [2])
+    }
+
+    @Test("관대 디코딩 — 최상위 필수 키(generatedAt)가 없으면 여전히 실패한다")
+    func topLevelStillRequired() {
+        let json = Data("""
+        {"source":"roadrun.co.kr","races":[]}
+        """.utf8)
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(RaceFile.self, from: json) }
+    }
+
+    @Test("스키마 버전 — 파일 값을 그대로 읽는다 (지원 버전 비교는 RaceStore)")
+    func schemaVersionDecoding() throws {
+        let json = Data("""
+        {"generatedAt":"2026-08-12T12:24:18+09:00","source":"roadrun.co.kr","schemaVersion":2,"races":[]}
+        """.utf8)
+        let file = try JSONDecoder().decode(RaceFile.self, from: json)
+        #expect(file.schemaVersion == 2)
+        #expect(file.schemaVersion > RaceStore.supportedSchemaVersion)
+    }
+
+    @Test("자동 갱신 판정 — 받은 적 없으면 받고, 6시간 넘게 지났을 때만 다시 받는다")
+    func needsRefresh() {
+        #expect(RaceStore.needsRefresh(lastRefreshedAt: nil, now: now))
+        // 5시간 전 갱신 → 6시간(21_600초) 이내라 그대로
+        #expect(!RaceStore.needsRefresh(lastRefreshedAt: now.addingTimeInterval(-5 * 3_600), now: now))
+        // 7시간 전 갱신 → 다시 받는다
+        #expect(RaceStore.needsRefresh(lastRefreshedAt: now.addingTimeInterval(-7 * 3_600), now: now))
+    }
+
+    @Test("신선도 판정 — 6일 전까지는 신선, 8일 전은 오래됨, 못 읽으면 경고하지 않는다")
+    func staleness() {
+        // now = 8/12 09:00 KST. maxDays 7 → 7일(604_800초) 초과면 오래됨
+        #expect(!RaceFormat.isStale(generatedAt: "2026-08-10T09:00:00+09:00", now: now))   // 2일
+        #expect(!RaceFormat.isStale(generatedAt: "2026-08-06T09:00:00+09:00", now: now))   // 6일
+        #expect(RaceFormat.isStale(generatedAt: "2026-08-04T09:00:00+09:00", now: now))    // 8일
+        #expect(!RaceFormat.isStale(generatedAt: "8월 8일", now: now))
+    }
+
+    @Test("헤더 캡션 — 정상·새로고침 실패·오래됨·둘 다 네 가지 문구")
+    func caption() {
+        let updated = "2026-08-12T05:10:00+09:00"
+        #expect(RaceFormat.caption(openCount: 12, updatedAt: updated,
+                                   refreshFailed: false, stale: false)
+                == "지금 접수받는 대회 12곳 · 8월 12일 갱신")
+        #expect(RaceFormat.caption(openCount: 12, updatedAt: updated,
+                                   refreshFailed: true, stale: false)
+                == "지금 접수받는 대회 12곳\n방금 새로 받진 못했어요 · 8월 12일 자료")
+        #expect(RaceFormat.caption(openCount: 12, updatedAt: updated,
+                                   refreshFailed: false, stale: true)
+                == "지금 접수받는 대회 12곳\n자료가 조금 오래됐어요 · 8월 12일 자료")
+        #expect(RaceFormat.caption(openCount: 12, updatedAt: updated,
+                                   refreshFailed: true, stale: true)
+                == "지금 접수받는 대회 12곳\n새로 받지 못해 자료가 조금 오래됐어요 · 8월 12일 자료")
     }
 }

@@ -327,6 +327,8 @@ def main() -> int:
         return 1
 
     doc = {
+        # 앱 RaceStore.supportedSchemaVersion보다 크면 앱이 원격 파일을 버린다 — 호환이 깨지는 변경 때만 올린다
+        "schemaVersion": 1,
         "generatedAt": datetime.now(KST).strftime("%Y-%m-%dT%H:%M:%S+09:00"),
         "source": "roadrun.co.kr",
         "races": races,
