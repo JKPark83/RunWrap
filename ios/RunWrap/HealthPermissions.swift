@@ -3,7 +3,8 @@ import HealthKit
 /// HealthKit 읽기 권한 묶음 — 기능별 분리 (제안 문서 §권한 전략)
 ///
 /// 왜 나누나: 권한 시트에 항목이 한꺼번에 18개씩 뜨면 사용자가 내용을 읽지 않고
-/// 거부하기 쉽다. 러닝 리포트에 필수인 묶음(core)과 회복 신호 묶음(recovery)만
+/// 거부하기 쉽다. 러닝 리포트에 필수인 묶음(core)과 회복 신호 묶음(recovery),
+/// 그리고 iOS 18+에서만 존재하는 운동 노력도 묶음(effort, 이슈 #178)만
 /// 첫 연결에 함께 요청한다 — 달리기 해석에 실제로 쓰는 것만 묻는다.
 ///
 /// v0.7에서 몸무게(bodyMass)는 아예 요청하지 않는다 (기획서 §2 Q9 각주):
@@ -39,6 +40,15 @@ enum HealthPermissions {
         HKCategoryType(.sleepAnalysis),                 // 수면 시간 + 단계·취침 규칙성 (제안 문서 A5)
     ]
 
+    /// 세션 상세: Apple 운동 노력도 (이슈 #178) — iOS 18에서 생긴 타입이라 그 미만은 빈 셋
+    static var effort: Set<HKObjectType> {
+        guard #available(iOS 18, *) else { return [] }
+        return [
+            HKQuantityType(.workoutEffortScore),            // 워치에서 직접 입력한 노력도
+            HKQuantityType(.estimatedWorkoutEffortScore),   // Apple 추정 노력도 (직접 입력이 없을 때)
+        ]
+    }
+
     /// 첫 연결·load()에서 쓰는 기본 요청 묶음
-    static var standard: Set<HKObjectType> { core.union(recovery) }
+    static var standard: Set<HKObjectType> { core.union(recovery).union(effort) }
 }

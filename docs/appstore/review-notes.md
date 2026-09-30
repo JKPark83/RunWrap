@@ -54,6 +54,7 @@ HEALTH DATA (Guideline 5.1.3)
 - All read types are requested together at the first Health connection
   (onboarding): running workouts (plus non-running workouts from the last
   14 days for a cross-training note), route, heart rate and running-form metrics,
+  workout effort score (iOS 18+, shown on the session detail screen only),
   together with recovery signals such as sleep, HRV, resting heart rate,
   heart rate recovery, respiratory rate and wrist temperature; date of birth
   for max-HR estimation only. Body mass is never requested.
