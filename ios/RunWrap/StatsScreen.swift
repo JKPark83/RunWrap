@@ -10,6 +10,8 @@ struct StatsScreen: View {
 
     @EnvironmentObject private var health: HealthStore
     @State private var monthIndex = 0   // availableMonths 기준 (0 = 이번 달)
+    /// 결산 리캡 시트 (이슈 #167)
+    @State private var recapPeriod: RecapPeriod?
 
     var body: some View {
         Group {
@@ -32,6 +34,7 @@ struct StatsScreen: View {
                         if let segment { segment.padding(.bottom, 2) }
 
                         monthSelector(months: months, index: index)
+                        recapRow(runs: runs, month: months[index])
                         distanceCard(stats)
                         tileGrid(stats)
                         sessionList(stats)
@@ -45,6 +48,60 @@ struct StatsScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(item: $recapPeriod) { period in
+            RecapScreen(period: period)
+        }
+    }
+
+    // MARK: 결산 리캡 (이슈 #167)
+
+    /// "이 달 결산 보기" + 연간 결산 메뉴(선택한 달의 연도와 그 전 연도). 기록 3회 미만 기간은 비활성
+    private func recapRow(runs: [RunSummary], month: Date) -> some View {
+        let calendar = Calendar.current
+        let monthly = RecapPeriod.month(month)
+        let monthEnabled = RecapEngine.hasEnoughRuns(monthly, runs: runs)
+        let thisYear = calendar.dateInterval(of: .year, for: month)!.start
+        let years = [thisYear, calendar.date(byAdding: .year, value: -1, to: thisYear)!]
+            .map { RecapPeriod.year($0) }
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    recapPeriod = monthly
+                } label: {
+                    Label("이 달 결산 보기", systemImage: "sparkles")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(monthEnabled ? RR.brand : RR.text3)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(RR.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(RR.line))
+                }
+                .buttonStyle(.plain)
+                .disabled(!monthEnabled)
+
+                Menu {
+                    ForEach(years) { year in
+                        Button(RecapEngine.periodLabel(year) + " 결산") { recapPeriod = year }
+                            .disabled(!RecapEngine.hasEnoughRuns(year, runs: runs))
+                    }
+                } label: {
+                    Label("연간 결산", systemImage: "calendar")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(RR.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(RR.line))
+                }
+            }
+            if !monthEnabled {
+                Text("기록 3회 이상이면 결산이 열립니다")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+                    .padding(.horizontal, 4)
+            }
+        }
     }
 
     // MARK: 월 선택

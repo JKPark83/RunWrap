@@ -70,14 +70,39 @@ enum ZoneDistributionEngine {
                          zoneSeconds: sum(inWeek.map(\.zones)))
         }
 
-        let tone: RRTone = easyShare >= steadyEasyShare ? .steady
-            : easyShare >= cautionEasyShare ? .caution
-            : .overload
         return ZoneDistribution(weeks: weeks,
                                 zoneShare: totals.map { $0 / total },
                                 easyShare: easyShare,
                                 sessionCount: sessions.count,
-                                tone: tone)
+                                tone: tone(easyShare: easyShare))
+    }
+
+    /// 임의 구간 [start, end)의 이지 비율 — 월간 결산(이슈 #167)의 강도 배분 카드용.
+    /// 존 매핑·표본 가드(8회)·톤 경계는 `compute`와 같다. 히스토그램 캐시가 28일 창이라
+    /// 오래된 달은 표본이 모자라 nil이 되는 게 정상이다
+    static func easyShare(histograms: [UUID: ZoneHistogram],
+                          runs: [RunSummary],
+                          profile: HeartRateProfile,
+                          in interval: DateInterval) -> (share: Double, tone: RRTone, sessions: Int)? {
+        let zones = runs
+            .filter { $0.start >= interval.start && $0.start < interval.end }
+            .compactMap { run -> [Double]? in
+                guard let histogram = histograms[run.id], !histogram.secondsByBpm.isEmpty else { return nil }
+                return zoneSeconds(histogram, profile: profile)
+            }
+        guard zones.count >= minSessions else { return nil }
+        let totals = sum(zones)
+        let total = totals.reduce(0, +)
+        guard total > 0 else { return nil }
+        let share = (totals[0] + totals[1]) / total
+        return (share, tone(easyShare: share), zones.count)
+    }
+
+    /// 이지 비율 → 톤 (0.80 유지 · 0.70 주의 · 그 밑 과부하)
+    private static func tone(easyShare: Double) -> RRTone {
+        easyShare >= steadyEasyShare ? .steady
+            : easyShare >= cautionEasyShare ? .caution
+            : .overload
     }
 
     /// 히스토그램 → Z1~Z5 초

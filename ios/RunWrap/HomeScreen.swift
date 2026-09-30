@@ -50,6 +50,10 @@ struct HomeScreen: View {
     // PB 축하 (이슈 #21) — 홈 진입 때 베이스라인과 비교해 새 기록이면 한 번만 띄운다
     @State private var showsPBCongrats = false
     @State private var newPBs: [PersonalRecords.Entry] = []
+    // 결산 리캡 (이슈 #167) — 월초·연말연초 홈 카드. 열어 보거나 X를 누른 기간은 다시 띄우지 않는다
+    @AppStorage(RecapKey.dismissedMonth) private var recapDismissedMonth = ""
+    @AppStorage(RecapKey.dismissedYear) private var recapDismissedYear = ""
+    @State private var recapPeriod: RecapPeriod?
 
     var body: some View {
         Group {
@@ -304,6 +308,17 @@ struct HomeScreen: View {
                     .padding(.top, 18)
                 }
 
+                ForEach(recapPrompts(runs: runs, now: now)) { period in
+                    RecapPromptCard(title: recapPromptTitle(period, now: now),
+                                    subtitle: RecapEngine.periodLabel(period) + " 결산이 준비됐어요",
+                                    onOpen: {
+                                        dismissRecap(period)
+                                        recapPeriod = period
+                                    },
+                                    onDismiss: { dismissRecap(period) })
+                        .padding(.top, 10)
+                }
+
                 chipRow(runs: runs, now: now)
                     .padding(.top, 10)
             }
@@ -333,6 +348,39 @@ struct HomeScreen: View {
             if let last = runs.max(by: { $0.start < $1.start }) {
                 SessionDetailScreen(run: last)
             }
+        }
+        .sheet(item: $recapPeriod) { period in
+            RecapScreen(period: period)
+        }
+    }
+
+    // MARK: - 결산 리캡 (이슈 #167)
+
+    /// 노출할 결산 카드 — 날짜·닫힘 판정은 엔진, 기록 3회 미만 기간은 열어 봐야 빈 화면이라 뺀다
+    private func recapPrompts(runs: [RunSummary], now: Date) -> [RecapPeriod] {
+        RecapEngine.promptKinds(now: now, dismissedMonth: recapDismissedMonth,
+                                dismissedYear: recapDismissedYear)
+            .filter { RecapEngine.hasEnoughRuns($0, runs: runs) }
+    }
+
+    /// "지난달 결산 보기" / "올해 결산 보기" / "지난해 결산 보기"(1월 1~7일)
+    private func recapPromptTitle(_ period: RecapPeriod, now: Date) -> String {
+        switch period {
+        case .month:
+            return "지난달 결산 보기"
+        case .year(let date):
+            let calendar = Calendar.current
+            return calendar.component(.year, from: date) == calendar.component(.year, from: now)
+                ? "올해 결산 보기" : "지난해 결산 보기"
+        }
+    }
+
+    /// 열어 보거나 닫으면 그 기간 키를 남긴다 — 다음 진입부터 카드가 뜨지 않는다
+    private func dismissRecap(_ period: RecapPeriod) {
+        let key = RecapEngine.dismissKey(for: period)
+        switch period {
+        case .month: recapDismissedMonth = key
+        case .year: recapDismissedYear = key
         }
     }
 
@@ -678,6 +726,57 @@ private struct PBCongratsSheet: View {
         }
         .presentationDetents([.medium])
         .background(RR.bg)
+    }
+}
+
+/// 결산 리캡 진입 카드 (이슈 #167) — 판단 카드 아래, 칩 위. 탭하면 결산 시트, X는 이번 기간 닫기
+private struct RecapPromptCard: View {
+    let title: String
+    let subtitle: String
+    let onOpen: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onOpen) {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(RR.brand)
+                        .frame(width: 34, height: 34)
+                        .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.system(size: 14.5, weight: .bold))
+                            .foregroundStyle(RR.text)
+                        Text(subtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(RR.text3)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(RR.text3)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("결산 카드 닫기")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
     }
 }
 
