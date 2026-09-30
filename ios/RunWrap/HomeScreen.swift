@@ -93,6 +93,13 @@ struct HomeScreen: View {
                                                 longitude: coordinate.longitude)
             }
         }
+        // 대기질은 위젯 스냅샷($vitals 신호)보다 늦게 도착한다 — 등급이 정해지면 위젯을 다시 발행해
+        // 홈 판정과 위젯 문구가 어긋나지 않게 한다 (이슈 #195). health.vitals는 대개 이미 채워져 있고,
+        // 아직이면 뒤이은 $vitals 신호가 캐시 등급(cachedFreshGrade)으로 다시 쓴다
+        .onChange(of: loadedAir.flatMap(AirQualityEngine.representativeGrade)) { _, grade in
+            guard let grade else { return }
+            RunWrapApp.publishWidgetSnapshot(health: health, vitals: health.vitals, air: grade)
+        }
     }
 
     /// '오늘'은 탭에서 시트로 내려왔다 — 날씨 줄을 눌렀을 때만 펼친다 (기획서 v0.8 §6)
@@ -921,7 +928,7 @@ private struct VerdictCard: View {
         VStack(alignment: .leading, spacing: 0) {
             // 배터리가 없으면 판정 자체가 없다 — 배지를 감추고 중립 문구만 남긴다
             if let tone = verdict.tone {
-                ToneBadge(tone: tone)
+                ToneBadge(tone: tone, label: verdict.badgeLabel)
                     .padding(.bottom, 9)
             }
 

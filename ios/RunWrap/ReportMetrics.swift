@@ -53,6 +53,7 @@ struct WeeklyReport {
     let acwr: AcwrCard?
     let efficiency: EfficiencyCard?
     let streakWeeks: Int           // 주 1회 이상 달린 ISO 주 연속 개수
+    let ranThisWeek: Bool          // now가 속한 ISO 주에 러닝이 있는지 (스트릭 캡션용, 이슈 #195)
     let weekRunCount: Int          // 최근 7일(헤더와 같은 달력 창) 러닝 횟수 (streak 카드 캡션·알림 본문용)
 
     /// 이 레벨에서 실제로 그려지는 판정 카드 — 미노출 가드(엔진 nil) AND 레벨 게이트 (이슈 #119).
@@ -127,6 +128,7 @@ extension ReportEngine {
                             acwr: acwrCard(runs),
                             efficiency: efficiencyCard(runs),
                             streakWeeks: Self.streakWeeks(runs: runs, now: now),
+                            ranThisWeek: Self.ranThisWeek(runs: runs, now: now),
                             weekRunCount: runs.filter { $0.start >= recentWindowStart && $0.start < now }.count)
     }
 
@@ -272,6 +274,16 @@ extension ReportEngine {
             cursor = calendar.date(byAdding: .weekOfYear, value: -1, to: cursor)!
         }
         return count
+    }
+
+    /// now가 속한 ISO 주에 러닝이 하나라도 있는지 (이슈 #195) — streakWeeks와 같은 달력(ISO 8601,
+    /// 현재 타임존)이다. streakWeeks는 이번 주 무기록을 끊김으로 안 세므로, 캡션이 "이번 주 몫을
+    /// 채웠는지"를 가르려면 따로 알아야 한다
+    static func ranThisWeek(runs: [RunSummary], now: Date) -> Bool {
+        var calendar = Calendar(identifier: .iso8601)  // 월요일 시작
+        calendar.timeZone = .current
+        guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return false }
+        return runs.contains { week.contains($0.start) }
     }
 
     /// VO₂max·HRR 추이가 공유하는 골격 — ISO 주 평균 시리즈 + 4주 전 대비 변화량

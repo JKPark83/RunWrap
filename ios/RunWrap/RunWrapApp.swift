@@ -38,7 +38,8 @@ struct RunWrapApp: App {
                 // state = .loaded 다음에 vitals를 채우므로(데모 경로도 state 직후 vitals) $vitals가
                 // 배터리 재료까지 갖춰졌다는 신호다. @Published는 willSet에서 방출하므로
                 // health.vitals(아직 이전 값)가 아니라 클로저 인자 vitals를 쓴다.
-                // 첫 기동·포그라운드 진입·옵저버 콜백이 전부 load()를 거치므로 쓰는 곳은 여기 한 곳뿐이다
+                // 첫 기동·포그라운드 진입·옵저버 콜백이 전부 load()를 거치므로 쓰는 곳은 여기가 본체다.
+                // 늦게 도착하는 대기질만 HomeScreen이 한 번 더 쓴다 (이슈 #195)
                 .onReceive(health.$vitals.dropFirst()) { vitals in
                     Self.publishWidgetSnapshot(health: health, vitals: vitals)
                 }
@@ -109,9 +110,15 @@ struct RunWrapApp: App {
     /// 위젯이 그릴 스냅샷을 App Group에 남기고 타임라인을 다시 불러오게 한다 (이슈 #181).
     /// 데모 모드도 쓴다 — 위젯은 홈의 거울이라 홈에 보이는 수치를 그대로 비춘다. ReportCache(#44)가
     /// 데모를 막는 이유는 합성 수치가 나중에 예약 발송되는 주간 알림 본문에 실데이터처럼 실리기
-    /// 때문인데, 위젯은 데모를 끄고 앱이 다시 load()하는 즉시 실데이터로 덮인다
+    /// 때문인데, 위젯은 데모를 끄고 앱이 다시 load()하는 즉시 실데이터로 덮인다.
+    ///
+    /// 호출처는 둘이다 (이슈 #195): 위 `$vitals` 신호, 그리고 HomeScreen의 대기질 로드 완료.
+    /// 대기질 스토어는 홈의 @StateObject라 vitals보다 늦게 결론이 나고, 그 전에 쓴 스냅샷은 대기질 없는 판정으로 남는다.
+    /// - Parameter air: 홈이 막 받은 대표 등급. nil이면 디스크 캐시(`cachedFreshGrade`)를 읽는다 —
+    ///   시뮬레이터(DemoData 경로)는 응답 캐시를 쓰지 않아 캐시만 믿으면 로드된 등급이 위젯에 닿지 않는다
     @MainActor
-    private static func publishWidgetSnapshot(health: HealthStore, vitals: VitalsSnapshot?) {
+    static func publishWidgetSnapshot(health: HealthStore, vitals: VitalsSnapshot?,
+                                      air: AirGrade? = nil) {
         guard case .loaded(let runs) = health.state else { return }
         if runs.isEmpty {
             // 기록이 비었으면(삭제·권한 회수) 옛 수치가 위젯에 남지 않게 지운다 (ReportCache #61과 같은 이유)
@@ -121,7 +128,7 @@ struct RunWrapApp: App {
             let battery = vitals.flatMap { BatteryEngine.compute(vitals: $0, runs: runs, now: now) }
             WidgetSnapshotStore.save(WidgetSnapshot.make(battery: battery, runs: runs,
                                                          level: Self.currentLevel,
-                                                         air: AirQualityStore.cachedFreshGrade(now: now),
+                                                         air: air ?? AirQualityStore.cachedFreshGrade(now: now),
                                                          now: now))
         }
         WidgetCenter.shared.reloadAllTimelines()

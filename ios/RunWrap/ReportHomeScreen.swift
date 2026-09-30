@@ -198,7 +198,8 @@ struct ReportHomeContent: View {
                 }
 
                 // 연속 달린 주 — 레벨 무관 소형 카드, 2주 미만이면 엔진이 nil (이슈 #184)
-                if let streak = StreakEngine.card(streakWeeks: report.streakWeeks) {
+                if let streak = StreakEngine.card(streakWeeks: report.streakWeeks,
+                                                  ranThisWeek: report.ranThisWeek) {
                     streakCard(streak)
                 }
 
