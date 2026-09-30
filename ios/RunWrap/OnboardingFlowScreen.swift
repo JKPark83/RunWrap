@@ -7,9 +7,9 @@ import SwiftUI
 /// 설문 자체는 자기 신고라 HealthKit이 필요 없기 때문이다 (기획서 §2 설계 원칙).
 ///
 /// 답은 전부 로컬에만 남는다: 판정 결과는 `ProfileKey.*`(@AppStorage),
-/// 원답은 `OnboardingAnswersStore`(재진단 프리필용). 네트워크 전송은 없다.
+/// 원답은 저장하지 않는다 — 판정 결과(레벨·목표)만 남긴다. 네트워크 전송은 없다.
 struct OnboardingFlowScreen: View {
-    /// 재진단("다시 진단받기", §7) 진입 시 이전 답을 프리필한다. 첫 실행이면 nil
+    /// 이전 답 프리필 — 원답을 저장하지 않으므로 앱 호출부는 넘기지 않는다(nil). 테스트가 답을 심는 용도 (이슈 #156)
     var prefill: OnboardingAnswers?
     /// 설정의 "다시 진단받기"(§7)에서 열었는지 — 참이면 성장 사이클을 보존한다 (이슈 #44).
     /// 프리필 유무로 판정하면 안 된다: 재진단은 의도적으로 프리필 없이 열린다
@@ -425,8 +425,6 @@ final class OnboardingFlowModel: ObservableObject {
         }
         // 레벨·목표·사이클 모두 스냅샷 내용이다 — 병합 기준 시각을 지금으로 (이슈 #130)
         ProgressSnapshot.markLocalChanged(defaults: defaults, now: now)
-
-        OnboardingAnswersStore.save(answers)
     }
 
     /// 주간 러닝 목표 초기값 — Q5의 1·3·4회. 무경험자는 Q5를 묻지 않으므로 기본 주 2회 (§2)

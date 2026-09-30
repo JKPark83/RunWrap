@@ -19,10 +19,13 @@ struct CurrentWeather: Equatable {
 
 struct WeatherClient {
     /// 기동 스플래시가 이 요청의 결론을 기다린다 — 기본 60초 타임아웃은 기동을 볼모로
-    /// 잡으므로 10초로 묶는다. 실패도 "결론"이라 스플래시가 홈을 열 수 있다 (RootView 참조)
+    /// 잡으므로 10초로 묶는다. 실패도 "결론"이라 스플래시가 홈을 열 수 있다 (RootView 참조).
+    /// timeoutIntervalForRequest는 바이트가 올 때마다 다시 시작되는 무응답 간격이라 전체 상한이 아니다 —
+    /// 느리게 조금씩 오는 응답이 10초를 넘기지 않도록 Resource 상한도 같이 건다 (이슈 #157)
     private static let bounded: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 10
         return URLSession(configuration: configuration)
     }()
 

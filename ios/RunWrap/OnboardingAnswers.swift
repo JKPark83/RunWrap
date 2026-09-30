@@ -127,29 +127,23 @@ struct OnboardingAnswers: Codable, Equatable {
     var q9Purposes: [RunPurpose]
 }
 
-/// 온보딩 답변 영속화 — Application Support에 JSON으로 저장/로드 (ReportCache와 동일 패턴)
+/// 온보딩 원답 파일 정리 — 원답은 더 이상 저장하지 않는다.
+/// 이전 버전(≤ 현재 마케팅 버전)이 남긴 자기 신고 훈련 이력 파일
+/// (Application Support/RunWrap/onboarding-answers.json) — 기능에 쓰이지 않아 기동 시 한 번 지운다(이슈 #156).
+/// 재진단은 의도적으로 프리필하지 않으므로(SettingsScreen 참조) 원답을 되살릴 곳도 없다
 enum OnboardingAnswersStore {
     static let filename = "onboarding-answers.json"
 
-    static func save(_ answers: OnboardingAnswers, in directory: URL? = nil) {
-        guard let url = fileURL(in: directory),
-              let data = try? JSONEncoder().encode(answers) else { return }
-        try? data.write(to: url, options: .atomic)
-    }
-
-    static func load(from directory: URL? = nil) -> OnboardingAnswers? {
-        guard let url = fileURL(in: directory),
-              let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(OnboardingAnswers.self, from: data)
-    }
-
-    /// directory 주입은 테스트용 — 기본은 Application Support/RunWrap (없으면 만든다)
-    private static func fileURL(in directory: URL?) -> URL? {
-        if let directory { return directory.appendingPathComponent(filename) }
-        guard let base = FileManager.default.urls(for: .applicationSupportDirectory,
-                                                  in: .userDomainMask).first else { return nil }
-        let dir = base.appendingPathComponent("RunWrap", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(filename)
+    /// directory 주입은 테스트용 — 기본은 Application Support/RunWrap. 디렉터리는 만들지 않고, 파일이 없으면 무시한다
+    static func removeLegacyFile(in directory: URL? = nil) {
+        let dir: URL
+        if let directory {
+            dir = directory
+        } else {
+            guard let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                      in: .userDomainMask).first else { return }
+            dir = base.appendingPathComponent("RunWrap", isDirectory: true)
+        }
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(filename))
     }
 }
