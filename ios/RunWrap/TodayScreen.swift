@@ -3,12 +3,11 @@ import CoreLocation
 
 /// '오늘' 탭 — 현재 위치의 날씨 수치와 조건에 맞는 러닝 복장 추천 (기획서 §4.10, 계획서 M6).
 /// 복장은 SF 심볼 + 라벨 칩으로 표현한다 — 전용 일러스트는 후속 제작 항목.
+/// 날씨·위치는 앱 전역 WeatherStore의 값을 그대로 그린다 — 홈 타일과 같은 값(이슈 #159).
 struct TodayScreen: View {
-    @StateObject private var location = LocationProvider()
+    @EnvironmentObject private var weatherStore: WeatherStore
     @StateObject private var airQuality = AirQualityStore()
-    @State private var weather: CurrentWeather?
-    @State private var weatherFailed = false
-    /// 첫 진입 로딩이 끝나기 전에 당겨서 새로고침이 겹치면 조회가 이중으로 나간다 — 한 번에 하나만
+    /// 당겨서 새로고침이 겹치면 조회가 이중으로 나간다 — 한 번에 하나만
     @State private var isReloading = false
     @Environment(\.openURL) private var openURL
 
@@ -23,30 +22,24 @@ struct TodayScreen: View {
                 }
                 .padding(.top, 18)
 
-                switch location.state {
+                // 새로고침 중 일시 실패로 이미 떠 있는 카드를 지우지 않는 규칙은 WeatherStore.refresh()가 쥔다
+                switch weatherStore.state {
                 case .denied:
                     deniedCard
-                // 새로고침 중 일시 실패로 이미 떠 있는 카드를 지우지 않는다 — 보여줄 값이 없을 때만 안내
-                case .failed where weather == nil:
-                    noticeCard("현재 위치를 확인하지 못했어요",
-                               message: "화면을 아래로 당기면 다시 시도해요.",
-                               symbol: "location.slash")
-                default:
-                    if let weather {
-                        weatherCard(weather)
-                        // 대기질은 부가 정보 — 로딩·실패 상태는 자리조차 만들지 않는다 (미노출 가드)
-                        if case .loaded(let air) = airQuality.state {
-                            airQualityCard(air)
-                        }
-                        adviceCard(weather)
-                        outfitCard(weather)
-                    } else if weatherFailed {
-                        noticeCard("날씨를 불러오지 못했어요",
-                                   message: "네트워크 상태를 확인하고 화면을 아래로 당겨 새로고침해 주세요.",
-                                   symbol: "icloud.slash")
-                    } else {
-                        loadingCard
+                case .unavailable:
+                    noticeCard("날씨를 불러오지 못했어요",
+                               message: "네트워크 상태를 확인하고 화면을 아래로 당겨 새로고침해 주세요.",
+                               symbol: "icloud.slash")
+                case .idle, .loading:
+                    loadingCard
+                case .loaded(let weather):
+                    weatherCard(weather)
+                    // 대기질은 부가 정보 — 로딩·실패 상태는 자리조차 만들지 않는다 (미노출 가드)
+                    if case .loaded(let air) = airQuality.state {
+                        airQualityCard(air)
                     }
+                    adviceCard(weather)
+                    outfitCard(weather)
                 }
 
                 attribution
@@ -55,55 +48,28 @@ struct TodayScreen: View {
             .padding(.bottom, 26)
         }
         .background(RR.bg.ignoresSafeArea())
-        .task { await reload() }
+        // WeatherStore는 기동 때 이미 조회를 마쳤다 — 날씨는 다시 부르지 않고 같은 좌표로 대기질만 채운다
+        // 스플래시 타임아웃 뒤처럼 날씨 결론 전에 시트가 열리면 좌표가 아직 없다 —
+        // 결론이 나는 순간(isSettled) 다시 돌아 대기질을 채운다
+        .task(id: weatherStore.isSettled) {
+            guard let coordinate = weatherStore.coordinate else { return }
+            await airQuality.refresh(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        }
         // 비구조 Task로 감싸는 이유는 HomeScreen의 refreshable 주석 참조 —
         // 갱신 중 재렌더가 액션 태스크를 취소해 위치 결론 대기가 잘리는 것을 막는다
         .refreshable { await Task { await reload() }.value }
     }
 
-    /// 위치부터 다시 잡아 날씨·대기질을 조회한다 — 첫 진입(.task)과 당겨서 새로고침이 같은 경로다.
-    /// 거부·실패 결론은 location.state에 남아 본문 switch가 안내 카드로 그린다
+    /// 당겨서 새로고침 — 전역 WeatherStore가 위치부터 다시 잡아 날씨를 갱신하면(홈 타일도 같이 바뀐다)
+    /// 그 새 좌표로 대기질을 조회한다. 대기질은 새 위치 결론이 재료라 날씨 뒤에 순서대로 (HomeScreen과 같은 순서)
     private func reload() async {
         guard !isReloading else { return }
         isReloading = true
         defer { isReloading = false }
 
-        location.request()
-        // LocationProvider는 델리게이트 기반이라 @Published 스트림으로 결론만 소비한다 (WeatherStore와 같은 패턴)
-        var coordinate: CLLocationCoordinate2D?
-        for await locationState in location.$state.values {
-            switch locationState {
-            case .idle, .loading:
-                continue
-            case .located(let located):
-                coordinate = located
-            case .denied, .failed:
-                return
-            }
-            break
-        }
-        guard let coordinate else { return }
-
-        // 실패 표시는 이번 조회 결과로 다시 정한다 — 직전 날씨 값은 새 값이 올 때까지 유지
-        weatherFailed = false
-        // 날씨와 독립으로 조회한다 — 한쪽이 실패해도 다른 쪽 카드는 성립한다
-        async let weatherReload: Void = loadWeather(coordinate)
-        async let airReload: Void = airQuality.refresh(latitude: coordinate.latitude,
-                                                       longitude: coordinate.longitude)
-        _ = await (weatherReload, airReload)
-    }
-
-    private func loadWeather(_ coordinate: CLLocationCoordinate2D) async {
-        do {
-            let current = try await WeatherClient().current(latitude: coordinate.latitude,
-                                                            longitude: coordinate.longitude)
-            weather = current
-            // 수분 알람 갱신 (계획서 M9) — 날씨를 받아온 이 시점이 당일분 예약 트리거.
-            // 위치·날씨 조회가 이 탭에만 있어 앱의 예보 확인 창구도 여기 하나다.
-            await NotificationScheduler.rescheduleHydration(forecastMaxC: current.forecastMaxC)
-        } catch {
-            weatherFailed = true
-        }
+        await weatherStore.refresh()
+        guard let coordinate = weatherStore.coordinate else { return }
+        await airQuality.refresh(latitude: coordinate.latitude, longitude: coordinate.longitude)
     }
 
     private var todayEyebrow: String {
@@ -404,7 +370,7 @@ struct TodayScreen: View {
     /// 아이폰 전체 위치 서비스가 꺼진 경우도 .denied로 오므로 문구를 시스템 스위치 쪽으로 바꾼다
     private var deniedCard: some View {
         VStack(spacing: 10) {
-            if location.servicesDisabled {
+            if weatherStore.servicesDisabled {
                 noticeCard("아이폰의 위치 서비스가 꺼져 있어요",
                            message: "설정 > 개인정보 보호 및 보안 > 위치 서비스를 켜면 현재 위치의 날씨와 복장 추천을 볼 수 있어요.",
                            symbol: "location.slash")

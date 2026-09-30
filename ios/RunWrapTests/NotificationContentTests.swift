@@ -28,7 +28,8 @@ struct NotificationContentTests {
     func weeklyBody() {
         let snapshot = ReportSnapshot(generatedAt: now,
                                       headline: "안정적으로 리듬을 지킨 한 주였습니다.",
-                                      suggestion: nil, weekKm: 21.4, runCount: 3)
+                                      suggestion: nil, weekKm: 21.4, runCount: 3,
+                                      showsDistanceNumbers: true)
         #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
             == "최근 7일 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
         #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: now)
@@ -40,7 +41,8 @@ struct NotificationContentTests {
         // 스냅샷 생성 = now(2026-08-10T09:00Z)
         let snapshot = ReportSnapshot(generatedAt: now,
                                       headline: "안정적으로 리듬을 지킨 한 주였습니다.",
-                                      suggestion: nil, weekKm: 21.4, runCount: 3)
+                                      suggestion: nil, weekKm: 21.4, runCount: 3,
+                                      showsDistanceNumbers: true)
         let fallback = "이번 주 러닝을 정리했어요 — 리포트를 열어보세요"
 
         // 47h59m 뒤 발송(2026-08-12T08:59Z) → 48h 이내라 신선 → 수치 포함
@@ -56,6 +58,36 @@ struct NotificationContentTests {
 
         // 스냅샷이 없으면 발송 시각과 무관하게 기본 문구
         #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: fresh) == fallback)
+    }
+
+    @Test("주간 본문 레벨 게이트 — 런린이 스냅샷은 km 없이 횟수·헤드라인만 싣는다 (이슈 #141)")
+    func weeklyBodyBeginnerHidesDistance() {
+        // 런린이는 ReportGate.showsNumbers(.distance) = false → make가 showsDistanceNumbers false로 채운다
+        let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
+                                  distance: nil, acwr: nil, efficiency: nil,
+                                  streakWeeks: 2, weekRunCount: 3)
+        let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
+                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
+        let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .beginner, now: now)
+        #expect(!snapshot.showsDistanceNumbers)
+
+        let body = NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
+        #expect(!body.contains("km"))
+        #expect(body == "최근 7일 3회 — \(report.headline(level: .beginner))")
+    }
+
+    @Test("주간 본문 레벨 게이트 — 런잘알 스냅샷은 기존처럼 횟수·거리·헤드라인 (이슈 #141)")
+    func weeklyBodyIntermediateShowsDistance() {
+        // 창 안 10km 1건 → weekKm 10.0, 횟수는 report.weekRunCount 3
+        let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
+                                  distance: nil, acwr: nil, efficiency: nil,
+                                  streakWeeks: 2, weekRunCount: 3)
+        let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
+                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
+        let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .intermediate, now: now)
+        #expect(snapshot.showsDistanceNumbers)
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
+            == "최근 7일 3회 · 10.0 km — \(report.headline(level: .intermediate))")
     }
 
     /// 주간 발송 시각 테스트용 — 시간대를 서울로 고정해 실행 환경과 무관하게 한다
@@ -193,9 +225,24 @@ struct NotificationContentTests {
         let snapshot = ReportSnapshot(generatedAt: now,
                                       headline: "몸이 좋아지고 있는 한 주였습니다.",
                                       suggestion: "지금 리듬 그대로 이어가면 됩니다.",
-                                      weekKm: 32.5, runCount: 4)
+                                      weekKm: 32.5, runCount: 4,
+                                      showsDistanceNumbers: true)
         ReportCache.save(snapshot, in: dir)
         #expect(ReportCache.load(from: dir) == snapshot)
+    }
+
+    @Test("캐시 호환 — showsDistanceNumbers 키가 없는 기존 캐시는 수치 노출(true)로 읽는다 (이슈 #141)")
+    func cacheDecodesLegacySnapshot() throws {
+        // 이슈 #141 이전 형식 — generatedAt은 JSONEncoder 기본(2001-01-01 기준 초)
+        let legacy = """
+        {"generatedAt": \(now.timeIntervalSinceReferenceDate), "headline": "예전 헤드라인",
+         "weekKm": 12.5, "runCount": 2}
+        """
+        let snapshot = try JSONDecoder().decode(ReportSnapshot.self, from: Data(legacy.utf8))
+        #expect(snapshot.showsDistanceNumbers)
+        #expect(snapshot.generatedAt == now)
+        #expect(snapshot.suggestion == nil)
+        #expect(snapshot.runCount == 2)
     }
 
     @Test("캐시 삭제 — 데모 모드를 끄면 비운 캐시는 nil로 읽힌다 (이슈 #44)")
@@ -206,7 +253,8 @@ struct NotificationContentTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         ReportCache.save(ReportSnapshot(generatedAt: now, headline: "데모 헤드라인",
-                                        suggestion: nil, weekKm: 30, runCount: 5), in: dir)
+                                        suggestion: nil, weekKm: 30, runCount: 5,
+                                        showsDistanceNumbers: true), in: dir)
         #expect(ReportCache.load(from: dir) != nil)
 
         ReportCache.clear(in: dir)
