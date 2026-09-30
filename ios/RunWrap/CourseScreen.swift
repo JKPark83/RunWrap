@@ -58,6 +58,12 @@ struct CourseScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
 
+                // 두 모드 모두에서 보인다 — 코스를 보다가 잘못된 GPX를 골라도 이유를 알 수 있게 (이슈 #148).
+                // 코스 모드에서는 닫기 없이 다음 성공 업로드나 코스 지우기에서 지운다
+                if let notice {
+                    noticeCard("코스를 읽지 못했어요", message: notice, symbol: "map")
+                }
+
                 if case .failed = store.state {
                     noticeCard("보급 데이터를 불러오지 못했어요",
                                message: "앱을 껐다 다시 열어 주세요. 계속 그러면 재설치가 필요할 수 있어요.",
@@ -71,9 +77,6 @@ struct CourseScreen: View {
                     uploadButtons(compact: true)
                     attribution
                 } else {
-                    if let notice {
-                        noticeCard("코스를 읽지 못했어요", message: notice, symbol: "map")
-                    }
                     nearbySection
                     uploadButtons(compact: false)
                     attribution
@@ -354,28 +357,46 @@ struct CourseScreen: View {
             notice = "이 파일에는 경로가 없어요. 지점(웨이포인트)만 있는 GPX일 수 있으니 트랙이 담긴 파일로 부탁드려요."
             return
         }
+        // 분석이 유효할 때만 상태를 바꾼다 — 짧은 코스가 보던 코스·저장본을 덮어쓰지 않게 (이슈 #149).
+        // 실패한 파일을 남기면 탭 재진입마다 되살아나므로 저장도 성공한 코스만 한다 (감사 M12).
+        // POI가 아직 로드 중이면 분석이 미뤄진 것뿐이니(위 .task가 로드 뒤 다시 분석) 코스 탓으로 보지 않고 저장한다
+        var analyzed: CourseSupplyEngine.Result?
+        if case .loaded(let file) = store.state {
+            analyzed = CourseSupplyEngine.analyze(course: points, pois: file.pois)
+            guard analyzed != nil else {
+                notice = Self.shortCourseNotice
+                return
+            }
+        }
         notice = nil
         course = points
         courseName = name
-        analyze()
-        // 분석에 성공한 코스만 저장한다 — 실패한 파일을 남기면 탭 재진입마다 되살아난다 (감사 M12).
-        // POI가 아직 로드 중이면 분석이 미뤄진 것뿐이니(위 .task가 로드 뒤 다시 분석) 코스 탓으로 보지 않는다
-        if case .loaded = store.state, result == nil { return }
+        if let analyzed { applyResult(analyzed) }
         try? data.write(to: Self.lastCourseURL)
         lastCourseName = name
     }
 
+    /// 되살린 코스를 분석한다 — `.task` 복원 경로 전용. 올린 파일은 `apply`가 분석을 먼저 해 본다
     private func analyze() {
         guard case .loaded(let file) = store.state, !course.isEmpty else { return }
-        result = CourseSupplyEngine.analyze(course: course, pois: file.pois)
-        selected = nil
-        if result == nil {
-            notice = "코스가 500m보다 짧아서 분석을 접었어요. 이 정도면 보급 없이도 완주하실 거라 믿어요."
+        if let analyzed = CourseSupplyEngine.analyze(course: course, pois: file.pois) {
+            applyResult(analyzed)
         } else {
-            // 새 코스가 통째로 보이게 카메라를 잡는다 (예전 Map(initialPosition:) + .id 리셋을 대신한다)
-            camera = .region(RouteSnapshot.region(for: courseCoordinates))
+            result = nil
+            selected = nil
+            notice = Self.shortCourseNotice
         }
     }
+
+    /// 분석 결과를 화면에 반영한다 — `course`를 먼저 바꿔 둬야 카메라가 새 코스를 잡는다
+    private func applyResult(_ analyzed: CourseSupplyEngine.Result) {
+        result = analyzed
+        selected = nil
+        // 새 코스가 통째로 보이게 카메라를 잡는다 (예전 Map(initialPosition:) + .id 리셋을 대신한다)
+        camera = .region(RouteSnapshot.region(for: courseCoordinates))
+    }
+
+    private static let shortCourseNotice = "코스가 500m보다 짧아서 분석을 접었어요. 이 정도면 보급 없이도 완주하실 거라 믿어요."
 
     /// 저장된 마지막 코스를 되살린다 — 되살렸으면 true
     private func restoreLastCourse() -> Bool {
