@@ -120,7 +120,9 @@ struct RunWrapApp: App {
             let now = Date()
             let battery = vitals.flatMap { BatteryEngine.compute(vitals: $0, runs: runs, now: now) }
             WidgetSnapshotStore.save(WidgetSnapshot.make(battery: battery, runs: runs,
-                                                         level: Self.currentLevel, now: now))
+                                                         level: Self.currentLevel,
+                                                         air: AirQualityStore.cachedFreshGrade(now: now),
+                                                         now: now))
         }
         WidgetCenter.shared.reloadAllTimelines()
     }

@@ -7,6 +7,10 @@ import Foundation
 /// 배터리(`BatteryEngine`) · 날씨/복장(`WeatherClient`·`OutfitRules`) · 주간 처방(`TrainingGuideEngine`).
 /// 여기서 새로 계산하는 것은 **오늘 권장 거리** 하나뿐이다.
 ///
+/// 대기질(`AirQualityEngine`의 대표 등급)은 판정을 새로 만들지 않고 **상한**으로만 건다 (이슈 #183) —
+/// 공기가 나쁜 날 배터리가 좋다고 "밀어붙이라"고 하면 틀린 인사이트가 된다.
+/// 등급 문구는 에어코리아 공식 표현 그대로 쓴다 (KOGL 변경금지 — `AirGrade.label`).
+///
 /// 미노출 가드는 두 겹이다. 카드 전체는 러닝 기록이 하나도 없으면 내지 않고(nil),
 /// 줄 단위로는 재료가 없으면 값 대신 유도 문구(`hint`)를 낸다 —
 /// 값을 지어내지 않으면서도 "무엇을 하면 켜지는지"는 알려주기 위해서다.
@@ -60,6 +64,7 @@ enum TodayVerdictEngine {
     ///   - hasRaceGoal: 목표 레이스 설정 여부 — guide가 nil인 이유를 갈라 유도 문구를 고른다
     ///   - weeklyGoal: 주간 목표 러닝 횟수
     ///   - level: 러너 레벨 — 오늘의 훈련(인터벌 스펙 등)을 정할 때 쓴다
+    ///   - air: 현재 위치 대기질 대표 등급 (이슈 #183). 조회 전·실패면 nil — 판정에 관여하지 않는다
     static func verdict(runs: [RunSummary],
                         battery: BatteryReport?,
                         weather: WeatherInput,
@@ -67,16 +72,17 @@ enum TodayVerdictEngine {
                         hasRaceGoal: Bool,
                         weeklyGoal: Int,
                         level: RunnerLevel = .intermediate,
+                        air: AirGrade? = nil,
                         now: Date) -> TodayVerdict? {
         // 기록이 하나도 없으면 네 줄이 전부 유도 문구가 된다 — 환영이 아니라 과제 목록으로
         // 읽히므로 카드 자체를 내지 않는다 (홈은 첫 러닝 안내만 남긴다)
         guard !runs.isEmpty else { return nil }
 
-        let (tone, headline) = Self.headline(battery: battery)
+        let (tone, headline) = Self.headline(battery: battery, air: air)
         return TodayVerdict(tone: tone,
                             headline: headline,
                             battery: batteryLine(battery),
-                            weather: weatherLine(weather, now: now),
+                            weather: weatherLine(weather, air: air, now: now),
                             session: sessionLine(runs: runs, battery: battery, guide: guide,
                                                  hasRaceGoal: hasRaceGoal,
                                                  weeklyGoal: weeklyGoal, level: level, now: now),
@@ -89,6 +95,28 @@ enum TodayVerdictEngine {
     /// 배터리가 없으면 판정하지 않고 중립 문구만 둔다 ("틀린 인사이트는 없느니만 못하다").
     /// 위젯 스냅샷도 같은 판정을 쓴다 — 홈 카드와 위젯 문구가 어긋나지 않게 (이슈 #181)
     static func headline(battery: BatteryReport?) -> (RRTone?, String) {
+        headline(battery: battery, air: nil)
+    }
+
+    /// 배터리 판정에 대기질 상한을 건다 (이슈 #183) — 공기는 회복 상태와 무관하게 바깥 달리기를 막는
+    /// 조건이라, 배터리가 좋아도 판정을 끌어내리되 배터리가 이미 더 보수적이면 건드리지 않는다.
+    /// - 매우나쁨: 배터리와 무관하게 overload — 실외 활동 자제 등급이다
+    /// - 나쁨: 배터리 판정이 없거나 steady·improving이면 caution으로 낮춘다.
+    ///   overload·caution이면 그쪽이 더 보수적이므로 배터리 판정 그대로
+    /// - 좋음·보통·nil(조회 전·실패): 배터리 판정 그대로
+    static func headline(battery: BatteryReport?, air: AirGrade?) -> (RRTone?, String) {
+        switch air {
+        case .veryBad:
+            return (.overload, "오늘은 실내가 이깁니다")
+        case .bad:
+            switch battery?.tone {
+            case .overload, .caution: break
+            case .steady, .improving, nil:
+                return (.caution, "공기가 나빠요, 가볍게만 다녀오세요")
+            }
+        case .good, .moderate, nil:
+            break
+        }
         guard let battery else { return (nil, "오늘은 어떻게 가실까요") }
         return switch battery.tone {
         case .overload: (.overload, "오늘은 쉬시는 게 이깁니다")
@@ -114,7 +142,8 @@ enum TodayVerdictEngine {
 
     // MARK: - 날씨·복장
 
-    private static func weatherLine(_ weather: WeatherInput, now: Date) -> TodayVerdict.Line {
+    private static func weatherLine(_ weather: WeatherInput, air: AirGrade?,
+                                    now: Date) -> TodayVerdict.Line {
         let label = "날씨"
         switch weather {
         case .loading:
@@ -128,9 +157,12 @@ enum TodayVerdictEngine {
                          content: .hint("날씨를 불러오지 못했어요"), tone: nil)
         case .current(let current, let bestWindow):
             // 추천 시간은 판정문에 이어 붙이지 않고 캡션으로 — 홈 타일은 문구 대신 그림으로 값을 그려서
-            // 문구 끝에 붙이면 보이지 않는다
+            // 문구 끝에 붙이면 보이지 않는다.
+            // 공기가 나쁨 이상이면 날씨 문구 뒤에 공식 등급을 덧붙인다 (이슈 #183) — 헤드라인을 끌어내린 이유가
+            // 한 줄 문구에서도 읽히게 (홈 타일은 대기질 배지를 따로 그린다). 유도 문구 줄에는 붙이지 않는다
+            let airSuffix = air.flatMap { $0 >= .bad ? " · 대기질 \($0.label)" : nil } ?? ""
             return .init(kind: .weather, label: label,
-                         content: .value(weatherPhrase(current, now: now)), tone: nil,
+                         content: .value(weatherPhrase(current, now: now) + airSuffix), tone: nil,
                          caption: bestWindow.map { "\(RunWindowEngine.rangeLabel($0))가 좋아요" })
         }
     }

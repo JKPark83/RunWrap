@@ -285,6 +285,7 @@ struct HomeScreen: View {
                                                  hasRaceGoal: RaceDistance(rawValue: raceGoalRaw) != nil,
                                                  weeklyGoal: weeklyGoal,
                                                  level: level,
+                                                 air: loadedAir.flatMap(AirQualityEngine.representativeGrade),
                                                  now: now)
         // 승급 카드가 뜨면 새를 216 → 172로 줄여 카드 자리를 만든다 (시안 1h)
         let birdSize: CGFloat = promotion == nil ? 216 : 172

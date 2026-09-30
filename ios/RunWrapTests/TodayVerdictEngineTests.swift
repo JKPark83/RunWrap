@@ -44,10 +44,11 @@ struct TodayVerdictEngineTests {
                          weather: TodayVerdictEngine.WeatherInput = .loading,
                          guide: TrainingGuide? = nil,
                          hasRaceGoal: Bool = true,
-                         weeklyGoal: Int = 4) -> TodayVerdict? {
+                         weeklyGoal: Int = 4,
+                         air: AirGrade? = nil) -> TodayVerdict? {
         TodayVerdictEngine.verdict(runs: runs ?? baseRuns, battery: battery, weather: weather,
                                    guide: guide, hasRaceGoal: hasRaceGoal,
-                                   weeklyGoal: weeklyGoal, now: now)
+                                   weeklyGoal: weeklyGoal, air: air, now: now)
     }
 
     // MARK: - 카드 전체 가드
@@ -79,6 +80,52 @@ struct TodayVerdictEngineTests {
         let result = try #require(verdict(battery: nil))
         #expect(result.tone == nil)
         #expect(result.headline == "오늘은 어떻게 가실까요")
+    }
+
+    // MARK: - 제목줄 대기질 상한 (이슈 #183)
+
+    @Test("대기질 상한 — 매우나쁨이면 배터리가 좋아도 overload·'오늘은 실내가 이깁니다'")
+    func headlineVeryBadAir() throws {
+        let result = try #require(verdict(battery: battery(.improving), air: .veryBad))
+        #expect(result.tone == .overload)
+        #expect(result.headline == "오늘은 실내가 이깁니다")
+
+        // 배터리가 없어도 같은 판정 — 공기는 배터리와 무관한 조건이다
+        let noBattery = try #require(verdict(battery: nil, air: .veryBad))
+        #expect(noBattery.tone == .overload)
+        #expect(noBattery.headline == "오늘은 실내가 이깁니다")
+    }
+
+    @Test("대기질 상한 — 나쁨이면 배터리 steady·improving·없음을 caution으로 낮춘다")
+    func headlineBadAirCapsTone() throws {
+        for tone: RRTone? in [.steady, .improving, nil] {
+            let result = try #require(verdict(battery: tone.map { battery($0) }, air: .bad))
+            #expect(result.tone == .caution)
+            #expect(result.headline == "공기가 나빠요, 가볍게만 다녀오세요")
+        }
+    }
+
+    @Test("대기질 상한 — 나쁨이어도 배터리가 이미 overload·caution이면 배터리 판정을 유지한다")
+    func headlineBadAirKeepsConservativeBattery() throws {
+        let overload = try #require(verdict(battery: battery(.overload), air: .bad))
+        #expect(overload.tone == .overload)
+        #expect(overload.headline == "오늘은 쉬시는 게 이깁니다")
+
+        let caution = try #require(verdict(battery: battery(.caution), air: .bad))
+        #expect(caution.tone == .caution)
+        #expect(caution.headline == "가볍게만 다녀오세요")
+    }
+
+    @Test("대기질 상한 — 좋음·보통·nil이면 배터리 판정 그대로")
+    func headlineMildAirUnchanged() throws {
+        for air: AirGrade? in [.good, .moderate, nil] {
+            let result = try #require(verdict(battery: battery(.improving), air: air))
+            #expect(result.tone == .improving)
+            #expect(result.headline == "몸이 좋습니다, 밀어붙여도 돼요")
+        }
+        let noBattery = try #require(verdict(battery: nil, air: .moderate))
+        #expect(noBattery.tone == nil)
+        #expect(noBattery.headline == "오늘은 어떻게 가실까요")
     }
 
     // MARK: - 체력 배터리 줄
@@ -133,6 +180,32 @@ struct TodayVerdictEngineTests {
 
         let withoutWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4))))
         #expect(withoutWindow.weather.caption == nil)
+    }
+
+    @Test("날씨 줄 대기질 — 나쁨 이상이면 문구 뒤에 ' · 대기질 <공식 등급>'을 붙인다 (이슈 #183)")
+    func weatherAirSuffix() throws {
+        let bad = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .bad))
+        #expect(bad.weather.content == .value("체감 22°C · 반팔 티+반바지 · 대기질 나쁨"))
+
+        let veryBad = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .veryBad))
+        #expect(veryBad.weather.content == .value("체감 22°C · 반팔 티+반바지 · 대기질 매우나쁨"))
+
+        // 보통 이하는 붙이지 않는다
+        let moderate = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .moderate))
+        #expect(moderate.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+    }
+
+    @Test("날씨 줄 대기질 — 날씨 값이 없는 유도 문구 줄에는 붙이지 않는다")
+    func weatherAirSuffixSkipsHints() throws {
+        let cases: [(TodayVerdictEngine.WeatherInput, String)] = [
+            (.loading, "날씨를 불러오는 중"),
+            (.denied, "설정에서 위치 허용하기"),
+            (.unavailable, "날씨를 불러오지 못했어요"),
+        ]
+        for (input, hint) in cases {
+            let result = try #require(verdict(weather: input, air: .bad))
+            #expect(result.weather.content == .hint(hint))
+        }
     }
 
     @Test("날씨 조각 — 강수량 0mm여도 이슬비 코드(WMO 51)면 raining (이슈 #109)")

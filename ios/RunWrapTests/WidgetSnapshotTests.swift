@@ -50,6 +50,16 @@ struct WidgetSnapshotTests {
         #expect(snapshot.headline == "오늘은 어떻게 가실까요")
     }
 
+    @Test("대기질 — 헤드라인에 홈 판단 카드와 같은 대기질 상한이 걸린다 (이슈 #183)")
+    func makeWithAir() {
+        let report = battery(.improving, level: 84, statusLabel: "충전 충분")
+        let snapshot = WidgetSnapshot.make(battery: report, runs: [], level: .intermediate,
+                                           air: .bad, now: now)
+        #expect(snapshot.headline == "공기가 나빠요, 가볍게만 다녀오세요")
+        // 배터리 필드는 대기질과 무관하게 배터리 값 그대로
+        #expect(snapshot.batteryTone == .improving)
+    }
+
     @Test("주간 창 — 6일 전 자정 직후는 포함, 7일 전·now 이후는 제외 (ReportSnapshot과 같은 창)")
     func weekWindow() {
         let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
