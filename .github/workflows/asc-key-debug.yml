@@ -1,0 +1,34 @@
+name: ASC key debug (temporary)
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Probe provisioning endpoints with the CI key (no secret output)
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          pip install --quiet "pyjwt[crypto]"
+          python3 - <<'PY'
+          import os, time, json, urllib.request, urllib.error, jwt
+          key = os.environ["ASC_KEY_P8"]
+          print("p8 lines:", len(key.splitlines()), "starts:", key.strip().startswith("-----BEGIN PRIVATE KEY-----"), "ends:", key.strip().endswith("-----END PRIVATE KEY-----"))
+          now = int(time.time())
+          tok = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"},
+                           key, algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
+          base = "https://api.appstoreconnect.apple.com/v1"
+          for path in ["/apps?limit=1", "/certificates?limit=1", "/bundleIds?limit=1", "/profiles?limit=1", "/devices?limit=1", "/userInvitations?limit=1"]:
+              req = urllib.request.Request(base + path, headers={"Authorization": "Bearer " + tok})
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      print(path, "->", r.status)
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode()[:400]
+                  print(path, "->", e.code, body)
+          PY
