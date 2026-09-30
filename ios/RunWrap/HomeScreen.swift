@@ -1,4 +1,5 @@
 import SwiftUI
+import WorkoutKit
 
 /// 홈 탭 — 새 성장 스테이지와 **오늘의 판단 카드** (기획서 v0.8 §6, 시안 1f/1g/1h).
 ///
@@ -9,7 +10,7 @@ import SwiftUI
 /// 날씨(위치)는 `WeatherStore`가 기동 시점에 조회를 마치고 내려준다 — 홈이 뜨기 전에
 /// 스플래시가 그 완료를 기다리는 구조라, 여기서는 읽기만 하고 로딩을 시작하지 않는다.
 struct HomeScreen: View {
-    /// 판단 카드의 배터리·권장 세션 줄에서 리포트 탭으로 넘어가는 통로 (탭 전환은 RootView 몫)
+    /// 판단 카드의 배터리 줄(과 처방 없는 권장 세션 줄)에서 리포트 탭으로 넘어가는 통로 (탭 전환은 RootView 몫)
     var onSelectReport: () -> Void = {}
 
     @EnvironmentObject private var health: HealthStore
@@ -61,6 +62,8 @@ struct HomeScreen: View {
     @EnvironmentObject private var raceStore: RaceStore
     @AppStorage(RaceKey.targetID) private var targetRaceID = 0
     @State private var openedTargetRace: RaceEngine.Entry?
+    // 오늘의 훈련 시트 (이슈 #197) — 권장 세션 줄에 처방이 있으면 탭 때 띄워 워치로 보낼 수 있게 한다
+    @State private var sheetWorkout: TodayWorkoutItem?
 
     var body: some View {
         Group {
@@ -319,7 +322,7 @@ struct HomeScreen: View {
                 if let verdict {
                     VerdictCard(verdict: verdict, battery: battery, weather: weatherInput,
                                 air: loadedAir) { kind in
-                        tap(kind, runs: runs)
+                        tap(kind, verdict: verdict, runs: runs)
                     }
                     .padding(.top, 18)
                 }
@@ -381,6 +384,12 @@ struct HomeScreen: View {
         .sheet(item: $recapPeriod) { period in
             RecapScreen(period: period)
         }
+        .sheet(item: $sheetWorkout) { item in
+            TodayWorkoutSheet(workout: item.workout) {
+                sheetWorkout = nil
+                onSelectReport()
+            }
+        }
         // 목표 대회 카드 재료 — 대회 탭을 열지 않았어도 목표가 있으면 목록을 불러온다 (이슈 #172)
         .task(id: targetRaceID) {
             if targetRaceID != 0 { await raceStore.load() }
@@ -437,11 +446,18 @@ struct HomeScreen: View {
     }
 
     /// 네 줄의 목적지 — 재료를 만든 화면으로 보낸다 (기획서 v0.8 §6).
-    /// 배터리·권장 세션은 둘 다 리포트 탭의 카드라 같은 곳으로 간다.
-    private func tap(_ kind: TodayVerdict.Line.Kind, runs: [RunSummary]) {
+    /// 배터리는 리포트 탭의 카드로 간다. 권장 세션은 처방이 있으면 오늘의 훈련 시트(워치 전송, 이슈 #197),
+    /// 없으면(휴식·완료·실내·처방 없음) 배터리와 같이 리포트 탭으로 간다.
+    private func tap(_ kind: TodayVerdict.Line.Kind, verdict: TodayVerdict, runs: [RunSummary]) {
         switch kind {
-        case .battery, .session:
+        case .battery:
             onSelectReport()
+        case .session:
+            if let workout = verdict.workout {
+                sheetWorkout = TodayWorkoutItem(workout: workout)
+            } else {
+                onSelectReport()
+            }
         case .weather:
             // 권한을 거부한 상태에서는 앱 안에서 다시 물을 수 없다 — 설정으로 보낸다
             if case .denied = weather.state {
@@ -778,6 +794,127 @@ private struct PBCongratsSheet: View {
         }
         .presentationDetents([.medium])
         .background(RR.bg)
+    }
+}
+
+/// 오늘의 훈련 시트 항목 — `TodayWorkout`은 Identifiable이 아니라 `.sheet(item:)`용으로 감싼다
+private struct TodayWorkoutItem: Identifiable {
+    let id = UUID()
+    let workout: TodayWorkout
+}
+
+/// 오늘의 훈련 시트 (이슈 #197) — 권장 세션 줄의 처방을 풀어 보여주고 Apple Watch로 보낸다.
+/// 전달은 시스템 미리보기 시트(`.workoutPreview`)가 맡는다 — 권한이 필요 없고, 워치에 추가할지는
+/// 사용자가 그 시트에서 정한다. 구성·플랜은 `WatchWorkoutBuilder`가 내고 여기서는 그리기만 한다.
+private struct TodayWorkoutSheet: View {
+    let workout: TodayWorkout
+    let onSelectReport: () -> Void
+    /// 렌더마다 새 UUID의 플랜이 생기지 않도록 한 번만 만든다. 워치가 지원하지 않는 구성이면 nil
+    private let plan: WorkoutPlan?
+    @State private var showsPreview = false
+
+    init(workout: TodayWorkout, onSelectReport: @escaping () -> Void) {
+        self.workout = workout
+        self.onSelectReport = onSelectReport
+        self.plan = WatchWorkoutBuilder.plan(for: workout,
+                                             displayName: WatchWorkoutBuilder.displayName(for: workout.kind))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(text: "오늘의 훈련")
+                .padding(.top, 28)
+            Text(workout.kind.label)
+                .font(RR.display(26))
+                .foregroundStyle(RR.text)
+                .padding(.top, 8)
+
+            if let metrics {
+                Text(metrics)
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 6)
+            }
+            if let caption = reasonCaption {
+                Text(caption)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 10)
+            }
+
+            if let summary = WatchWorkoutBuilder.summary(for: workout) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("구성")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(RR.text3)
+                    Text(summary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(EdgeInsets(top: 13, leading: 15, bottom: 13, trailing: 15))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .rrCard()
+                .padding(.top, 18)
+            }
+
+            Spacer(minLength: 16)
+
+            if let plan {
+                Button {
+                    showsPreview = true
+                } label: {
+                    Label("Apple Watch로 보내기", systemImage: "applewatch")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(RR.onBrand)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .workoutPreview(plan, isPresented: $showsPreview)
+            } else {
+                Text("이 훈련은 워치로 보낼 수 없어요")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(RR.text3)
+                    .frame(maxWidth: .infinity)
+            }
+
+            Button("리포트에서 보기", action: onSelectReport)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(RR.text2)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 14)
+                .padding(.bottom, 18)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RR.bg)
+        .presentationDetents([.medium, .large])
+    }
+
+    /// "5.0km · 5′00″~5′30″/km" — 값이 없는 조각은 뺀다. 한 점 페이스(템포·인터벌)는 한 값만
+    private var metrics: String? {
+        let km = workout.distanceKm.map { "\(Format.km($0))km" }
+        let pace = workout.paceSecPerKm.map { range in
+            range.lowerBound == range.upperBound
+                ? Format.paceKm(range.lowerBound)
+                : "\(Format.pace(range.lowerBound))~\(Format.paceKm(range.upperBound))"
+        }
+        let parts = [km, pace].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 왜 이 훈련인가 — 배터리 사유는 대기질 상한(나쁨)으로도 생기므로 원인을 단정하지 않는다
+    private var reasonCaption: String? {
+        switch workout.reason {
+        case .battery: "오늘은 가볍게 가는 날이에요"
+        case .hardRecently: "어제·오늘 강도가 높았어요, 회복으로 가시죠"
+        case .lsdDue: "이번 주 롱런이 남았어요"
+        case .qualityDue: "이번 주 퀄리티 세션 차례예요"
+        case .fill: "이번 주 남은 거리를 채워요"
+        case .none: nil
+        }
     }
 }
 

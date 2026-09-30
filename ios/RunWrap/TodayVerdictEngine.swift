@@ -45,6 +45,9 @@ struct TodayVerdict: Equatable {
     let weather: Line
     let session: Line
     let recovery: Line
+    /// 워치 전송용 — 대기질 상한(effectiveTone)을 반영한 오늘의 처방.
+    /// 휴식·완료·매우나쁨·처방 없음이면 nil (#197)
+    let workout: TodayWorkout?
 
     var lines: [Line] { [battery, weather, session, recovery] }
 }
@@ -82,16 +85,18 @@ enum TodayVerdictEngine {
         guard !runs.isEmpty else { return nil }
 
         let (tone, headline) = Self.headline(battery: battery, air: air)
+        let session = sessionLine(runs: runs, battery: battery, guide: guide,
+                                  hasRaceGoal: hasRaceGoal,
+                                  weeklyGoal: weeklyGoal, level: level,
+                                  air: air, now: now)
         return TodayVerdict(tone: tone,
                             badgeLabel: badgeLabel(battery: battery, air: air),
                             headline: headline,
                             battery: batteryLine(battery),
                             weather: weatherLine(weather, air: air, now: now),
-                            session: sessionLine(runs: runs, battery: battery, guide: guide,
-                                                 hasRaceGoal: hasRaceGoal,
-                                                 weeklyGoal: weeklyGoal, level: level,
-                                                 air: air, now: now),
-                            recovery: recoveryLine(runs: runs, now: now))
+                            session: session.line,
+                            recovery: recoveryLine(runs: runs, now: now),
+                            workout: session.workout)
     }
 
     // MARK: - 제목줄
@@ -244,13 +249,18 @@ enum TodayVerdictEngine {
     /// - 나쁨: 배터리 톤이 steady·improving·nil이면 caution으로 낮춰 처방한다 (이지런·"가볍게").
     ///   overload·caution이면 그쪽이 더 보수적이므로 그대로
     /// - 좋음·보통·nil: 변화 없음
+    ///
+    /// 줄과 함께 그 줄이 말하는 처방을 돌려준다 — 화면이 워치 전송용으로 다시 계산하지 않게 (#197).
+    /// 처방은 달리는 날(이지·LSD·템포·인터벌)에만 있고, 나머지는 nil이다
     private static func sessionLine(runs: [RunSummary], battery: BatteryReport?,
                                     guide: TrainingGuide?, hasRaceGoal: Bool,
                                     weeklyGoal: Int, level: RunnerLevel,
-                                    air: AirGrade?, now: Date) -> TodayVerdict.Line {
+                                    air: AirGrade?, now: Date)
+        -> (line: TodayVerdict.Line, workout: TodayWorkout?) {
         let label = "오늘 권장"
-        func line(_ content: TodayVerdict.Line.Content, _ tone: RRTone?) -> TodayVerdict.Line {
-            .init(kind: .session, label: label, content: content, tone: tone)
+        func line(_ content: TodayVerdict.Line.Content,
+                  _ tone: RRTone?) -> (line: TodayVerdict.Line, workout: TodayWorkout?) {
+            (.init(kind: .session, label: label, content: content, tone: tone), nil)
         }
 
         // 실외 활동 자제 등급 — 처방이 없어 유도 문구를 낼 자리여도 이 줄이 이긴다
@@ -281,8 +291,8 @@ enum TodayVerdictEngine {
         case .doneKm:
             return line(.value("이번 주 목표를 채우셨어요"), .improving)
         case .easy, .lsd, .tempo, .interval:
-            return line(.value(sessionPhrase(today, batteryTone: effectiveTone)),
-                        effectiveTone ?? .steady)
+            return (line(.value(sessionPhrase(today, batteryTone: effectiveTone)),
+                         effectiveTone ?? .steady).line, today)
         }
     }
 
