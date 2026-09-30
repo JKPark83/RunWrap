@@ -119,10 +119,7 @@ struct ShareCardView: View {
     }
 
     private var dateLine: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "yyyy.MM.dd (E) HH:mm"
-        return formatter.string(from: run.start)
+        RoutePrivacy.cardDateLine(run.start)
     }
 }
 
@@ -212,10 +209,7 @@ struct PhotoCardView: View {
     }
 
     private var dateLine: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "yyyy.MM.dd (E) HH:mm"
-        return formatter.string(from: run.start)
+        RoutePrivacy.cardDateLine(run.start)
     }
 }
 
