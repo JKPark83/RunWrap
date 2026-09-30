@@ -1,4 +1,5 @@
 import SwiftUI
+import WidgetKit
 
 /// 앱 진입점 + 알림 수명주기 (계획서 M8).
 /// HealthStore를 앱이 소유해 scenePhase 훅에서 재계산→캐시→주간 알림 재예약을 돌린다 —
@@ -33,6 +34,14 @@ struct RunWrapApp: App {
                 .environmentObject(health)
                 .environmentObject(collection)
                 .environmentObject(backup)
+                // 위젯 스냅샷 쓰기 (이슈 #181). vitals를 신호로 삼는 이유: HealthStore.load()는
+                // state = .loaded 다음에 vitals를 채우므로(데모 경로도 state 직후 vitals) $vitals가
+                // 배터리 재료까지 갖춰졌다는 신호다. @Published는 willSet에서 방출하므로
+                // health.vitals(아직 이전 값)가 아니라 클로저 인자 vitals를 쓴다.
+                // 첫 기동·포그라운드 진입·옵저버 콜백이 전부 load()를 거치므로 쓰는 곳은 여기 한 곳뿐이다
+                .onReceive(health.$vitals.dropFirst()) { vitals in
+                    Self.publishWidgetSnapshot(health: health, vitals: vitals)
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
@@ -95,6 +104,25 @@ struct RunWrapApp: App {
                                                  level: Self.currentLevel, now: Date()))
         }
         await NotificationScheduler.rescheduleWeekly()
+    }
+
+    /// 위젯이 그릴 스냅샷을 App Group에 남기고 타임라인을 다시 불러오게 한다 (이슈 #181).
+    /// 데모 모드도 쓴다 — 위젯은 홈의 거울이라 홈에 보이는 수치를 그대로 비춘다. ReportCache(#44)가
+    /// 데모를 막는 이유는 합성 수치가 나중에 예약 발송되는 주간 알림 본문에 실데이터처럼 실리기
+    /// 때문인데, 위젯은 데모를 끄고 앱이 다시 load()하는 즉시 실데이터로 덮인다
+    @MainActor
+    private static func publishWidgetSnapshot(health: HealthStore, vitals: VitalsSnapshot?) {
+        guard case .loaded(let runs) = health.state else { return }
+        if runs.isEmpty {
+            // 기록이 비었으면(삭제·권한 회수) 옛 수치가 위젯에 남지 않게 지운다 (ReportCache #61과 같은 이유)
+            WidgetSnapshotStore.clear()
+        } else {
+            let now = Date()
+            let battery = vitals.flatMap { BatteryEngine.compute(vitals: $0, runs: runs, now: now) }
+            WidgetSnapshotStore.save(WidgetSnapshot.make(battery: battery, runs: runs,
+                                                         level: Self.currentLevel, now: now))
+        }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     /// 저장된 러너 레벨 — 화면의 @AppStorage 기본값과 같이 미설정이면 런린이 (이슈 #124)

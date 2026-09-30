@@ -96,8 +96,9 @@ private extension UIColor {
     }
 }
 
-/// 카드 상태 톤 4가지 — 시안의 배지/강조색 매핑 (과부하·주의·유지·개선)
-enum RRTone {
+/// 카드 상태 톤 4가지 — 시안의 배지/강조색 매핑 (과부하·주의·유지·개선).
+/// String·Codable은 위젯 스냅샷(App Group JSON)에 톤을 싣기 위해서다 (이슈 #181)
+enum RRTone: String, Codable {
     case overload, caution, steady, improving
 
     var color: Color {
