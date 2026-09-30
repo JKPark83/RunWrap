@@ -24,7 +24,8 @@ struct CourseScreen: View {
     @StateObject private var store = CoursePOIStore()
     /// 보급 지점은 100m 단위가 의미를 가져 날씨(km)보다 정밀한 위치를 요청한다
     @StateObject private var location = LocationProvider(accuracy: kCLLocationAccuracyNearestTenMeters)
-    @State private var course: [GeoPoint] = []
+    /// 끊긴 구간마다 나뉜 코스 좌표 — 지도도 세그먼트별로 따로 그어 점프를 잇지 않는다 (#150)
+    @State private var course: [[GeoPoint]] = []
     @Environment(\.openURL) private var openURL
     @State private var courseName = ""
     @State private var result: CourseSupplyEngine.Result?
@@ -50,6 +51,9 @@ struct CourseScreen: View {
     private static let focusMeters: Double = 500
     /// 핀 탭 판정 여유(pt) — 핀(16pt)보다 넉넉해야 손가락으로 짚힌다
     private static let pinTapSlop: CGFloat = 22
+    /// GPX 파일 크기 상한 — 이보다 크면 읽지 않는다. 풀코스 1초 기록도 수 MB라 넉넉하고,
+    /// 수십 MB XML을 통째로 메모리에 올려 파싱하는 일을 막는다 (#147)
+    private static let maxFileBytes = 20 * 1_048_576
 
     private var mode: Mode { result == nil ? .nearby : .course }
 
@@ -89,19 +93,34 @@ struct CourseScreen: View {
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: [.gpx, .xml]) { pick in
             guard case .success(let url) = pick else { return }
-            // fileImporter가 주는 URL은 보안 스코프 밖 접근이 막혀 있다
-            let secured = url.startAccessingSecurityScopedResource()
-            defer { if secured { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else {
-                notice = "파일을 여는 데 실패했어요. 다른 앱에서 내보낸 GPX인지 확인해 주세요."
-                return
+            let maxBytes = Self.maxFileBytes
+            Task {
+                // 파일 읽기는 백그라운드에서 — 큰 GPX가 메인 스레드를 붙잡지 않게 (#147)
+                let read = await Task.detached(priority: .userInitiated) { () -> (data: Data?, tooLarge: Bool) in
+                    // fileImporter가 주는 URL은 보안 스코프 밖 접근이 막혀 있다
+                    let secured = url.startAccessingSecurityScopedResource()
+                    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
+                    guard size <= maxBytes else { return (nil, true) }
+                    return (try? Data(contentsOf: url), false)
+                }.value
+                if read.tooLarge {
+                    notice = "파일이 너무 커요. GPX는 20MB까지만 읽을 수 있어요."
+                    return
+                }
+                guard let data = read.data else {
+                    notice = "파일을 여는 데 실패했어요. 다른 앱에서 내보낸 GPX인지 확인해 주세요."
+                    return
+                }
+                await apply(data: data, name: url.deletingPathExtension().lastPathComponent)
             }
-            apply(data: data, name: url.deletingPathExtension().lastPathComponent)
         }
         .task {
             await store.load()
-            let restored = restoreLastCourse()
-            analyze()
+            // 탭 재진입마다 .task가 다시 돈다 — 이미 분석한 코스가 있으면 복원·재분석을 건너뛴다 (#147)
+            guard result == nil else { return }
+            let restored = await restoreLastCourse()
+            await analyze()
             // 되살린 코스가 분석되지 않으면 저장본을 지운다 — 재진입마다 같은 실패를 되풀이하지 않게 (감사 M12).
             // POI 로드 실패로 분석을 못 한 경우는 코스 탓이 아니니 남긴다
             if restored, result == nil, case .loaded = store.state {
@@ -351,8 +370,8 @@ struct CourseScreen: View {
 
     // MARK: 코스 적용 · 분석
 
-    private func apply(data: Data, name: String) {
-        let points = GPXParser.parse(data)
+    private func apply(data: Data, name: String) async {
+        let points = await Task.detached(priority: .userInitiated) { GPXParser.parseSegments(data) }.value
         guard !points.isEmpty else {
             notice = "이 파일에는 경로가 없어요. 지점(웨이포인트)만 있는 GPX일 수 있으니 트랙이 담긴 파일로 부탁드려요."
             return
@@ -362,7 +381,11 @@ struct CourseScreen: View {
         // POI가 아직 로드 중이면 분석이 미뤄진 것뿐이니(위 .task가 로드 뒤 다시 분석) 코스 탓으로 보지 않고 저장한다
         var analyzed: CourseSupplyEngine.Result?
         if case .loaded(let file) = store.state {
-            analyzed = CourseSupplyEngine.analyze(course: points, pois: file.pois)
+            // 매칭 계산은 백그라운드에서 (#147)
+            let pois = file.pois
+            analyzed = await Task.detached(priority: .userInitiated) {
+                CourseSupplyEngine.analyze(segments: points, pois: pois)
+            }.value
             guard analyzed != nil else {
                 notice = Self.shortCourseNotice
                 return
@@ -377,10 +400,17 @@ struct CourseScreen: View {
     }
 
     /// 되살린 코스를 분석한다 — `.task` 복원 경로 전용. 올린 파일은 `apply`가 분석을 먼저 해 본다
-    private func analyze() {
+    private func analyze() async {
         guard case .loaded(let file) = store.state, !course.isEmpty else { return }
-        if let analyzed = CourseSupplyEngine.analyze(course: course, pois: file.pois) {
-            applyResult(analyzed)
+        // 매칭 계산은 백그라운드에서 (#147). 기다리는 사이 코스가 바뀌었으면(새 파일·지우기) 옛 결과는 버린다
+        let analyzed = course
+        let pois = file.pois
+        let fresh = await Task.detached(priority: .userInitiated) {
+            CourseSupplyEngine.analyze(segments: analyzed, pois: pois)
+        }.value
+        guard course == analyzed else { return }
+        if let fresh {
+            applyResult(fresh)
         } else {
             result = nil
             selected = nil
@@ -393,16 +423,21 @@ struct CourseScreen: View {
         result = analyzed
         selected = nil
         // 새 코스가 통째로 보이게 카메라를 잡는다 (예전 Map(initialPosition:) + .id 리셋을 대신한다)
-        camera = .region(RouteSnapshot.region(for: courseCoordinates))
+        camera = .region(RouteSnapshot.region(for: courseCoordinates.flatMap { $0 }))
     }
 
     private static let shortCourseNotice = "코스가 500m보다 짧아서 분석을 접었어요. 이 정도면 보급 없이도 완주하실 거라 믿어요."
 
     /// 저장된 마지막 코스를 되살린다 — 되살렸으면 true
-    private func restoreLastCourse() -> Bool {
-        guard course.isEmpty, let data = try? Data(contentsOf: Self.lastCourseURL) else { return false }
-        let points = GPXParser.parse(data)
-        guard !points.isEmpty else { return false }
+    private func restoreLastCourse() async -> Bool {
+        guard course.isEmpty else { return false }
+        let url = Self.lastCourseURL
+        let points = await Task.detached(priority: .userInitiated) { () -> [[GeoPoint]] in
+            guard let data = try? Data(contentsOf: url) else { return [] }
+            return GPXParser.parseSegments(data)
+        }.value
+        // 읽는 사이 사용자가 새 코스를 올렸으면 그쪽이 우선이다
+        guard !points.isEmpty, course.isEmpty else { return false }
         course = points
         courseName = lastCourseName
         return true
@@ -420,9 +455,9 @@ struct CourseScreen: View {
         if case .located = location.state { searchNearby() } else { location.request() }
     }
 
-    /// 코스 폴리라인 좌표 — 지도와 카메라 리셋이 같은 값을 본다
-    private var courseCoordinates: [CLLocationCoordinate2D] {
-        course.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+    /// 코스 폴리라인 좌표(세그먼트별) — 지도와 카메라 리셋이 같은 값을 본다
+    private var courseCoordinates: [[CLLocationCoordinate2D]] {
+        course.map { $0.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) } }
     }
 
     private static var lastCourseURL: URL {
@@ -437,9 +472,11 @@ struct CourseScreen: View {
         ZStack(alignment: .bottomLeading) {
             MapReader { proxy in
                 Map(position: $camera, interactionModes: [.pan, .zoom]) {
-                    MapPolyline(coordinates: courseCoordinates)
-                        .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
-                                                             lineCap: .round, lineJoin: .round))
+                    ForEach(Array(courseCoordinates.enumerated()), id: \.offset) { _, coordinates in
+                        MapPolyline(coordinates: coordinates)
+                            .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
+                                                                 lineCap: .round, lineJoin: .round))
+                    }
                     ForEach(Array(visibleMatches(result).enumerated()), id: \.offset) { _, match in
                         Annotation("", coordinate: CLLocationCoordinate2D(latitude: match.poi.lat,
                                                                          longitude: match.poi.lon)) {
