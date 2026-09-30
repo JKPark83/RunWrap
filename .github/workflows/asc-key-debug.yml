@@ -55,6 +55,30 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci build.keychain
           security list-keychains -d user -s build.keychain login.keychain
           security find-identity -v -p codesigning build.keychain
+      - name: 번들 ID capability 점검 (App Group 배정 여부)
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          pip install --quiet "pyjwt[crypto]"
+          python3 - <<'PY'
+          import os, time, json, urllib.request, urllib.error, jwt
+          key = open(os.path.expanduser(f"~/.appstoreconnect/private_keys/AuthKey_{os.environ['ASC_KEY_ID']}.p8")).read()
+          now = int(time.time())
+          tok = jwt.encode({"iss": os.environ["ASC_ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"}, key, algorithm="ES256", headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
+          def get(p):
+              try:
+                  with urllib.request.urlopen(urllib.request.Request("https://api.appstoreconnect.apple.com/v1"+p, headers={"Authorization":"Bearer "+tok})) as r: return r.status, json.loads(r.read())
+              except urllib.error.HTTPError as e: return e.code, e.read().decode()[:300]
+          st, b = get("/bundleIds?limit=200")
+          for x in b["data"]:
+              if x["attributes"]["identifier"].startswith("com.jkpark.runwrap"):
+                  st, caps = get(f"/bundleIds/{x['id']}/bundleIdCapabilities")
+                  print(x["attributes"]["identifier"], x["id"])
+                  for c in caps["data"]:
+                      print("   ", c["attributes"]["capabilityType"], json.dumps(c["attributes"].get("settings"))[:300])
+          print("appGroups endpoint:", get("/appGroups?limit=5")[0])
+          PY
       - name: REST로 배포 프로파일 생성·설치
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
