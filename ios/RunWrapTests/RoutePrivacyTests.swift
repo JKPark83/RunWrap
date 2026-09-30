@@ -63,4 +63,75 @@ struct RoutePrivacyTests {
         #expect(route.count == 26)
         #expect(route.map(\.latitude) == snapshot)
     }
+
+    // MARK: - 가림 반경 선택 (이슈 #191)
+
+    @Test("반경 500m — 직선 1.5km 경로의 양끝 500m가 잘리고 첫·끝 좌표가 500~1000m 구간 안")
+    func trimsFiveHundredMeters() throws {
+        // 30m 간격 0~1500m(51개) → 앞 500m 이상·뒤 500m 이상인 510, 540, …, 990m = 17개
+        // (경계 500·1000m에 좌표가 걸리지 않게 30m 간격 — CLLocation 거리 오차 대비)
+        let route = straight(length: 1_500, step: 30)
+        let trimmed = RoutePrivacy.trimmed(route, meters: RoutePrivacy.Radius.m500.meters)
+
+        #expect(trimmed.count == 17)
+        let first = try #require(trimmed.first)
+        let last = try #require(trimmed.last)
+        let startToFirst = distance(route[0], first)
+        let startToLast = distance(route[0], last)
+        #expect(startToFirst >= 500 && startToFirst <= 1_000)
+        #expect(startToLast >= 500 && startToLast <= 1_000)
+        #expect(distance(last, route[route.count - 1]) >= 500)
+    }
+
+    @Test("반경 1km — 1.5km 경로는 양끝을 자르면 남는 게 없어 빈 배열")
+    func oneKilometerRadiusEmptiesShortRoute() {
+        // 앞 1000m 이상이면서 뒤 1000m 이상인 지점이 없다 (총 1.5km)
+        let route = straight(length: 1_500, step: 30)
+        #expect(RoutePrivacy.trimmed(route, meters: RoutePrivacy.Radius.m1000.meters).isEmpty)
+    }
+
+    @Test("저장값 복원 — 선택지에 있으면 그 반경, 없거나 잘못된 값이면 기본 300m")
+    func radiusFromRawValue() {
+        #expect(RoutePrivacy.radius(rawValue: 500) == .m500)
+        #expect(RoutePrivacy.radius(rawValue: 1_000) == .m1000)
+        #expect(RoutePrivacy.radius(rawValue: 0) == .m300)     // 저장값 없음
+        #expect(RoutePrivacy.radius(rawValue: 700) == .m300)   // 선택지에 없는 값
+        #expect(RoutePrivacy.defaultRadius == .m300)
+    }
+
+    @Test("반경 라벨 — 300m·500m·1km")
+    func radiusLabels() {
+        #expect(RoutePrivacy.Radius.allCases.map(\.label) == ["300m", "500m", "1km"])
+        #expect(RoutePrivacy.Radius.m1000.meters == 1_000)
+    }
+
+    // MARK: - 시작 시각 흐리기 (이슈 #191)
+
+    /// KST 고정 달력 — 실행 기기 시간대와 무관하게 결정론적으로
+    private var kst: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+        return calendar
+    }
+
+    private func kstDate(_ iso: String) throws -> Date {
+        try #require(ISO8601DateFormatter().date(from: iso))
+    }
+
+    @Test("시간대 경계 — 아침 5~11시, 낮 11~17시, 저녁 17~21시, 밤 21~5시")
+    func timeOfDayBoundaries() throws {
+        #expect(RoutePrivacy.timeOfDay(try kstDate("2026-09-30T05:00:00+09:00"), calendar: kst) == "아침")
+        #expect(RoutePrivacy.timeOfDay(try kstDate("2026-09-30T10:59:00+09:00"), calendar: kst) == "아침")
+        #expect(RoutePrivacy.timeOfDay(try kstDate("2026-09-30T11:00:00+09:00"), calendar: kst) == "낮")
+        #expect(RoutePrivacy.timeOfDay(try kstDate("2026-09-30T17:00:00+09:00"), calendar: kst) == "저녁")
+        #expect(RoutePrivacy.timeOfDay(try kstDate("2026-09-30T21:00:00+09:00"), calendar: kst) == "밤")
+        #expect(RoutePrivacy.timeOfDay(try kstDate("2026-09-30T04:59:00+09:00"), calendar: kst) == "밤")
+    }
+
+    @Test("카드 날짜 줄 — 분 단위 시각 대신 날짜·요일·시간대")
+    func cardDateLineHidesMinutes() throws {
+        // 2026-09-30은 수요일, 06:10 → 아침
+        let date = try kstDate("2026-09-30T06:10:00+09:00")
+        #expect(RoutePrivacy.cardDateLine(date, calendar: kst) == "2026.09.30 (수) 아침")
+    }
 }

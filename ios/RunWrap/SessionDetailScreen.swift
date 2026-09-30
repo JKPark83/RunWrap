@@ -694,8 +694,10 @@ private struct ShareSheetView: View {
     @State private var photo: UIImage?
     @State private var photoVersion = 0
     @State private var routeImage: UIImage?
-    /// 경로를 통째로 숨길지 — 다음 공유 때도 기억한다. 양끝 300m 트림은 켜고 끔과 무관하게 항상 적용 (이슈 #84)
+    /// 경로를 통째로 숨길지 — 다음 공유 때도 기억한다. 양끝 트림은 켜고 끔과 무관하게 항상 적용 (이슈 #84)
     @AppStorage("share.hidesRoute") private var hidesRoute = false
+    /// 양끝을 가릴 반경(300/500/1000m) — 다음 공유 때도 기억한다 (이슈 #191)
+    @AppStorage(RoutePrivacy.radiusKey) private var trimRadiusRaw = RoutePrivacy.defaultRadius.rawValue
     @State private var rendered: UIImage?
     @State private var saveMessage: String?
     /// 미리보기와 렌더 이미지가 같은 모드로 그려지도록 명시적으로 주입한다
@@ -717,6 +719,8 @@ private struct ShareSheetView: View {
             // 사진 카드는 경로를 그리지 않으므로 미니멀 카드에서만 보인다
             if style == .minimal {
                 hideRouteRow
+                    .padding(.horizontal, 40)
+                radiusRow
                     .padding(.horizontal, 40)
             }
 
@@ -747,11 +751,16 @@ private struct ShareSheetView: View {
         .background(RR.bg.ignoresSafeArea())
         .presentationDragIndicator(.visible)
         // 시트를 연 뒤 경로가 채워져도 다시 만들도록 route.count를 id로 건다 (이슈 #84)
-        .task(id: route.count) {
-            guard routeImage == nil, route.count >= 2 else { return }
-            // 집 근처가 드러나지 않게 시작·끝 300m를 잘라낸 경로만 그린다 (이슈 #84)
-            routeImage = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route),
+        // 가림 반경이 바뀌어도 다시 그린다 (이슈 #191)
+        .task(id: "\(route.count)-\(trimRadiusRaw)") {
+            guard route.count >= 2 else { return }
+            routeImage = nil
+            // 집 근처가 드러나지 않게 시작·끝을 선택한 반경만큼 잘라낸 경로만 그린다 (이슈 #84·#191)
+            let image = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route, meters: radius.meters),
                                                   size: CGSize(width: 360, height: 240))
+            // 스냅샷은 취소를 무시하고 끝나므로, 반경이 바뀐 뒤 늦게 온 옛 반경 이미지를 버린다
+            guard !Task.isCancelled else { return }
+            routeImage = image
         }
         .task(id: renderKey) {
             rendered = ShareCardRenderer.render(currentCard)
@@ -767,9 +776,13 @@ private struct ShareSheetView: View {
         }
     }
 
-    /// 스타일·사진·경로 이미지·경로 숨김이 바뀔 때만 다시 렌더한다
+    /// 스타일·사진·경로 이미지·경로 숨김·가림 반경이 바뀔 때만 다시 렌더한다
     private var renderKey: String {
-        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)-\(hidesRoute)"
+        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)-\(hidesRoute)-\(trimRadiusRaw)"
+    }
+
+    private var radius: RoutePrivacy.Radius {
+        RoutePrivacy.radius(rawValue: trimRadiusRaw)
     }
 
     private var hideRouteRow: some View {
@@ -778,7 +791,7 @@ private struct ShareSheetView: View {
                 Text("경로 숨기기")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(RR.text)
-                Text("집 근처 300m는 항상 가려져요")
+                Text("집 근처 \(radius.label)는 항상 가려져요")
                     .font(.system(size: 11.5))
                     .foregroundStyle(RR.text3)
             }
@@ -787,6 +800,23 @@ private struct ShareSheetView: View {
                 .labelsHidden()
                 .tint(RR.brand)
         }
+    }
+
+    /// 가림 반경 선택 — 경로를 통째로 숨기면 의미가 없어 흐리게 막는다 (이슈 #191)
+    private var radiusRow: some View {
+        HStack(spacing: 12) {
+            Text("가릴 반경")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(RR.text)
+            Spacer(minLength: 8)
+            Picker("가릴 반경", selection: $trimRadiusRaw) {
+                ForEach(RoutePrivacy.Radius.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 190)
+        }
+        .disabled(hidesRoute)
+        .opacity(hidesRoute ? 0.5 : 1)
     }
 
     @ViewBuilder
