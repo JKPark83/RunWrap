@@ -59,6 +59,7 @@ struct StatsScreen: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
             }
+            .accessibilityLabel("이전 달")
             .disabled(index >= months.count - 1)
 
             Spacer()
@@ -76,6 +77,7 @@ struct StatsScreen: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
             }
+            .accessibilityLabel("다음 달")
             .disabled(index <= 0)
         }
         .padding(8)
@@ -235,10 +237,12 @@ struct StatsScreen: View {
                     .padding(.vertical, 28)
                     .rrCard()
             } else {
+                // 행마다 전체 주간 리포트를 다시 돌리지 않는다 — 목록 전체에 한 번만 (이슈 #158)
+                let context = weeklyOverloadContext
                 VStack(spacing: 0) {
                     ForEach(Array(stats.runs.enumerated()), id: \.element.id) { index, run in
                         NavigationLink {
-                            SessionDetailScreen(run: run, weeklyContext: weeklyContext(for: run))
+                            SessionDetailScreen(run: run, weeklyContext: context)
                         } label: {
                             sessionRow(run)
                         }
@@ -306,8 +310,9 @@ struct StatsScreen: View {
         .contentShape(Rectangle())
     }
 
-    /// 세션 상세의 맥락 배지용 — 이번 주 리포트가 과부하일 때만 전달
-    private func weeklyContext(for run: RunSummary) -> WeeklyReport.DistanceCard? {
+    /// 세션 상세의 맥락 배지용 — 이번 주 리포트가 과부하일 때만 전달.
+    /// 세션과 무관한 값이라 목록을 그릴 때 한 번만 계산한다 (이슈 #158)
+    private var weeklyOverloadContext: WeeklyReport.DistanceCard? {
         guard case .loaded(let runs) = health.state,
               let card = ReportEngine().weeklyReport(from: runs).distance,
               card.tone == .overload else { return nil }

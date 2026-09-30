@@ -72,6 +72,7 @@ struct WeeklyBarsChart: View {
                                     .foregroundStyle(week.isCurrent ? currentColor : RR.text3)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.7)
+                                    .accessibilityHidden(true)   // 막대 요소의 값으로 읽는다
                             }
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(week.isCurrent ? currentColor : RR.barFill)
@@ -83,6 +84,10 @@ struct WeeklyBarsChart: View {
                         .onTapGesture {
                             selected = selected == week.index ? nil : week.index
                         }
+                        // VoiceOver: 막대 하나 = 요소 하나, 콜아웃과 같은 주·수치 문자열 (이슈 #160)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(week.label)
+                        .accessibilityValue(showsValues ? valueText(week.km) : "")
                     }
                 }
 
@@ -120,6 +125,7 @@ struct WeeklyBarsChart: View {
                 }
             }
             .padding(.top, 8)
+            .accessibilityHidden(true)   // 주 라벨은 막대 요소의 라벨로 읽는다 (이슈 #160)
         }
         .frame(width: width)
     }
@@ -166,6 +172,9 @@ struct ChartCallout: View {
 struct AcwrGauge: View {
     let ratio: Double
 
+    /// 안전 구간 표기 — 게이지 라벨과 VoiceOver 값이 같이 쓴다
+    private static let safeZoneText = "0.8–1.3 안전"
+
     // 시안 좌표계 320×152 기준: 중심 (160,124), 반지름 100
     private let designSize = CGSize(width: 320, height: 152)
 
@@ -192,7 +201,7 @@ struct AcwrGauge: View {
                     .font(.system(size: 10 * s, design: .monospaced))
                     .foregroundStyle(RR.text3)
                     .position(x: 60 * s, y: 138 * s)
-                Text("0.8–1.3 안전")
+                Text(Self.safeZoneText)
                     .font(.system(size: 10 * s, design: .monospaced))
                     .foregroundStyle(RR.pos)
                     .position(x: 138 * s, y: 54 * s)  // 초록 호와 겹치지 않는 오목면 안쪽
@@ -203,6 +212,10 @@ struct AcwrGauge: View {
             }
         }
         .aspectRatio(designSize.width / designSize.height, contentMode: .fit)
+        // VoiceOver: 게이지 전체를 한 요소로 — 현재 값 + 안전 구간 (이슈 #160)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("ACWR")
+        .accessibilityValue(String(format: "%.2f", ratio) + ", " + Self.safeZoneText)
     }
 
     /// 값 → 각도: 0.5가 왼쪽(180°), 2.0이 오른쪽(360°)
@@ -310,6 +323,25 @@ struct TrendLineChart: View {
                 .foregroundStyle(RR.text3)
             }
         }
+        // VoiceOver: 차트 전체를 한 요소로 — 첫 점 → 마지막 점 요약 (이슈 #160)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("추세")
+        .accessibilityValue(Self.accessibilitySummary(points: points, labels: pointLabels,
+                                                      valueText: valueText))
+    }
+
+    /// VoiceOver 요약 — "8월 1째주 12.3에서 8월 4째주 14.1". 점 하나면 그 점만, 없으면 빈 문자열.
+    /// 시기·수치 문자열은 탭 콜아웃과 같은 `pointLabels`·`valueText`를 쓴다.
+    static func accessibilitySummary(points: [Double], labels: [String]?,
+                                     valueText: (Double) -> String) -> String {
+        func describe(_ index: Int) -> String {
+            let value = valueText(points[index])
+            guard let labels, labels.indices.contains(index) else { return value }
+            return "\(labels[index]) \(value)"
+        }
+        guard let last = points.indices.last else { return "" }
+        guard last > 0 else { return describe(0) }
+        return "\(describe(0))에서 \(describe(last))"
     }
 
     /// 선택 표식 — 세로 가이드선 + 링 도트 + 콜아웃
@@ -447,6 +479,10 @@ struct SplitBarsChart: View {
                         .onTapGesture {
                             selected = selected == split.index ? nil : split.index
                         }
+                        // VoiceOver: 막대 하나 = 요소 하나, 콜아웃과 같은 구간·페이스 문자열 (이슈 #160)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(split.index)km")
+                        .accessibilityValue(Format.pace(split.paceSecPerKm))
                 }
             }
 
@@ -486,6 +522,7 @@ struct SplitBarsChart: View {
                     }
             }
         }
+        .accessibilityHidden(true)   // km 눈금은 막대 요소의 라벨로 읽는다 (이슈 #160)
     }
 
     /// 라벨이 서로 붙지 않는 최소 간격 (30pt 확보)
