@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// 설정 — 프로필(목적·레벨) 변경. 진입: 홈 헤더의 기어 아이콘 (계획서 M2).
@@ -881,6 +882,7 @@ struct SettingsScreen: View {
 /// 자연어 한 줄로 폼을 채우는 지름길을 얹는다. 자연어 결과는 폼을 채울 뿐 바로 저장하지
 /// 않는다 — 3B 온디바이스 모델의 오독은 사용자가 저장 전에 잡는다. 못 쓰는 환경이면
 /// 자유 입력 UI 자체를 노출하지 않는다 (이슈 #35 폴백 규칙).
+/// 완주증 사진(사진 앱·카메라)으로 채우는 지름길은 온디바이스 Vision이라 모든 기기에 노출한다 (이슈 #192).
 private struct RaceRecordInputSheet: View {
     let onSave: (RaceRecord) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -890,6 +892,11 @@ private struct RaceRecordInputSheet: View {
     @State private var freeText = ""
     @State private var isParsing = false
     @State private var parseFailed = false
+    // 완주증 OCR (이슈 #192) — 사진은 읽기만 하고 어디에도 저장하지 않는다
+    @State private var certificateItem: PhotosPickerItem?
+    @State private var showsCamera = false
+    @State private var isReadingCertificate = false
+    @State private var certificateFailed = false
 
     /// 입력 가능한 날짜 범위 — 엔진의 최대 나이 가드(2년)와 같은 하한
     private var dateRange: ClosedRange<Date> {
@@ -907,6 +914,7 @@ private struct RaceRecordInputSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    certificateSection
                     if RaceResultParser.isAvailable {
                         freeTextSection
                     }
@@ -945,6 +953,19 @@ private struct RaceRecordInputSheet: View {
             .background(RR.bg.ignoresSafeArea())
             .navigationTitle("대회 기록 추가")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: certificateItem) { _, item in
+                guard let item else { return }
+                fillFromCertificate {
+                    guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
+                    return UIImage(data: data).flatMap(uprightCGImage)
+                }
+            }
+            .fullScreenCover(isPresented: $showsCamera) {
+                CameraPicker { image in
+                    fillFromCertificate { uprightCGImage(image) }
+                }
+                .ignoresSafeArea()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("닫기") { dismiss() }
@@ -960,6 +981,78 @@ private struct RaceRecordInputSheet: View {
                 }
             }
         }
+    }
+
+    /// 완주증 지름길 (이슈 #192) — 사진 앱 선택은 권한이 필요 없고, 촬영은 카메라가 있는 기기에서만 보인다
+    private var certificateSection: some View {
+        field(title: "완주증 사진으로 채우기") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    PhotosPicker(selection: $certificateItem, matching: .images) {
+                        Text("사진 선택")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(RR.brand)
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button {
+                            showsCamera = true
+                        } label: {
+                            Text("촬영")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(RR.brand)
+                    }
+                    if isReadingCertificate {
+                        ProgressView()
+                    }
+                }
+                .disabled(isReadingCertificate)
+                if certificateFailed {
+                    Text("완주증을 읽지 못했어요 — 아래에서 직접 입력해 주세요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Text("사진은 기기에서만 읽고 저장하지 않아요")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+        }
+    }
+
+    /// 완주증 이미지 → Vision OCR → 폼 프리필. 이미지를 못 얻거나 못 읽으면 실패 안내만 한다
+    private func fillFromCertificate(_ loadImage: @escaping () async -> CGImage?) {
+        isReadingCertificate = true
+        certificateFailed = false
+        Task {
+            let parsed: RaceResultParser.Parsed?
+            if let image = await loadImage() {
+                parsed = await FinisherCertificateReader.read(image)
+            } else {
+                parsed = nil
+            }
+            isReadingCertificate = false
+            // 같은 사진을 다시 골라도 onChange가 불리도록 선택을 비운다
+            certificateItem = nil
+            guard let parsed else {
+                certificateFailed = true
+                return
+            }
+            apply(parsed)
+        }
+    }
+
+    /// 회전 정보(EXIF)를 반영한 CGImage — cgImage는 센서 원본 방향이라 세로로 찍은 사진이 옆으로 누운 채
+    /// Vision에 들어간다. 방향이 .up이 아닐 때만 1배율로 다시 그려 똑바로 세운다
+    private func uprightCGImage(_ image: UIImage) -> CGImage? {
+        guard image.imageOrientation != .up else { return image.cgImage }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: image.size, format: format)
+            .image { _ in image.draw(at: .zero) }.cgImage
     }
 
     /// 자연어 지름길 — 파싱 성공 시 아래 폼을 채우고, 실패는 조용히 안내만 한다
@@ -1005,11 +1098,16 @@ private struct RaceRecordInputSheet: View {
                 parseFailed = true
                 return
             }
-            if let parsedRace = parsed.race { race = parsedRace }
-            if let sec = parsed.timeSec { timeSec = Int(sec) }
-            if let parsedDate = parsed.date {
-                date = min(max(parsedDate, dateRange.lowerBound), dateRange.upperBound)
-            }
+            apply(parsed)
+        }
+    }
+
+    /// 파싱 결과로 폼을 채운다 — 확신 없는 필드(nil)는 기존 값을 유지한다 (자연어·완주증 공용)
+    private func apply(_ parsed: RaceResultParser.Parsed) {
+        if let parsedRace = parsed.race { race = parsedRace }
+        if let sec = parsed.timeSec { timeSec = Int(sec) }
+        if let parsedDate = parsed.date {
+            date = min(max(parsedDate, dateRange.lowerBound), dateRange.upperBound)
         }
     }
 
@@ -1047,6 +1145,42 @@ private struct RaceRecordInputSheet: View {
                 .padding(.horizontal, 4)
             VStack(spacing: 0) { content() }
                 .rrCard()
+        }
+    }
+}
+
+// MARK: - 완주증 촬영 (이슈 #192)
+
+/// SwiftUI에 카메라 촬영 API가 없어 UIImagePickerController를 여기서만 쓴다 (UIPasteboard와 같은 예외).
+/// 찍은 사진은 콜백으로 OCR에 넘길 뿐 사진 앱이나 디스크에 저장하지 않는다
+private struct CameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: CameraPicker
+
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { parent.onCapture(image) }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }

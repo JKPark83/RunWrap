@@ -110,6 +110,9 @@ OTHER PERMISSIONS
 - Calendars (write-only): asked only when the user taps "캘린더에 추가" on a race
   detail screen, to save that one race as a calendar event. The app cannot read
   existing events. Declining it only shows a hint to allow it in Settings.
+- Camera: only when the user taps "촬영" in "대회 기록 추가" to read a finisher
+  certificate on-device (Vision). The photo is not stored or uploaded. Optional;
+  the photo picker needs no permission.
 
 LOCALIZATION
 
