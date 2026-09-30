@@ -22,6 +22,11 @@ struct SettingsScreen: View {
     /// 대회 기록은 CloudKit 진행도 스냅샷에 포함된다 (이슈 #118) — 추가·삭제 직후 백업을 예약한다
     @EnvironmentObject private var backup: ProgressBackupStore
     @State private var isAddingRecord = false
+    /// 러닝화 (이슈 #171) — 루트가 쥐고 여기서 등록·편집한다. 편집 시트 대상(신규면 아직 목록에 없는 신발)
+    @EnvironmentObject private var shoes: ShoeStore
+    @State private var editingShoe: Shoe?
+    /// 시트를 열 때 정한다 — 저장 직후 목록에 들어가도 닫히는 동안 '편집'으로 바뀌지 않게
+    @State private var editingShoeIsNew = false
     // 알림 (계획서 M8) — 기본값은 NotificationScheduler.rescheduleWeekly의 폴백과 같아야 한다
     @AppStorage(NotifyKey.workoutEnabled) private var workoutNotify = false
     @AppStorage(NotifyKey.weeklyEnabled) private var weeklyNotify = false
@@ -125,6 +130,13 @@ struct SettingsScreen: View {
                     scheduleBackup()
                 }
             }
+            // 러닝화 등록·편집 (이슈 #171) — 신규와 편집이 같은 시트를 쓴다
+            .sheet(item: $editingShoe) { shoe in
+                ShoeEditSheet(shoe: shoe, isNew: editingShoeIsNew,
+                              isDefault: editingShoeIsNew ? shoes.defaultShoeID == nil : shoes.defaultShoeID == shoe.id,
+                              onSave: saveShoe,
+                              onDelete: { shoes.remove(shoe) })
+            }
     }
 
     private var content: some View {
@@ -191,6 +203,11 @@ struct SettingsScreen: View {
                         ForEach(raceRecords.records) { recordRow($0) }
                         addRecordRow
                     }
+                }
+                // 러닝화 (이슈 #171) — 누적 거리로 교체 시점을 알린다. 은퇴한 신발은 흐리게 목록 끝
+                section(title: "러닝화") {
+                    ForEach(shoes.shoes.filter { !$0.isRetired } + shoes.shoes.filter(\.isRetired)) { shoeRow($0) }
+                    addShoeRow
                 }
                 // 심박 기준 (이슈 #56) — 존·대회 노력도·세션 상세가 모두 이 값을 쓴다. 끄면 추정값으로 돌아간다
                 section(title: "심박 기준") {
@@ -494,6 +511,106 @@ struct SettingsScreen: View {
         .buttonStyle(.plain)
     }
 
+    /// 러닝화 한 켤레 — 이름·기본 배지, "누적 512 km / 600 km", 교체 기준 대비 진행 바 (이슈 #171)
+    private func shoeRow(_ shoe: Shoe) -> some View {
+        let mileage = shoes.mileage(of: shoe, runs: loadedRuns)
+        let progress = ShoeEngine.progress(mileageKm: mileage, replaceKm: shoe.replaceKm)
+        return Button {
+            editingShoeIsNew = false
+            editingShoe = shoe
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(shoe.name)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(RR.text)
+                            .lineLimit(1)
+                        if shoes.defaultShoeID == shoe.id {
+                            Text("기본")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(RR.brand)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2.5)
+                                .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+                        if shoe.isRetired {
+                            Text("은퇴")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(RR.text3)
+                        }
+                    }
+                    Text("누적 \(Int(mileage.rounded())) km / \(Int(shoe.replaceKm)) km")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(RR.barFill)
+                            Capsule().fill(ShoeEngine.tone(progress: progress).color)
+                                .frame(width: geo.size.width * progress)
+                        }
+                    }
+                    .frame(height: 4)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(shoe.isRetired ? 0.45 : 1)
+    }
+
+    /// 러닝화 추가 버튼 행 — 대회 기록 추가 행과 같은 모양
+    private var addShoeRow: some View {
+        Button {
+            editingShoeIsNew = true
+            editingShoe = Shoe(name: "", createdAt: Date())
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("러닝화 추가")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.brand)
+                    Text("기본 신발로 정하면 새 러닝이 자동으로 쌓이고, 교체할 때가 되면 알려드려요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 러닝화 누적 거리의 재료 — 목록이 아직 없으면 등록 전 거리만 보인다
+    private var loadedRuns: [RunSummary] {
+        if case .loaded(let runs) = health.state { runs } else { [] }
+    }
+
+    /// 편집 시트 저장 — 신규면 추가, 아니면 갱신. 기본 지정이 바뀌었으면 지금 목록으로 자동 배정까지 맞춘다
+    private func saveShoe(_ shoe: Shoe, isDefault: Bool) {
+        if shoes.shoes.contains(where: { $0.id == shoe.id }) {
+            shoes.update(shoe)
+        } else {
+            shoes.add(shoe)
+        }
+        if isDefault {
+            shoes.setDefault(shoe.id)
+        } else if shoes.defaultShoeID == shoe.id {
+            shoes.setDefault(nil)
+        }
+        shoes.syncAssignments(runs: loadedRuns)
+    }
+
     /// "2025년 10월 12일" — 기기 로케일과 무관하게 한국어 고정 (사용자 문자열 규칙)
     fileprivate static func dateLabel(_ date: Date) -> String {
         let comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
@@ -793,6 +910,162 @@ private struct RaceRecordInputSheet: View {
         .pickerStyle(.wheel)
         .frame(height: 108)
         .clipped()
+    }
+
+    private func field(title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(RR.text2)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) { content() }
+                .rrCard()
+        }
+    }
+}
+
+// MARK: - 러닝화 편집 시트 (이슈 #171)
+
+/// 이름·등록 전 누적 거리·교체 기준·기본 지정·은퇴·삭제. 신규 등록에서는 은퇴·삭제를 숨긴다
+private struct ShoeEditSheet: View {
+    let isNew: Bool
+    let onSave: (Shoe, Bool) -> Void
+    let onDelete: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var shoe: Shoe
+    @State private var isDefault: Bool
+    @State private var confirmsDelete = false
+
+    init(shoe: Shoe, isNew: Bool, isDefault: Bool,
+         onSave: @escaping (Shoe, Bool) -> Void, onDelete: @escaping () -> Void) {
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _shoe = State(initialValue: shoe)
+        _isDefault = State(initialValue: isDefault)
+    }
+
+    private var trimmedName: String {
+        shoe.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    field(title: "이름") {
+                        TextField("예: 페가수스 41", text: $shoe.name)
+                            .font(.system(size: 15))
+                            .textFieldStyle(.plain)
+                            .padding(14)
+                    }
+                    field(title: "거리") {
+                        stepperRow(title: "등록 전 누적 \(Int(shoe.startKm)) km",
+                                   caption: "앱에 등록하기 전에 이미 달린 거리예요",
+                                   value: $shoe.startKm, range: 0...2_000, step: 10)
+                        Divider().overlay(RR.line)
+                        stepperRow(title: "교체 기준 \(Int(shoe.replaceKm)) km",
+                                   caption: "누적이 이 거리를 넘으면 홈에서 알려드려요",
+                                   value: $shoe.replaceKm, range: 300...1_200, step: 50)
+                    }
+                    field(title: "상태") {
+                        toggleRow(label: "기본 신발로 지정",
+                                  caption: "새 러닝이 자동으로 이 신발에 기록돼요",
+                                  isOn: $isDefault)
+                            .disabled(shoe.isRetired)
+                            .opacity(shoe.isRetired ? 0.45 : 1)
+                        if !isNew {
+                            Divider().overlay(RR.line)
+                            toggleRow(label: "은퇴",
+                                      caption: "목록 끝으로 옮기고 러닝 배정 후보에서 빼요",
+                                      isOn: $shoe.isRetired)
+                        }
+                    }
+                    if !isNew {
+                        Button(role: .destructive) { confirmsDelete = true } label: {
+                            Text("러닝화 삭제")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(RR.dang)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.plain)
+                        .rrCard()
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 26)
+            }
+            .background(RR.bg.ignoresSafeArea())
+            .navigationTitle(isNew ? "러닝화 추가" : "러닝화 편집")
+            .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: shoe.isRetired) { _, retired in
+                // 은퇴한 신발은 자동 배정 대상이 아니다 — 기본 지정을 함께 푼다
+                if retired { isDefault = false }
+            }
+            .confirmationDialog("이 러닝화를 삭제할까요?", isPresented: $confirmsDelete, titleVisibility: .visible) {
+                Button("삭제", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("배정된 러닝은 '없음'으로 바뀌어요. 그만 신는다면 은퇴가 기록을 남겨요.")
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        var saved = shoe
+                        saved.name = trimmedName
+                        onSave(saved, isDefault && !saved.isRetired)
+                        dismiss()
+                    }
+                    .disabled(trimmedName.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func stepperRow(title: String, caption: String, value: Binding<Double>,
+                            range: ClosedRange<Double>, step: Double) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Stepper("", value: value, in: range, step: step)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    private func toggleRow(label: String, caption: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Toggle(label, isOn: isOn)
+                .labelsHidden()
+                .tint(RR.brand)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private func field(title: String, @ViewBuilder content: () -> some View) -> some View {

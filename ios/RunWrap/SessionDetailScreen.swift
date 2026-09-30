@@ -12,6 +12,9 @@ struct SessionDetailScreen: View {
     @StateObject private var store = WorkoutDetailStore()
     @Environment(\.dismiss) private var dismiss
     @State private var showShare = false
+    /// 러닝화 (이슈 #171) — 이 세션에 신은 신발을 바꾼다. 등록한 신발이 없으면 행을 숨긴다
+    @EnvironmentObject private var shoes: ShoeStore
+    @State private var showsShoePicker = false
     // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
     @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
     @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
@@ -54,6 +57,9 @@ struct SessionDetailScreen: View {
                     }
 
                     statsGrid
+                    if !shoes.shoes.isEmpty {
+                        shoeRow
+                    }
                     if let heat = heatAdjustment {
                         heatCard(heat)
                     }
@@ -250,6 +256,41 @@ struct SessionDetailScreen: View {
         }
         .padding(.horizontal, 18)
         .rrCard()
+    }
+
+    // MARK: 러닝화 (이슈 #171)
+
+    /// "러닝화 · 페가수스 41" — 탭하면 은퇴하지 않은 신발 + "없음" 중에서 고른다
+    private var shoeRow: some View {
+        Button { showsShoePicker = true } label: {
+            HStack(spacing: 8) {
+                Text("러닝화")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(RR.text3)
+                Text("·")
+                    .foregroundStyle(RR.text3)
+                Text(shoes.shoe(forRun: run.id)?.name ?? "없음")
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .rrCard()
+        .confirmationDialog("이 러닝에 신은 러닝화", isPresented: $showsShoePicker, titleVisibility: .visible) {
+            ForEach(shoes.shoes.filter { !$0.isRetired }) { shoe in
+                Button(shoe.name) { shoes.assign(runID: run.id, shoeID: shoe.id) }
+            }
+            Button("없음") { shoes.assign(runID: run.id, shoeID: nil) }
+            Button("취소", role: .cancel) {}
+        }
     }
 
     // MARK: 열 보정 페이스 (제안 문서 A1)

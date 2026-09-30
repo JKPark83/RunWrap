@@ -54,6 +54,9 @@ struct HomeScreen: View {
     @AppStorage(RecapKey.dismissedMonth) private var recapDismissedMonth = ""
     @AppStorage(RecapKey.dismissedYear) private var recapDismissedYear = ""
     @State private var recapPeriod: RecapPeriod?
+    // 러닝화 교체 안내 (이슈 #171) — 기본 신발이 교체 기준을 넘으면 판단 카드 아래. 같은 신발·같은 기준으로 닫았으면 다시 안 띄운다
+    @EnvironmentObject private var shoes: ShoeStore
+    @AppStorage("shoe.dismissedAlert") private var shoeDismissedAlert = ""
 
     var body: some View {
         Group {
@@ -306,6 +309,13 @@ struct HomeScreen: View {
                         tap(kind, runs: runs)
                     }
                     .padding(.top, 18)
+                }
+
+                if let alert = ShoeEngine.replacementAlert(shoes: shoes.shoes, defaultShoeID: shoes.defaultShoeID,
+                                                           runs: runs, assignments: shoes.assignments,
+                                                           dismissedKey: shoeDismissedAlert) {
+                    ShoeAlertCard(alert: alert) { shoeDismissedAlert = ShoeEngine.alertKey(for: alert.shoe) }
+                        .padding(.top, 10)
                 }
 
                 ForEach(recapPrompts(runs: runs, now: now)) { period in
@@ -771,6 +781,43 @@ private struct RecapPromptCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("결산 카드 닫기")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
+    }
+}
+
+/// 러닝화 교체 안내 카드 (이슈 #171) — 판단 카드 아래, 결산 카드 위. X는 이번 신발·이번 기준에서 닫기
+private struct ShoeAlertCard: View {
+    let alert: ShoeEngine.ReplacementAlert
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                ToneBadge(tone: .caution, label: "교체 시기", code: "SHOES")
+                Spacer(minLength: 8)
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(RR.text3)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, -8)
+                .accessibilityLabel("러닝화 교체 안내 닫기")
+            }
+            Text("\(alert.shoe.name) 누적 \(Int(alert.mileageKm.rounded())) km — 슬슬 교체를 생각해 볼 때예요")
+                .font(.system(size: 14.5, weight: .bold))
+                .foregroundStyle(RR.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("교체 기준 \(Int(alert.shoe.replaceKm)) km · 설정에서 바꿀 수 있어요")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
         }
         .padding(.leading, 14)
         .padding(.trailing, 8)
