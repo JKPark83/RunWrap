@@ -184,6 +184,11 @@ struct ReportHomeContent: View {
                     batteryHintCard
                 }
 
+                // 연속 달린 주 — 레벨 무관 소형 카드, 2주 미만이면 엔진이 nil (이슈 #184)
+                if let streak = StreakEngine.card(streakWeeks: report.streakWeeks) {
+                    streakCard(streak)
+                }
+
                 // 배터리와 따로 그린다 — 배터리가 nil이어도 D-day·예상 기록은 보여야 한다 (이슈 #119)
                 if let raceStatus { raceOutlookCard(raceStatus) }
 
@@ -526,6 +531,35 @@ struct ReportHomeContent: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
+        .rrCard()
+    }
+
+    // MARK: 스트릭 소형 카드 — 이슈 #184
+
+    /// 문구·톤은 StreakEngine이 정한다 — 여기서는 그리기만
+    private func streakCard(_ streak: StreakCard) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(streak.tone.color)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(streak.headline)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Text(streak.caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Text("\(streak.weeks)주")
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(streak.tone.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(streak.tone.softColor, in: Capsule())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
         .rrCard()
     }
 
