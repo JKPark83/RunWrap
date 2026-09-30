@@ -7,6 +7,19 @@ import MapKit
 struct RaceDetailScreen: View {
     let entry: RaceEngine.Entry
 
+    // 즐겨찾기·캘린더·목표 대회 (이슈 #172)
+    /// 대회 목록 스토어 — 즐겨찾기가 바뀌면 접수 알림을 다시 건다
+    @EnvironmentObject private var raceStore: RaceStore
+    @AppStorage(RaceKey.favorites) private var favoritesRaw = ""
+    @AppStorage(RaceKey.targetID) private var targetID = 0
+    /// 목표 대회 지정 때 대회일을 넣는다 — 설정 '대회 날짜'와 같은 저장 형식(timeIntervalSince1970)
+    @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
+    /// 이번 세션에서 캘린더에 넣었는지 — 같은 이벤트를 두 번 넣지 않게 버튼을 잠근다
+    @State private var calendarAdded = false
+    @State private var showsCalendarDenied = false
+    @State private var showsCalendarFailed = false
+    @Environment(\.openURL) private var openURL
+
     private var race: Race { entry.race }
 
     var body: some View {
@@ -26,6 +39,7 @@ struct RaceDetailScreen: View {
                 if let note = race.note {
                     noteCard(note)
                 }
+                actionButtons
                 if let homepage = race.homepage.flatMap(URL.init(string:)) {
                     joinButton(homepage)
                 }
@@ -43,6 +57,19 @@ struct RaceDetailScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .navigationTitle("대회 상세")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("캘린더 접근이 꺼져 있어요", isPresented: $showsCalendarDenied) {
+            Button("설정 열기") {
+                if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            }
+            Button("닫기", role: .cancel) {}
+        } message: {
+            Text("설정 > 개인정보 보호 > 캘린더에서 허용해 주세요")
+        }
+        .alert("캘린더에 추가하지 못했어요", isPresented: $showsCalendarFailed) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text("잠시 후 다시 시도해 주세요.")
+        }
     }
 
     // MARK: 헤더
@@ -52,6 +79,8 @@ struct RaceDetailScreen: View {
             HStack(spacing: 8) {
                 Eyebrow(text: RaceFormat.dDay(entry.dDay))
                 RegisterBadge(status: entry.status)
+                Spacer(minLength: 8)
+                favoriteButton
             }
             Text(race.name)
                 .font(RR.display(27))
@@ -179,6 +208,74 @@ struct RaceDetailScreen: View {
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(RR.line))
     }
 
+    // MARK: 즐겨찾기·캘린더·목표 대회 (이슈 #172)
+
+    private var isFavorite: Bool { RaceFavorites.decode(favoritesRaw).contains(race.id) }
+    private var isTarget: Bool { targetID == race.id }
+
+    /// 헤더 우측 별 — 즐겨찾기는 목록 필터와 접수 알림의 대상이 된다
+    private var favoriteButton: some View {
+        Button {
+            favoritesRaw = RaceFavorites.encode(RaceFavorites.toggled(RaceFavorites.decode(favoritesRaw), race.id))
+            Task { await raceStore.rescheduleRaceAlarms() }
+        } label: {
+            Image(systemName: isFavorite ? "star.fill" : "star")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(isFavorite ? RR.warn : RR.text3)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("즐겨찾기")
+        .accessibilityAddTraits(isFavorite ? .isSelected : [])
+    }
+
+    /// 캘린더 추가 + 목표 대회 지정 — 참가하기 버튼 위 한 줄
+    private var actionButtons: some View {
+        HStack(spacing: 8) {
+            Button {
+                Task { await addToCalendar() }
+            } label: {
+                Label(calendarAdded ? "캘린더에 추가됐어요" : "캘린더에 추가",
+                      systemImage: calendarAdded ? "checkmark" : "calendar.badge.plus")
+                    .actionLabelStyle()
+            }
+            .buttonStyle(.bordered)
+            .disabled(calendarAdded)
+
+            Button(action: toggleTarget) {
+                Label(isTarget ? "목표 대회 해제" : "목표 대회로 지정",
+                      systemImage: isTarget ? "flag.slash" : "flag")
+                    .actionLabelStyle()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private func addToCalendar() async {
+        do {
+            try await RaceCalendar.add(entry)
+            calendarAdded = true
+        } catch RaceCalendarError.denied {
+            showsCalendarDenied = true
+        } catch {
+            showsCalendarFailed = true
+        }
+    }
+
+    /// 지정하면 대회일을 설정의 '대회 날짜'로 넣어 대회 목표(훈련 가이드 D-day)를 켠다 —
+    /// 종목·목표 기록은 사용자가 설정에서 그대로 관리한다. 해제는 지정만 지우고 대회 날짜는 남긴다
+    private func toggleTarget() {
+        if isTarget {
+            targetID = 0
+            return
+        }
+        targetID = race.id
+        raceDateRaw = entry.raceDate.timeIntervalSince1970
+        // 대회 날짜는 iCloud 진행도 스냅샷에 담긴다 — 설정 화면과 같이 병합 기준 시각을 갱신한다 (이슈 #130)
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
+    }
+
     private func joinButton(_ homepage: URL) -> some View {
         Link(destination: homepage) {
             Label("참가하기", systemImage: "arrow.up.right")
@@ -187,5 +284,16 @@ struct RaceDetailScreen: View {
                 .padding(.vertical, 13)
         }
         .buttonStyle(.borderedProminent)
+    }
+}
+
+private extension View {
+    /// 상세 하단 보조 버튼(캘린더·목표 대회)의 라벨 모양 — 반폭 두 개가 한 줄에 들어가게 줄여 맞춘다
+    func actionLabelStyle() -> some View {
+        font(.system(size: 13.5, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
     }
 }

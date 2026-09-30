@@ -57,6 +57,10 @@ struct HomeScreen: View {
     // 러닝화 교체 안내 (이슈 #171) — 기본 신발이 교체 기준을 넘으면 판단 카드 아래. 같은 신발·같은 기준으로 닫았으면 다시 안 띄운다
     @EnvironmentObject private var shoes: ShoeStore
     @AppStorage("shoe.dismissedAlert") private var shoeDismissedAlert = ""
+    // 목표 대회 카드 (이슈 #172) — 대회 상세의 '목표 대회로 지정'이 정한 대회. 목록은 루트의 RaceStore
+    @EnvironmentObject private var raceStore: RaceStore
+    @AppStorage(RaceKey.targetID) private var targetRaceID = 0
+    @State private var openedTargetRace: RaceEngine.Entry?
 
     var body: some View {
         Group {
@@ -318,6 +322,12 @@ struct HomeScreen: View {
                         .padding(.top, 10)
                 }
 
+                // 목표 대회 (이슈 #172) — 대회 목록에 있고 대회일이 지나지 않았을 때만
+                if let target = targetRace(now: now) {
+                    TargetRaceCard(entry: target) { openedTargetRace = target }
+                        .padding(.top, 10)
+                }
+
                 ForEach(recapPrompts(runs: runs, now: now)) { period in
                     RecapPromptCard(title: recapPromptTitle(period, now: now),
                                     subtitle: RecapEngine.periodLabel(period) + " 결산이 준비됐어요",
@@ -362,6 +372,29 @@ struct HomeScreen: View {
         .sheet(item: $recapPeriod) { period in
             RecapScreen(period: period)
         }
+        // 목표 대회 카드 재료 — 대회 탭을 열지 않았어도 목표가 있으면 목록을 불러온다 (이슈 #172)
+        .task(id: targetRaceID) {
+            if targetRaceID != 0 { await raceStore.load() }
+        }
+        .sheet(item: $openedTargetRace) { entry in
+            NavigationStack {
+                RaceDetailScreen(entry: entry)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("닫기") { openedTargetRace = nil }
+                        }
+                    }
+            }
+            .environmentObject(raceStore)
+        }
+    }
+
+    // MARK: - 목표 대회 (이슈 #172)
+
+    /// 목표 대회 항목 — 목록에 없거나 대회일이 지났으면(entries가 이미 뺀다) nil → 카드 미노출
+    private func targetRace(now: Date) -> RaceEngine.Entry? {
+        guard targetRaceID != 0, case .loaded(let file) = raceStore.state else { return nil }
+        return RaceEngine.entries(from: file.races.filter { $0.id == targetRaceID }, now: now).first
     }
 
     // MARK: - 결산 리캡 (이슈 #167)
@@ -824,6 +857,47 @@ private struct ShoeAlertCard: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .rrCard()
+    }
+}
+
+/// 목표 대회 카드 (이슈 #172) — 판단 카드 아래, 결산 카드 위. 탭하면 대회 상세 시트
+private struct TargetRaceCard: View {
+    let entry: RaceEngine.Entry
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 12) {
+                Image(systemName: "flag.checkered")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+                    .frame(width: 34, height: 34)
+                    .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("목표 대회 \(RaceFormat.dDay(entry.dDay)) · \(entry.race.name)")
+                        .font(.system(size: 14.5, weight: .bold))
+                        .foregroundStyle(RR.text)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 6) {
+                        Text(RaceFormat.fullDate.string(from: entry.raceDate))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(RR.text3)
+                        RegisterBadge(status: entry.status)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .rrCard()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

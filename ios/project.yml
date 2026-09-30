@@ -51,6 +51,7 @@ targets:
         NSHealthUpdateUsageDescription: 이 앱은 건강 데이터를 읽기만 합니다. 건강 앱에 어떤 데이터도 쓰거나 추가하지 않습니다.
         NSPhotoLibraryAddUsageDescription: 만든 러닝 스토리 카드를 사진 앱에 저장하기 위해 사용합니다.
         NSLocationWhenInUseUsageDescription: 현재 위치의 날씨·대기질로 러닝 복장을 추천하고, 근처의 급수대·화장실·편의점을 찾기 위해 사용합니다. 날씨 조회에는 약 1km 단위로 뭉갠 좌표만 보내고, 대기질은 기기에서 고른 가까운 측정소 이름으로만 조회합니다. 위치 좌표는 저장하지 않습니다.
+        NSCalendarsWriteOnlyAccessUsageDescription: 관심 대회의 날짜를 캘린더에 이벤트로 추가하기 위해서만 사용합니다. 기존 일정은 읽지 않습니다.   # 대회 상세 '캘린더에 추가' (이슈 #172)
         NSLocationTemporaryUsageDescriptionDictionary:   # '정확한 위치'가 꺼진 사용자에게 코스 탭이 일회성 정밀 위치를 청할 때의 문구 (이슈 #74)
           NearbySupply: 근처 급수대·화장실·편의점까지의 거리를 정확히 짚기 위해 이번만 정확한 위치를 씁니다. 좌표는 저장하지 않습니다.
         UTImportedTypeDeclarations:   # 코스 탭 GPX 업로드 — fileImporter의 UTType(importedAs:)와 짝 (계획서 M12-3)

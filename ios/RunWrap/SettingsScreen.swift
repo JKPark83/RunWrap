@@ -34,6 +34,9 @@ struct SettingsScreen: View {
     @AppStorage(NotifyKey.weeklyHour) private var weeklyHour = 18
     @AppStorage(NotifyKey.hydrationEnabled) private var hydrationNotify = false
     @AppStorage(NotifyKey.runHour) private var runHour = 19
+    // 즐겨찾기 대회 접수 알림 (이슈 #172) — 예약 재료(대회 목록)는 루트의 RaceStore가 쥔다
+    @AppStorage(NotifyKey.raceEnabled) private var raceNotify = false
+    @EnvironmentObject private var raceStore: RaceStore
     /// 알림 토글을 켰는데 시스템 권한이 없을 때의 안내 (이슈 #94)
     @State private var showsNotificationDenied = false
     @Environment(\.openURL) private var openURL
@@ -259,6 +262,18 @@ struct SettingsScreen: View {
                               caption: "최고기온 25°C 이상이면 러닝 1시간 전에 알려드려요",
                               isOn: $hydrationNotify)
                     if hydrationNotify { runHourRow }
+                    // 즐겨찾기 대회 접수 알림 (이슈 #172) — 대회 목록이 아직 없으면 받아 온 뒤 건다
+                    toggleRow(label: "즐겨찾기 대회 접수 알림",
+                              caption: "접수 시작일과 마감 3일 전 오전 9시에 알려드려요",
+                              isOn: $raceNotify)
+                        .onChange(of: raceNotify) { _, isOn in
+                            Task {
+                                // 권한이 없어 되돌리면 false로 다시 불려 그쪽에서 예약을 거둔다
+                                if isOn, !(await confirmNotificationPermission($raceNotify)) { return }
+                                if isOn { await raceStore.load() }
+                                await raceStore.rescheduleRaceAlarms()
+                            }
+                        }
                 }
 
                 // 데모 모드 (DemoMode) — 워치 기록이 없어도 화면을 둘러볼 수 있게 하는 경로.

@@ -12,6 +12,8 @@ enum NotifyKey {
     // 수분 알람 (계획서 M9)
     static let hydrationEnabled = "notify.hydration"
     static let runHour = "notify.runHour"                 // 주로 달리는 시각, 기본 19시
+    // 즐겨찾기 대회 접수 알림 (이슈 #172)
+    static let raceEnabled = "notify.race"
 }
 
 /// 로컬 알림 (계획서 M8) — 권한 요청 + 운동 직후 인사이트 / 주간 리포트 예약.
@@ -99,6 +101,48 @@ enum NotificationScheduler {
         String(format: "오늘 %.0f°C 예보 — 러닝 1시간 전 500ml 마셔두세요", forecastMaxC)
     }
 
+    /// 대회 접수 알림 1건 (이슈 #172) — 예약 직전의 순수 값. fire는 KST 시간대가 담긴 날짜 성분
+    struct RaceAlarm: Equatable {
+        let id: String
+        let title: String
+        let body: String
+        let fire: DateComponents
+    }
+
+    /// 대회 접수 알림 id 접두 — 재예약 때 이 접두의 대기 요청을 전부 거둔다
+    static let raceIdPrefix = "runwrap.race."
+
+    /// 즐겨찾기 대회 접수 알림 (순수 함수, 이슈 #172) — 대회마다 접수 시작일 오전 9시와
+    /// 마감 3일 전 오전 9시(KST, 대회는 전부 국내 개최라 RaceEngine 달력). now 이후 시각만 낸다.
+    /// 대회일이 가까운 순으로 알림이 1건이라도 있는 대회를 최대 limit개까지 — 기기의 대기 알림
+    /// 상한(64건)을 주간·수분 알림과 나눠 쓰기 때문이다. 접수기간을 모르면 그 대회는 0건 (미노출 가드)
+    static func raceAlarms(favorites: [RaceEngine.Entry], now: Date, limit: Int = 20) -> [RaceAlarm] {
+        let calendar = RaceEngine.calendar
+        func nineAM(_ day: Date?, minusDays: Int) -> DateComponents? {
+            guard let day,
+                  let shifted = calendar.date(byAdding: .day, value: -minusDays, to: day),
+                  let fire = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: shifted),
+                  fire > now else { return nil }
+            return calendar.dateComponents([.timeZone, .year, .month, .day, .hour, .minute], from: fire)
+        }
+        let perRace: [[RaceAlarm]] = favorites
+            .sorted { ($0.raceDate, $0.race.id) < ($1.raceDate, $1.race.id) }
+            .map { entry in
+                let race = entry.race
+                var alarms: [RaceAlarm] = []
+                if let fire = nineAM(RaceEngine.day(race.registerStart), minusDays: 0) {
+                    alarms.append(RaceAlarm(id: "\(raceIdPrefix)\(race.id).start", title: "대회 접수 알림",
+                                            body: "\(race.name) 접수가 오늘 시작돼요", fire: fire))
+                }
+                if let fire = nineAM(RaceEngine.day(race.registerEnd), minusDays: 3) {
+                    alarms.append(RaceAlarm(id: "\(raceIdPrefix)\(race.id).end", title: "대회 접수 알림",
+                                            body: "\(race.name) 접수 마감 3일 전이에요", fire: fire))
+                }
+                return alarms
+            }
+        return perRace.filter { !$0.isEmpty }.prefix(max(limit, 0)).flatMap { $0 }
+    }
+
     // MARK: 권한·예약
 
     static func requestAuthorization() async -> Bool {
@@ -125,7 +169,8 @@ enum NotificationScheduler {
         guard await UNUserNotificationCenter.current().notificationSettings()
             .authorizationStatus == .denied else { return }
         let defaults = UserDefaults.standard
-        for key in [NotifyKey.workoutEnabled, NotifyKey.weeklyEnabled, NotifyKey.hydrationEnabled] {
+        for key in [NotifyKey.workoutEnabled, NotifyKey.weeklyEnabled, NotifyKey.hydrationEnabled,
+                    NotifyKey.raceEnabled] {
             defaults.set(false, forKey: key)
         }
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [hydrationId])
@@ -194,5 +239,28 @@ enum NotificationScheduler {
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
         try? await center.add(UNNotificationRequest(identifier: hydrationId,
                                                     content: content, trigger: trigger))
+    }
+
+    /// 대회 접수 알림 재예약 (이슈 #172) — 기존 `runwrap.race.` 요청을 전부 거두고,
+    /// 토글이 켜져 있고 알림 권한이 있을 때만 즐겨찾기 대회분을 다시 건다.
+    /// 대회 목록 로드·즐겨찾기 토글·설정 토글 때 불린다 (RaceStore.rescheduleRaceAlarms)
+    static func rescheduleRaceAlarms(entries: [RaceEngine.Entry], favorites: [Int],
+                                     enabled: Bool, now: Date) async {
+        let center = UNUserNotificationCenter.current()
+        let stale = await center.pendingNotificationRequests()
+            .map(\.identifier).filter { $0.hasPrefix(raceIdPrefix) }
+        center.removePendingNotificationRequests(withIdentifiers: stale)
+
+        guard enabled, await authorizationGranted() else { return }
+        let favoriteSet = Set(favorites)
+        for alarm in raceAlarms(favorites: entries.filter { favoriteSet.contains($0.id) }, now: now) {
+            let content = UNMutableNotificationContent()
+            content.title = alarm.title
+            content.body = alarm.body
+            content.sound = .default
+            let trigger = UNCalendarNotificationTrigger(dateMatching: alarm.fire, repeats: false)
+            try? await center.add(UNNotificationRequest(identifier: alarm.id,
+                                                        content: content, trigger: trigger))
+        }
     }
 }

@@ -4,10 +4,14 @@ import SwiftUI
 /// 자료는 로드런(roadrun.co.kr)을 매일 배치로 받아 온 Races.json.
 /// 접수 상태 판정·정렬·지난 대회 필터는 RaceEngine — 화면은 결과를 그리기만 한다.
 struct RaceListScreen: View {
-    @StateObject private var store = RaceStore()
-    /// 접수중 대회만 보기 — 세션 한정 필터 (기획서 §4.14)
-    @State private var showOpenOnly = false
-    /// 키워드 검색 — 대회명·지역·장소·종목을 대상으로 하고 접수중 필터와 AND로 겹친다
+    /// 대회 목록 — 홈 목표 대회 카드와 함께 쓰려고 RootView가 쥔다 (이슈 #172)
+    @EnvironmentObject private var store: RaceStore
+    /// 목록 필터 — 전체 / 접수중(기획서 §4.14) / 즐겨찾기(이슈 #172). 세션 한정
+    private enum Filter { case all, open, favorites }
+    @State private var filter = Filter.all
+    /// 즐겨찾기한 대회 번호 (`[Int]` JSON) — 상세 화면의 별이 쓰고 여기서는 읽기만 한다 (이슈 #172)
+    @AppStorage(RaceKey.favorites) private var favoritesRaw = ""
+    /// 키워드 검색 — 대회명·지역·장소·종목을 대상으로 하고 필터와 AND로 겹친다
     @State private var query = ""
     /// 목록 판정 기준 시각 — 자정·포그라운드 복귀 때 갱신해 D-day·접수 상태가 어제에 머물지 않게 한다 (#145)
     @State private var now = Date()
@@ -47,8 +51,15 @@ struct RaceListScreen: View {
         let entries = RaceEngine.entries(from: file.races, now: now)
         let openCount = entries.filter(\.isOpen).count
         let keyword = query.trimmingCharacters(in: .whitespaces)
+        let favorites = Set(RaceFavorites.decode(favoritesRaw))
         let visible = entries
-            .filter { !showOpenOnly || $0.isOpen }
+            .filter { entry in
+                switch filter {
+                case .all: true
+                case .open: entry.isOpen
+                case .favorites: favorites.contains(entry.id)
+                }
+            }
             .filter { keyword.isEmpty || $0.matches(keyword) }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
@@ -72,11 +83,11 @@ struct RaceListScreen: View {
                 }
 
                 if visible.isEmpty {
-                    emptyCard(searching: !keyword.isEmpty, filtered: showOpenOnly)
+                    emptyCard(searching: !keyword.isEmpty, filter: filter)
                 } else {
                     ForEach(visible) { entry in
                         NavigationLink { RaceDetailScreen(entry: entry) } label: {
-                            row(entry)
+                            row(entry, isFavorite: favorites.contains(entry.id))
                         }
                         .buttonStyle(.plain)
                     }
@@ -117,11 +128,12 @@ struct RaceListScreen: View {
         .background(RR.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    /// 전체/접수중 필터 칩 — StatsScreen 지표 전환 칩과 같은 스타일
+    /// 전체/접수중/즐겨찾기 필터 칩 — StatsScreen 지표 전환 칩과 같은 스타일
     private var filterChips: some View {
         HStack(spacing: 6) {
-            filterChip("전체", selected: !showOpenOnly) { showOpenOnly = false }
-            filterChip("접수중", selected: showOpenOnly) { showOpenOnly = true }
+            filterChip("전체", selected: filter == .all) { filter = .all }
+            filterChip("접수중", selected: filter == .open) { filter = .open }
+            filterChip("즐겨찾기", selected: filter == .favorites) { filter = .favorites }
             Spacer()
         }
     }
@@ -139,7 +151,7 @@ struct RaceListScreen: View {
         .buttonStyle(.plain)
     }
 
-    private func row(_ entry: RaceEngine.Entry) -> some View {
+    private func row(_ entry: RaceEngine.Entry, isFavorite: Bool) -> some View {
         HStack(alignment: .top, spacing: 12) {
             // "10/10"처럼 월·일이 모두 두 자리면 46pt에 안 들어가 밀렸다 — 최대 폭 기준으로 고정 (#32)
             VStack(spacing: 2) {
@@ -186,7 +198,16 @@ struct RaceListScreen: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 6) {
-                RegisterBadge(status: entry.status)
+                HStack(spacing: 5) {
+                    // 즐겨찾기 표시 (이슈 #172) — 토글은 상세 화면의 별에서만 한다
+                    if isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(RR.warn)
+                            .accessibilityLabel("즐겨찾기")
+                    }
+                    RegisterBadge(status: entry.status)
+                }
                 Text(RaceFormat.dDay(entry.dDay))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(RR.text2)
@@ -232,16 +253,18 @@ struct RaceListScreen: View {
         }
     }
 
-    private func emptyCard(searching: Bool, filtered: Bool) -> some View {
+    private func emptyCard(searching: Bool, filter: Filter) -> some View {
         let (title, subtitle): (String, String) = if searching {
             ("맞는 대회를 못 찾았어요", "다른 키워드로 다시 찾아보시겠어요?")
-        } else if filtered {
+        } else if filter == .open {
             ("지금 접수받는 대회가 없어요", "접수가 열리면 접수중 배지로 알려드릴게요.")
+        } else if filter == .favorites {
+            ("즐겨찾기한 대회가 없어요", "상세에서 별을 눌러 보세요.")
         } else {
             ("지금 보여드릴 대회가 없어요", "자료가 갱신되면 다시 찾아뵐게요.")
         }
         return VStack(spacing: 8) {
-            Image(systemName: searching ? "magnifyingglass" : "flag.slash")
+            Image(systemName: searching ? "magnifyingglass" : filter == .favorites ? "star" : "flag.slash")
                 .font(.system(size: 22))
                 .foregroundStyle(RR.text3)
             Text(title)
