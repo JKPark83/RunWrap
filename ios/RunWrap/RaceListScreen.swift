@@ -4,11 +4,18 @@ import SwiftUI
 /// 자료는 로드런(roadrun.co.kr)을 매일 배치로 받아 온 Races.json.
 /// 접수 상태 판정·정렬·지난 대회 필터는 RaceEngine — 화면은 결과를 그리기만 한다.
 struct RaceListScreen: View {
-    @StateObject private var store = RaceStore()
-    /// 접수중 대회만 보기 — 세션 한정 필터 (기획서 §4.14)
-    @State private var showOpenOnly = false
-    /// 키워드 검색 — 대회명·지역·장소·종목을 대상으로 하고 접수중 필터와 AND로 겹친다
+    /// 대회 목록 — 홈 목표 대회 카드와 함께 쓰려고 RootView가 쥔다 (이슈 #172)
+    @EnvironmentObject private var store: RaceStore
+    /// 목록 필터 — 전체 / 접수중(기획서 §4.14) / 즐겨찾기(이슈 #172). 세션 한정
+    private enum Filter { case all, open, favorites }
+    @State private var filter = Filter.all
+    /// 즐겨찾기한 대회 번호 (`[Int]` JSON) — 상세 화면의 별이 쓰고 여기서는 읽기만 한다 (이슈 #172)
+    @AppStorage(RaceKey.favorites) private var favoritesRaw = ""
+    /// 키워드 검색 — 대회명·지역·장소·종목을 대상으로 하고 필터와 AND로 겹친다
     @State private var query = ""
+    /// 목록 판정 기준 시각 — 자정·포그라운드 복귀 때 갱신해 D-day·접수 상태가 어제에 머물지 않게 한다 (#145)
+    @State private var now = Date()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -25,16 +32,34 @@ struct RaceListScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .task { await store.load() }
+        // 포그라운드 복귀 — 날짜를 다시 잡고, 원격은 6시간이 지났을 때만 다시 받는다 (#145)
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            now = Date()
+            Task { await store.load() }
+        }
+        // 앱을 켜 둔 채 자정을 넘기면 D-day를 다시 계산한다 (알림은 임의 스레드에서 올 수 있다)
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+            .receive(on: RunLoop.main)) { _ in
+            now = Date()
+        }
     }
 
     // MARK: 목록
 
     private func raceList(_ file: RaceFile) -> some View {
-        let entries = RaceEngine.entries(from: file.races, now: Date())
+        let entries = RaceEngine.entries(from: file.races, now: now)
         let openCount = entries.filter(\.isOpen).count
         let keyword = query.trimmingCharacters(in: .whitespaces)
+        let favorites = Set(RaceFavorites.decode(favoritesRaw))
         let visible = entries
-            .filter { !showOpenOnly || $0.isOpen }
+            .filter { entry in
+                switch filter {
+                case .all: true
+                case .open: entry.isOpen
+                case .favorites: favorites.contains(entry.id)
+                }
+            }
             .filter { keyword.isEmpty || $0.matches(keyword) }
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
@@ -43,7 +68,10 @@ struct RaceListScreen: View {
                     Text("대회")
                         .font(RR.display(33))
                         .foregroundStyle(RR.text)
-                    Text(caption(openCount: openCount, updatedAt: file.generatedAt))
+                    Text(RaceFormat.caption(
+                        openCount: openCount, updatedAt: file.generatedAt,
+                        refreshFailed: store.lastRefreshFailed,
+                        stale: RaceFormat.isStale(generatedAt: file.generatedAt, now: now)))
                         .font(.system(size: 12))
                         .foregroundStyle(RR.text3)
                 }
@@ -55,11 +83,11 @@ struct RaceListScreen: View {
                 }
 
                 if visible.isEmpty {
-                    emptyCard(searching: !keyword.isEmpty, filtered: showOpenOnly)
+                    emptyCard(searching: !keyword.isEmpty, filter: filter)
                 } else {
                     ForEach(visible) { entry in
                         NavigationLink { RaceDetailScreen(entry: entry) } label: {
-                            row(entry)
+                            row(entry, isFavorite: favorites.contains(entry.id))
                         }
                         .buttonStyle(.plain)
                     }
@@ -100,11 +128,12 @@ struct RaceListScreen: View {
         .background(RR.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    /// 전체/접수중 필터 칩 — StatsScreen 지표 전환 칩과 같은 스타일
+    /// 전체/접수중/즐겨찾기 필터 칩 — StatsScreen 지표 전환 칩과 같은 스타일
     private var filterChips: some View {
         HStack(spacing: 6) {
-            filterChip("전체", selected: !showOpenOnly) { showOpenOnly = false }
-            filterChip("접수중", selected: showOpenOnly) { showOpenOnly = true }
+            filterChip("전체", selected: filter == .all) { filter = .all }
+            filterChip("접수중", selected: filter == .open) { filter = .open }
+            filterChip("즐겨찾기", selected: filter == .favorites) { filter = .favorites }
             Spacer()
         }
     }
@@ -114,7 +143,7 @@ struct RaceListScreen: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(selected ? .white : RR.text2)
+                .foregroundStyle(selected ? RR.onBrand : RR.text2)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(selected ? RR.brand : RR.surface2, in: Capsule())
@@ -122,15 +151,7 @@ struct RaceListScreen: View {
         .buttonStyle(.plain)
     }
 
-    private func caption(openCount: Int, updatedAt: String) -> String {
-        var text = "지금 접수받는 대회 \(openCount)곳"
-        if let updated = RaceFormat.updatedLabel(updatedAt) {
-            text += " · \(updated) 갱신"
-        }
-        return text
-    }
-
-    private func row(_ entry: RaceEngine.Entry) -> some View {
+    private func row(_ entry: RaceEngine.Entry, isFavorite: Bool) -> some View {
         HStack(alignment: .top, spacing: 12) {
             // "10/10"처럼 월·일이 모두 두 자리면 46pt에 안 들어가 밀렸다 — 최대 폭 기준으로 고정 (#32)
             VStack(spacing: 2) {
@@ -177,7 +198,16 @@ struct RaceListScreen: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 6) {
-                RegisterBadge(status: entry.status)
+                HStack(spacing: 5) {
+                    // 즐겨찾기 표시 (이슈 #172) — 토글은 상세 화면의 별에서만 한다
+                    if isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 11))
+                            .foregroundStyle(RR.warn)
+                            .accessibilityLabel("즐겨찾기")
+                    }
+                    RegisterBadge(status: entry.status)
+                }
                 Text(RaceFormat.dDay(entry.dDay))
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(RR.text2)
@@ -223,16 +253,18 @@ struct RaceListScreen: View {
         }
     }
 
-    private func emptyCard(searching: Bool, filtered: Bool) -> some View {
+    private func emptyCard(searching: Bool, filter: Filter) -> some View {
         let (title, subtitle): (String, String) = if searching {
             ("맞는 대회를 못 찾았어요", "다른 키워드로 다시 찾아보시겠어요?")
-        } else if filtered {
+        } else if filter == .open {
             ("지금 접수받는 대회가 없어요", "접수가 열리면 접수중 배지로 알려드릴게요.")
+        } else if filter == .favorites {
+            ("즐겨찾기한 대회가 없어요", "상세에서 별을 눌러 보세요.")
         } else {
             ("지금 보여드릴 대회가 없어요", "자료가 갱신되면 다시 찾아뵐게요.")
         }
         return VStack(spacing: 8) {
-            Image(systemName: searching ? "magnifyingglass" : "flag.slash")
+            Image(systemName: searching ? "magnifyingglass" : filter == .favorites ? "star" : "flag.slash")
                 .font(.system(size: 22))
                 .foregroundStyle(RR.text3)
             Text(title)
@@ -355,6 +387,33 @@ enum RaceFormat {
     static func updatedLabel(_ iso: String) -> String? {
         guard let date = ISO8601DateFormatter().date(from: iso) else { return nil }
         return make("M월 d일").string(from: date)
+    }
+
+    /// 자료 신선도 (#146) — generatedAt이 maxDays일보다 오래됐으면 true.
+    /// 배치가 며칠째 실패해도 앱이 조용히 옛 목록을 보여주지 않게 한다.
+    /// generatedAt은 races 내용이 바뀐 날만 커밋되므로(race-info.yml) 대회 변동이 없는 며칠은
+    /// 정상이다 — 3일이면 헛경고가 잦아 7일로 잡았다. 못 읽으면 false — 모르는 걸 경고하지 않는다.
+    static func isStale(generatedAt iso: String, now: Date, maxDays: Int = 7) -> Bool {
+        guard let date = ISO8601DateFormatter().date(from: iso) else { return false }
+        return now.timeIntervalSince(date) > TimeInterval(maxDays * 86_400)
+    }
+
+    /// 목록 헤더 캡션 (#145 #146) — 평소엔 "지금 접수받는 대회 N곳 · 8월 12일 갱신".
+    /// 새로고침 실패·자료 오래됨이면 둘째 줄에 존댓말 안내와 자료 날짜를 붙인다.
+    static func caption(openCount: Int, updatedAt: String,
+                        refreshFailed: Bool, stale: Bool) -> String {
+        let count = "지금 접수받는 대회 \(openCount)곳"
+        let updated = updatedLabel(updatedAt)
+        let notice: String? = switch (refreshFailed, stale) {
+        case (true, true): "새로 받지 못해 자료가 조금 오래됐어요"
+        case (true, false): "방금 새로 받진 못했어요"
+        case (false, true): "자료가 조금 오래됐어요"
+        case (false, false): nil
+        }
+        guard let notice else {
+            return updated.map { "\(count) · \($0) 갱신" } ?? count
+        }
+        return "\(count)\n" + (updated.map { "\(notice) · \($0) 자료" } ?? notice)
     }
 }
 

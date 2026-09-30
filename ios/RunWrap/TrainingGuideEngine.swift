@@ -21,8 +21,9 @@ import Foundation
 ///   고정하고 인터벌을 끈다 (기획서 §4.9 + v2 확장).
 /// - 강도 밸런스: (easy+LSD) : 스피드 세션 수를 80/20 원칙과 비교 (Seiler 80/20).
 ///
-/// 가드는 ReportEngine.acwr와 동일 — 기록이 3주 미만이거나 만성 부하가 주 3km 미만이면
-/// 진단·처방 전체를 내지 않는다(nil). 예측·페이스 존은 유효 표본(5km 이상, 외삽 3배 이내)이
+/// 가드: 기록이 3주 미만이거나 만성 부하가 주 3km 미만이면 진단·처방 전체를 내지 않는다(nil).
+/// ACWR(4주)보다 느슨한 3주 기준이다 — 여기서 만성 부하는 비율이 아니라 처방 볼륨의 기준이라
+/// 분모가 작게 잡혀도 처방이 적게 나오는 안전한 쪽으로 틀린다 (이슈 #49). 예측·페이스 존은 유효 표본(5km 이상, 외삽 3배 이내)이
 /// 8주 안에 하나도 없으면 따로 내지 않는다 — 틀린 페이스는 없느니만 못하다.
 
 struct TrainingGuide: Equatable {
@@ -142,6 +143,63 @@ struct TodayWorkout: Equatable {
     let reason: Reason
     let distanceKm: Double?                    // rest·done이면 nil. 인터벌은 본훈련 합계
     let paceSecPerKm: ClosedRange<Double>?     // 페이스 존이 없으면(유효 예측 표본 없음) nil
+}
+
+// MARK: - 심박 기준 (이슈 #56)
+
+/// 심박 존 방식 (이슈 #56) — %HRmax(기본) / Karvonen(HRR, Karvonen 1957).
+/// 저장값(rawValue)은 영문 고정: 라벨 문구를 바꿔도 저장값이 깨지지 않는다
+enum HeartRateZoneMethod: String, CaseIterable {
+    case percentMax, karvonen
+
+    var label: String {
+        switch self {
+        case .percentMax: "%HRmax"
+        case .karvonen: "Karvonen(HRR)"
+        }
+    }
+}
+
+/// 심박 기준 (이슈 #56) — 심박 존·대회 노력도·세션 상세 표기가 모두 이 값 하나를 쓴다.
+/// 우선순위: 수동 입력 > 추정(관찰 최대·Tanaka 2001) > 190 폴백.
+/// zoneMethod는 "실제 적용된" 방식이다 — Karvonen을 골랐어도 안정 심박이 없으면
+/// %HRmax로 떨어진다 (HRR = HRmax − 안정 심박을 만들 재료가 없다)
+struct HeartRateProfile: Equatable {
+    enum Source: Equatable {
+        case manual, observed, tanaka, fallback
+
+        var label: String {
+            switch self {
+            case .manual: "직접 입력"
+            case .observed: "관찰 최대"
+            case .tanaka: "생년 Tanaka"
+            case .fallback: "기본값"
+            }
+        }
+    }
+
+    /// 수동 입력 허용 범위 — 밖이면 무시하고 추정을 쓴다.
+    /// 최대 심박은 세션 최고 심박 신뢰 범위(plausiblePeakBpm 120...230)와 같다
+    static let hrMaxRange: ClosedRange<Int> = 120...230
+    static let restingRange: ClosedRange<Int> = 30...100
+
+    let hrMax: Double
+    let hrMaxSource: Source
+    /// 안정 심박 — 수동 > HealthKit 최근값, 범위 밖이면 nil
+    let restingHR: Double?
+    let zoneMethod: HeartRateZoneMethod
+
+    /// 대회 노력도용 HRmax — 190 폴백은 근거가 아니라 nil로 넘겨 Riegel로 떨어지게 한다
+    /// (기존 동작 유지, RaceOutlookEngine의 hrMaxBpm nil 경로)
+    var reliableHrMax: Double? { hrMaxSource == .fallback ? nil : hrMax }
+
+    /// 존 판정용 강도 비율 — %HRmax: bpm / HRmax,
+    /// Karvonen(1957): (bpm − 안정) / (HRmax − 안정) = %HRR.
+    /// 두 범위(최대 ≥120, 안정 ≤100)가 겹치지 않아 HRR은 항상 양수다
+    func intensity(of bpm: Double) -> Double {
+        guard zoneMethod == .karvonen, let rest = restingHR else { return bpm / hrMax }
+        return (bpm - rest) / (hrMax - rest)
+    }
 }
 
 struct TrainingGuideEngine {
@@ -331,20 +389,29 @@ struct TrainingGuideEngine {
         // 직접 입력한 대회 기록 후보 (이슈 #35) — 표본 창을 적용하지 않는다: 몇 달 전
         // 대회 기록이라도 훈련 표본에는 없는 "전력 노력"의 증거다. 시점 차이는 VO₂max
         // 추세 배율이 보정한다. 최소 거리·3배 외삽·최대 나이 가드는 훈련 표본과 동일하다.
-        // 대회 기록엔 세션 날씨가 없어 열 중립 환산은 자연히 원본 그대로다.
+        // 페이스 타당성 가드(이슈 #93) — 오독·휠 실수 기록이 최솟값으로 항상 이기지 않게 한다.
+        // 열 중립 환산(이슈 #100) — 대회 기록엔 세션 날씨가 없어 기록 월의 서울 평년값
+        // (RaceOutlookEngine.monthlyNormals)을 날씨 자리에 넣는다. 그러면 neutralTimeSec이
+        // 원본 − 보정량 × km, heatDeltaSecPerKm이 그 보정량(없으면 0)이 된다. 훈련 표본과 같은
+        // 중립 기준이어야 RaceOutlookEngine이 대회 월 더위를 더할 때 여름 기록의 더위가 두 번 실리지 않는다.
         let recordCutoff = now.addingTimeInterval(-Double(maxRaceRecordAgeDays) * 86_400)
         let record: RacePrediction? = raceRecords
-            .filter { $0.timeSec > 0 && $0.date <= now && $0.date >= recordCutoff
+            .filter { RaceRecord.isPlausible(timeSec: $0.timeSec, km: $0.race.km)
+                && $0.date <= now && $0.date >= recordCutoff
                 && $0.race.km >= minSampleKm
                 && goal.km / $0.race.km <= maxExtrapolationRatio }
             .map { record -> RacePrediction in
+                let month = Calendar.current.component(.month, from: record.date)
+                let normal = RaceOutlookEngine.monthlyNormals[month - 1]
                 let sample = PredictionSample(distanceKm: record.race.km,
-                                              timeSec: record.timeSec, date: record.date)
+                                              timeSec: record.timeSec, date: record.date,
+                                              weatherTempC: normal.tempC,
+                                              weatherHumidityPct: normal.humidityPct)
                 let ratio = fitnessRatio(sampleDate: record.date, now: now,
                                          vo2MaxSamples: vo2MaxSamples)
                 // 대회 기록은 정의상 전력 노력 — EF 환산(빠른 끝)을 만들지 않는다
                 return RacePrediction(sample: sample, windowDays: 0,
-                                      riegelSec: record.timeSec
+                                      riegelSec: sample.neutralTimeSec
                                           * pow(goal.km / record.race.km, 1.06) * ratio,
                                       effortSec: nil,
                                       fitnessRatio: ratio,
@@ -399,14 +466,17 @@ struct TrainingGuideEngine {
 
     /// HRmax 추정 — ① 관찰 최대: 최근 12주 세션별 최고 심박 중 2번째 값
     /// (1건뿐인 이상 스파이크 방어), 표본 3개 이상일 때만.
-    /// ② Tanaka(2001) 208 − 0.7×나이 — WorkoutDetailStore.heartRateMax와 같은 공식.
+    /// ② Tanaka(2001) 208 − 0.7×나이.
     /// 관찰 최대는 "HRmax가 이보다 낮을 수는 없다"는 하한 증거라 Tanaka와 **큰 쪽**을 쓴다
-    /// — 이지런만 한 러너의 관찰 최대는 HRmax를 크게 밑돈다. 둘 다 없으면 nil
-    static func hrMax(runs: [RunSummary], now: Date, birthYear: Int?) -> Double? {
+    /// — 이지런만 한 러너의 관찰 최대는 HRmax를 크게 밑돈다. 둘 다 없으면 190 폴백.
+    /// 출처를 함께 돌려줘 설정·세션 상세가 "관찰 최대/생년 Tanaka/기본값"을 밝힌다 (이슈 #48·#56).
+    /// 수동 입력은 여기서 섞지 않는다 — heartRateProfile이 이 추정 위에 얹는다
+    static func hrMaxEstimate(runs: [RunSummary], now: Date,
+                              birthYear: Int?) -> (bpm: Double, source: HeartRateProfile.Source) {
         let cutoff = now.addingTimeInterval(-84 * 86_400)
         let peaks = runs.filter { $0.start >= cutoff && $0.start <= now }
             .compactMap(\.maxHeartRate)
-            .filter { (120...230).contains($0) }   // 밖은 착용 불량·이상치
+            .filter { plausiblePeakBpm.contains($0) }   // 밖은 착용 불량·이상치
             .sorted(by: >)
         let observed: Double? = peaks.count >= 3 ? peaks[1] : nil
         let tanaka: Double? = birthYear.flatMap { year in
@@ -414,11 +484,78 @@ struct TrainingGuideEngine {
             return (10...100).contains(age) ? 208 - 0.7 * Double(age) : nil
         }
         switch (observed, tanaka) {
-        case let (o?, t?): return max(o, t)
-        case let (o?, nil): return o
-        case let (nil, t?): return t
-        default: return nil
+        case let (o?, t?): return o >= t ? (o, .observed) : (t, .tanaka)
+        case let (o?, nil): return (o, .observed)
+        case let (nil, t?): return (t, .tanaka)
+        default: return (fallbackHrMaxBpm, .fallback)
         }
+    }
+
+    /// 심박 기준 해석 (이슈 #56) — 수동값(0 = 미설정, 범위 밖 무시) > 추정.
+    /// 화면이 원시 @AppStorage 값을 그대로 넘겨 가공하지 않게 한다 — 우선순위·범위 가드는 이 한 곳에만.
+    /// 안정 심박: 수동 > HealthKit 최근값(범위 안일 때만). Karvonen인데 안정 심박이 없으면 %HRmax
+    static func heartRateProfile(estimate: (bpm: Double, source: HeartRateProfile.Source),
+                                 manualHrMax: Int, manualRestingHR: Int,
+                                 measuredRestingHR: Double?, zoneMethodRaw: String) -> HeartRateProfile {
+        let hrMax: (bpm: Double, source: HeartRateProfile.Source) =
+            HeartRateProfile.hrMaxRange.contains(manualHrMax) ? (Double(manualHrMax), .manual) : estimate
+        let restingRange = HeartRateProfile.restingRange
+        let resting: Double?
+        if restingRange.contains(manualRestingHR) {
+            resting = Double(manualRestingHR)
+        } else if let measured = measuredRestingHR,
+                  (Double(restingRange.lowerBound)...Double(restingRange.upperBound)).contains(measured) {
+            resting = measured
+        } else {
+            resting = nil
+        }
+        var method = HeartRateZoneMethod(rawValue: zoneMethodRaw) ?? .percentMax
+        if method == .karvonen && resting == nil { method = .percentMax }
+        return HeartRateProfile(hrMax: hrMax.bpm, hrMaxSource: hrMax.source,
+                                restingHR: resting, zoneMethod: method)
+    }
+
+    // MARK: - 심박 존 (세션 상세, 이슈 #48)
+
+    /// 세션 최고 심박으로 믿을 수 있는 범위 — 밖은 착용 불량·이상치 (hrMaxEstimate 관찰 표본 필터와 공용)
+    static let plausiblePeakBpm: ClosedRange<Double> = 120...230
+
+    /// HRmax 추정치(관찰 최대·Tanaka)가 둘 다 없을 때 존 계산에 쓰는 폴백
+    static let fallbackHrMaxBpm = 190.0
+
+    /// 세션 최고 심박 — 230 초과 스파이크(착용 불량)만 버린다. 하한은 두지 않는다:
+    /// 120 아래로만 달린 쉬운 조깅에서도 최고 심박 줄은 유효하다. 남는 값이 없으면 nil
+    static func sessionPeakBpm(_ bpms: [Double]) -> Double? {
+        bpms.filter { $0 <= plausiblePeakBpm.upperBound }.max()
+    }
+
+    /// 심박 샘플 → Z1~Z5 시간 비율. 경계는 강도 비율 0.6/0.7/0.8/0.9 —
+    /// %HRmax는 × HRmax, Karvonen(1957)은 × HRR + 안정 심박 (이슈 #56).
+    /// Karvonen의 0.5는 Z1의 명목 하한일 뿐 그 아래도 Z1에 넣는다 — %HRmax가 0.6 아래를
+    /// 전부 Z1로 넣는 것과 맞춰 워밍업·회복 조깅 시간이 비율에서 빠지지 않게 한다.
+    /// 샘플 간격(≤15초 캡)으로 가중하고 마지막 샘플은 5초로 친다.
+    static func heartRateZones(samples: [(time: Date, bpm: Double)],
+                               profile: HeartRateProfile) -> [Double] {
+        var seconds = [Double](repeating: 0, count: 5)
+        for (i, sample) in samples.enumerated() {
+            let weight: Double
+            if i + 1 < samples.count {
+                weight = min(samples[i + 1].time.timeIntervalSince(sample.time), 15)
+            } else {
+                weight = 5
+            }
+            let zone = zoneIndex(intensity: profile.intensity(of: sample.bpm))
+            seconds[zone] += max(weight, 0)
+        }
+        let total = seconds.reduce(0, +)
+        guard total > 0 else { return [0, 0, 0, 0, 0] }
+        return seconds.map { $0 / total }
+    }
+
+    /// 강도 비율 → 존 인덱스(0 = Z1 … 4 = Z5). 경계 0.6/0.7/0.8/0.9 —
+    /// 세션 존(heartRateZones)과 기간별 분포(ZoneDistributionEngine)가 같은 경계를 쓰게 한 곳에 둔다 (이슈 #165)
+    static func zoneIndex(intensity ratio: Double) -> Int {
+        ratio < 0.6 ? 0 : ratio < 0.7 ? 1 : ratio < 0.8 ? 2 : ratio < 0.9 ? 3 : 4
     }
 
     // MARK: - 현재 기력 (Daniels VDOT)
@@ -454,6 +591,10 @@ struct TrainingGuideEngine {
     /// 5000m 세계기록(12:35.36, 첩테게이 2020) 페이스가 약 2′31″/km — 이보다 빠른 목표
     /// 페이스는 사람 기록이 아니라 입력 실수다 (예: 종목을 풀로 바꿨는데 목표 기록이 30:00으로 남음)
     static let minGoalPaceSecPerKm = 150.0
+
+    /// 대회 기록 페이스 상한 20′00″/km — RunSummary.paceSecPerKm 가드(150...1200초/km)와
+    /// 같은 상한이다. 걷기보다 느린 대회 기록은 휠 실수로 보고 표본에서 뺀다 (이슈 #93)
+    static let maxRacePaceSecPerKm = 1_200.0
 
     /// 존 상수 (Daniels' Running Formula): 이지 62~74% / 템포 88% / 인터벌 97.5%.
     /// VDOT 50에서 Daniels 표와 대조: 이지 4′54″~5′38″ / 템포 4′15″ / 인터벌 3′55″ 일치.
@@ -540,7 +681,8 @@ struct TrainingGuideEngine {
     func guide(runs: [RunSummary],
                race: RaceDistance, goalSec: Double?, raceDate: Date? = nil,
                batteryTone: RRTone?) -> TrainingGuide? {
-        // 가드: ReportEngine.acwr와 동일 기준
+        // 가드: 3주(21일) — ACWR의 28일보다 느슨하다. 만성 부하가 처방 볼륨 기준이라
+        // 분모가 작으면 처방이 적게 나오는 안전한 쪽으로 틀린다 (이슈 #49)
         guard let oldest = runs.map(\.start).min(),
               oldest <= date(daysAgo: 21) else { return nil }
         let chronic = totalKm(runs, fromDaysAgo: 28, toDaysAgo: 0) / 4
@@ -633,7 +775,8 @@ struct TrainingGuideEngine {
 
         let week = Self.weekRuns(runs, now: now)
         let weekKm = week.compactMap(\.distanceKm).reduce(0, +)
-        let remainSessions = min(weeklyGoal - week.count, Self.daysLeftInWeek(now))
+        let doneCount = week.filter(GrowthEngine.countsAsCompletedRun).count  // 1km 미만은 횟수로 안 셈 (홈 칩과 동일 기준)
+        let remainSessions = min(weeklyGoal - doneCount, Self.daysLeftInWeek(now))
         guard remainSessions > 0 else {
             return TodayWorkout(kind: .doneCount, reason: .none, distanceKm: nil, paceSecPerKm: nil)
         }

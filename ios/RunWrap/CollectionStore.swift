@@ -57,8 +57,6 @@ enum CollectionCache {
 final class CollectionStore: ObservableObject {
     /// 수집한 새 — 오래된 순. 화면은 최신순이 필요하면 뒤집어 쓴다
     @Published private(set) var birds: [CollectedBird] = []
-    /// 마지막 저장이 실패했는지 — 도감은 유일 원본이라 화면에서 알려야 한다
-    @Published private(set) var saveFailed = false
 
     /// 테스트에서 임시 디렉터리를 주입한다. 기본은 Application Support
     private let directory: URL?
@@ -75,9 +73,20 @@ final class CollectionStore: ObservableObject {
 
     /// 같은 종을 여러 번 수집할 수 있다 (사이클마다 목표가 같을 수 있으므로).
     /// 도감 그리드는 종별로 묶어 보여주고, 여기서는 이력을 그대로 쌓는다.
-    func add(_ bird: CollectedBird) {
+    ///
+    /// 파일에 먼저 쓰고 성공해야 메모리에 넣는다 — 실패한 새가 메모리에만 남으면
+    /// 재시도 때 중복 수집되고, 호출부가 사이클을 초기화하면 재실행 시 사라진다 (이슈 #67).
+    /// - Returns: 파일에 저장됐으면 true. false면 호출부는 사이클을 초기화하면 안 된다
+    func add(_ bird: CollectedBird) -> Bool {
+        do {
+            try CollectionCache.save(birds + [bird], in: directory)
+        } catch {
+            return false
+        }
         birds.append(bird)
-        persist()
+        // 도감은 스냅샷 내용이다 — 병합 기준 시각을 갱신한다 (이슈 #130)
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
+        return true
     }
 
     /// CloudKit 복원 경로 전용 (이슈 #29) — 스냅샷의 도감으로 메모리와 파일을 교체한다.
@@ -88,11 +97,6 @@ final class CollectionStore: ObservableObject {
     }
 
     private func persist() {
-        do {
-            try CollectionCache.save(birds, in: directory)
-            saveFailed = false
-        } catch {
-            saveFailed = true
-        }
+        try? CollectionCache.save(birds, in: directory)
     }
 }

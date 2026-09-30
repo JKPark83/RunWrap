@@ -5,13 +5,16 @@ import Foundation
 /// 매핑은 초안이고 **"서브3 = 백조"만 확정 축**이다. 나머지 경계는 에셋 수급과 함께
 /// 확정되므로(§12), 경계값을 `CollectionEngine.species(for:)` 한 곳에만 두고
 /// 화면·저장 어디에서도 다시 판정하지 않는다.
-enum BirdSpecies: String, Codable, CaseIterable {
+enum BirdSpecies: String, Codable, CaseIterable, Identifiable {
     case sparrow    // 참새
     case swallow    // 제비
     case falcon     // 매
     case goose      // 기러기
     case crane      // 두루미
     case swan       // 백조
+
+    /// 도감 이력 시트(`.sheet(item:)`)의 식별자 — 종 자체가 곧 식별자다
+    var id: Self { self }
 
     var label: String {
         switch self {
@@ -137,11 +140,42 @@ enum CollectionEngine {
         case .half: return (.full, 0)
         case .full:
             // 종목은 끝 — 기록을 당긴다. 미입력이면 우선 sub-4를 제안하고,
-            // 이미 목표가 있으면 30분씩 당기되 서브3 아래로는 내리지 않는다.
-            guard goalSeconds > 0 else { return (.full, sub4Seconds) }
+            // 이미 목표가 있으면 30분씩 당기되 서브3 바로 아래에서 멈춘다.
+            // species()는 경계를 배타(<)로 가르므로 정확히 4:00:00·3:00:00은 한 칸 위 종이 아니다 —
+            // 추천값을 경계 1분 아래(3:59:00·2:59:00)로 둬야 추천대로 달성했을 때 종이 오른다.
+            guard goalSeconds > 0 else { return (.full, sub4Seconds - 60) }
+            // 이미 서브3(백조) 목표면 더 올릴 종이 없다
+            guard goalSeconds >= sub3Seconds else { return nil }
             let tightened = goalSeconds - 30 * 60
-            guard tightened >= sub3Seconds else { return nil }
+            // 서브3 경계 이하로 당겨지면 nil 대신 서브3 바로 아래로 맞춘다
+            guard tightened > sub3Seconds else { return (.full, sub3Seconds - 60) }
             return (.full, tightened)
         }
+    }
+
+    /// 세러모니 "다음 목표"의 초기 선택 — 이번 사이클 목표(`cycleGoal`) 기준 추천을 깐다 (이슈 #127).
+    ///
+    /// 새 종류는 사이클 시작 때 고정한 목표로 정해지므로(이슈 #110) 추천도 같은 기준에서 한 칸 올린다.
+    /// 다만 사용자가 사이클 도중 설정에서 이미 더 높은 목표를 골라 뒀다면 그 의도를 되묻지 않고
+    /// 그대로 초기 선택으로 둔다. "더 높다"는 더 먼 종목, 또는 같은 종목에 더 빠른 기록이다.
+    /// 종목 순서는 `recommendedGoal`의 사다리(없음 → 5K → 10K → 하프 → 풀)와 같다 — 거리(km)로 비교한다.
+    ///
+    /// - Returns: 초기 선택 종목과 목표 기록(초, 0이면 기록 목표 없이 완주).
+    ///   추천할 곳이 없으면(이미 서브3) 사이클 목표를 그대로 유지한다
+    static func initialNextGoal(cycleGoal: RaceDistance?, cycleGoalSeconds: Int,
+                                currentGoal: RaceDistance?,
+                                currentSeconds: Int) -> (distance: RaceDistance?, seconds: Int) {
+        let cycleKm = cycleGoal?.km ?? 0
+        let currentKm = currentGoal?.km ?? 0
+        let fasterOnSameDistance = currentGoal == cycleGoal && currentSeconds > 0
+            && (cycleGoalSeconds == 0 || currentSeconds < cycleGoalSeconds)
+        if currentKm > cycleKm || fasterOnSameDistance {
+            return (currentGoal, currentSeconds)
+        }
+        guard let recommended = recommendedGoal(after: cycleGoal, goalSeconds: cycleGoalSeconds) else {
+            // 더 올릴 곳이 없다 — 직전 목표를 그대로 유지한 채 시작한다
+            return (cycleGoal, cycleGoalSeconds)
+        }
+        return (recommended.distance, recommended.seconds)
     }
 }

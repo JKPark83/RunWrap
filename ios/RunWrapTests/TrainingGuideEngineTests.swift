@@ -365,4 +365,166 @@ struct TrainingGuideEngineTests {
         #expect(today.reason == .qualityDue)
         #expect(today.distanceKm == 4.0)   // 5 × 800m 본훈련 합계
     }
+
+    // MARK: - 심박 존 (세션 상세, 이슈 #48)
+
+    /// 존 비율 비교 — 부동소수 오차 허용
+    private func expectZones(_ zones: [Double], _ expected: [Double]) {
+        #expect(zones.count == 5)
+        for (a, b) in zip(zones, expected) { #expect(abs(a - b) < 1e-9) }
+    }
+
+    @Test("심박 존 — 관찰 최대·Tanaka·190 폴백 세 경로가 같은 샘플을 서로 다른 존으로 나눈다")
+    func heartRateZonesByHrMaxSource() throws {
+        // 샘플 bpm [112, 129, 150, 166]을 0/10/20/30초에 둔다 → 가중 10·10·10·5(마지막은 5초), 합 35
+        let samples: [(time: Date, bpm: Double)] = [112.0, 129, 150, 166].enumerated().map {
+            (time: now.addingTimeInterval(Double($0.offset) * 10), bpm: $0.element)
+        }
+        // 수동값 없음·%HRmax — 추정이 그대로 존 기준이 된다
+        func profile(_ estimate: (bpm: Double, source: HeartRateProfile.Source)) -> HeartRateProfile {
+            TrainingGuideEngine.heartRateProfile(estimate: estimate, manualHrMax: 0, manualRestingHR: 0,
+                                                 measuredRestingHR: nil, zoneMethodRaw: "")
+        }
+
+        // ① 관찰 최대: 세션 최고 심박 [190, 186, 178] → 2번째 값 186 (생년월일 없음)
+        //    경계 111.6/130.2/148.8/167.4 → 112·129는 Z2, 150·166은 Z4
+        let runs = [190.0, 186, 178].enumerated().map { index, maxHR in
+            RunSummary(id: UUID(), start: now.addingTimeInterval(-Double(index + 1) * 86_400),
+                       durationSec: 3_600, distanceMeters: 10_000, avgHeartRate: 150,
+                       maxHeartRate: maxHR)
+        }
+        let observed = profile(TrainingGuideEngine.hrMaxEstimate(runs: runs, now: now, birthYear: nil))
+        #expect(observed.hrMax == 186)
+        #expect(observed.hrMaxSource == .observed)
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, profile: observed),
+                    [0, 20.0 / 35, 0, 15.0 / 35, 0])
+
+        // ② Tanaka: 1990년생, now 2026년 → 208 − 0.7×36 = 182.8
+        //    경계 109.68/127.96/146.24/164.52 → 112 Z2, 129 Z3(0.706), 150 Z4, 166 Z5(0.908)
+        let tanaka = profile(TrainingGuideEngine.hrMaxEstimate(runs: [], now: now, birthYear: 1990))
+        #expect(abs(tanaka.hrMax - 182.8) < 0.01)
+        #expect(tanaka.hrMaxSource == .tanaka)
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, profile: tanaka),
+                    [0, 10.0 / 35, 10.0 / 35, 10.0 / 35, 5.0 / 35])
+
+        // ③ 폴백: 관찰 표본도 생년월일도 없음 → 190(출처 기본값)
+        //    경계 114/133/152/171 → 112 Z1(0.589), 129 Z2, 150 Z3, 166 Z4
+        let fallback = profile(TrainingGuideEngine.hrMaxEstimate(runs: [], now: now, birthYear: nil))
+        #expect(fallback.hrMax == 190)
+        #expect(fallback.hrMaxSource == .fallback)
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, profile: fallback),
+                    [10.0 / 35, 10.0 / 35, 10.0 / 35, 5.0 / 35, 0])
+    }
+
+    @Test("세션 최고 심박 — 230 초과 스파이크만 빼고, 쉬운 조깅 값은 남기며, 비면 nil")
+    func sessionPeakFiltersSpikes() {
+        // 245는 착용 불량 스파이크 → 빠지고 188이 최고
+        #expect(TrainingGuideEngine.sessionPeakBpm([150, 188, 245]) == 188)
+        // 120 아래로만 달린 쉬운 조깅도 최고 심박 줄은 유지한다
+        #expect(TrainingGuideEngine.sessionPeakBpm([80, 110]) == 110)
+        // 남는 값이 없으면 nil — 화면에 내지 않는다
+        #expect(TrainingGuideEngine.sessionPeakBpm([240]) == nil)
+        #expect(TrainingGuideEngine.sessionPeakBpm([]) == nil)
+    }
+
+    // MARK: - 심박 기준 (이슈 #56)
+
+    @Test("심박 기준 폴백 — 추정 재료가 없으면 190·출처 기본값, reliableHrMax는 nil이라 노력도는 Riegel로 떨어진다")
+    func heartRateProfileFallback() {
+        let estimate = TrainingGuideEngine.hrMaxEstimate(runs: [], now: now, birthYear: nil)
+        #expect(estimate.bpm == 190)
+        #expect(estimate.source == .fallback)
+        let fallback = TrainingGuideEngine.heartRateProfile(
+            estimate: estimate, manualHrMax: 0, manualRestingHR: 0,
+            measuredRestingHR: nil, zoneMethodRaw: "")
+        #expect(fallback.hrMax == 190)
+        #expect(fallback.reliableHrMax == nil)
+        // 직접 입력한 182는 근거가 있는 값이라 노력도에 쓴다
+        let manual = TrainingGuideEngine.heartRateProfile(
+            estimate: estimate, manualHrMax: 182, manualRestingHR: 0,
+            measuredRestingHR: nil, zoneMethodRaw: "")
+        #expect(manual.reliableHrMax == 182)
+        #expect(manual.hrMaxSource == .manual)
+    }
+
+    @Test("심박 기준 — 범위 안 수동 최대 심박은 추정보다 우선하고 출처는 직접 입력")
+    func manualHrMaxOverridesEstimate() {
+        // 추정 186(관찰) 위에 수동 175 → 175·직접 입력. 경계 120·230도 범위 안이라 채택
+        for manual in [175, 120, 230] {
+            let hr = TrainingGuideEngine.heartRateProfile(
+                estimate: (186, .observed), manualHrMax: manual, manualRestingHR: 0,
+                measuredRestingHR: nil, zoneMethodRaw: "")
+            #expect(hr.hrMax == Double(manual))
+            #expect(hr.hrMaxSource == .manual)
+        }
+    }
+
+    @Test("심박 기준 — 범위 밖 수동값은 무시한다 (최대 119·231, 안정 29·101)")
+    func outOfRangeManualIgnored() {
+        func hr(maxManual: Int = 0, restManual: Int = 0, measured: Double?) -> HeartRateProfile {
+            TrainingGuideEngine.heartRateProfile(
+                estimate: (186, .observed), manualHrMax: maxManual, manualRestingHR: restManual,
+                measuredRestingHR: measured, zoneMethodRaw: "")
+        }
+        // 최대 119·231 → 추정 186(관찰 최대)로 돌아간다
+        for manual in [119, 231] {
+            #expect(hr(maxManual: manual, measured: nil).hrMax == 186)
+            #expect(hr(maxManual: manual, measured: nil).hrMaxSource == .observed)
+        }
+        // 안정 29·101 → 건강 앱 최근값 52
+        for manual in [29, 101] {
+            #expect(hr(restManual: manual, measured: 52).restingHR == 52)
+        }
+        // 건강 앱 값도 범위 밖(25)이고 수동 없음 → 안정 심박 없음
+        #expect(hr(measured: 25).restingHR == nil)
+        // 범위 안 수동 48은 건강 앱 52보다 우선
+        #expect(hr(restManual: 48, measured: 52).restingHR == 48)
+    }
+
+    @Test("Karvonen 존 — 경계는 (HRmax−안정)×0.6/0.7/0.8/0.9 + 안정 심박이고, 50% HRR 아래는 Z1에 넣는다")
+    func karvonenZoneBoundaries() {
+        // 수동 190·안정 50 → HRR 140, 경계 134/148/162/176
+        let karvonen = TrainingGuideEngine.heartRateProfile(
+            estimate: (186, .observed), manualHrMax: 190, manualRestingHR: 50,
+            measuredRestingHR: nil, zoneMethodRaw: "karvonen")
+        #expect(karvonen.zoneMethod == .karvonen)
+        #expect(karvonen.restingHR == 50)
+        // 샘플 [120, 140, 155, 170, 180]을 0/10/20/30/40초 → 가중 10·10·10·10·5(마지막 5초), 합 45
+        let samples: [(time: Date, bpm: Double)] = [120.0, 140, 155, 170, 180].enumerated().map {
+            (time: now.addingTimeInterval(Double($0.offset) * 10), bpm: $0.element)
+        }
+        // %HRR 0.5/0.643/0.75/0.857/0.929 → Z1·Z2·Z3·Z4·Z5 한 개씩
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, profile: karvonen),
+                    [10.0 / 45, 10.0 / 45, 10.0 / 45, 10.0 / 45, 5.0 / 45])
+        // 같은 샘플을 %HRmax(190)로 → 0.632/0.737/0.816/0.895/0.947 → Z2·Z3·Z4·Z4·Z5
+        let percentMax = TrainingGuideEngine.heartRateProfile(
+            estimate: (186, .observed), manualHrMax: 190, manualRestingHR: 50,
+            measuredRestingHR: nil, zoneMethodRaw: "percentMax")
+        expectZones(TrainingGuideEngine.heartRateZones(samples: samples, profile: percentMax),
+                    [0, 10.0 / 45, 10.0 / 45, 20.0 / 45, 5.0 / 45])
+        // 110 bpm = (110−50)/140 = 0.43 HRR — 명목 하한 0.5 아래지만 버리지 않고 Z1
+        expectZones(TrainingGuideEngine.heartRateZones(samples: [(time: now, bpm: 110)],
+                                                       profile: karvonen),
+                    [1, 0, 0, 0, 0])
+    }
+
+    @Test("HRR 폴백 — 안정 심박이 없으면 Karvonen을 골라도 %HRmax로 계산한다")
+    func karvonenFallsBackWithoutResting() {
+        let samples: [(time: Date, bpm: Double)] = [120.0, 140, 155, 170, 180].enumerated().map {
+            (time: now.addingTimeInterval(Double($0.offset) * 10), bpm: $0.element)
+        }
+        func hr(_ raw: String) -> HeartRateProfile {
+            TrainingGuideEngine.heartRateProfile(
+                estimate: (190, .observed), manualHrMax: 0, manualRestingHR: 0,
+                measuredRestingHR: nil, zoneMethodRaw: raw)
+        }
+        let chosenKarvonen = hr("karvonen")
+        #expect(chosenKarvonen.zoneMethod == .percentMax)
+        #expect(chosenKarvonen.restingHR == nil)
+        #expect(TrainingGuideEngine.heartRateZones(samples: samples, profile: chosenKarvonen)
+                == TrainingGuideEngine.heartRateZones(samples: samples, profile: hr("percentMax")))
+        // 빈 값·모르는 값은 기본 %HRmax
+        #expect(hr("").zoneMethod == .percentMax)
+        #expect(hr("unknown").zoneMethod == .percentMax)
+    }
 }

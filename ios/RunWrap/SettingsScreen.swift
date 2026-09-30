@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// 설정 — 프로필(목적·레벨) 변경. 진입: 홈 헤더의 기어 아이콘 (계획서 M2).
@@ -11,11 +12,22 @@ struct SettingsScreen: View {
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
     // 대회 날짜 — 0이면 미설정. Date를 직접 저장할 수 없어 timeIntervalSince1970로 둔다
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
+    // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값
+    @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
+    @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
+    @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
     /// 다시 진단받기 — 온보딩 설문을 시트로 다시 띄운다 (기획서 §7)
     @State private var isRediagnosing = false
     /// 직접 입력한 대회 기록 (이슈 #35) — 예측 표본. 루트가 쥐고 여기서 추가·삭제한다
     @EnvironmentObject private var raceRecords: RaceRecordStore
+    /// 대회 기록은 CloudKit 진행도 스냅샷에 포함된다 (이슈 #118) — 추가·삭제 직후 백업을 예약한다
+    @EnvironmentObject private var backup: ProgressBackupStore
     @State private var isAddingRecord = false
+    /// 러닝화 (이슈 #171) — 루트가 쥐고 여기서 등록·편집한다. 편집 시트 대상(신규면 아직 목록에 없는 신발)
+    @EnvironmentObject private var shoes: ShoeStore
+    @State private var editingShoe: Shoe?
+    /// 시트를 열 때 정한다 — 저장 직후 목록에 들어가도 닫히는 동안 '편집'으로 바뀌지 않게
+    @State private var editingShoeIsNew = false
     // 알림 (계획서 M8) — 기본값은 NotificationScheduler.rescheduleWeekly의 폴백과 같아야 한다
     @AppStorage(NotifyKey.workoutEnabled) private var workoutNotify = false
     @AppStorage(NotifyKey.weeklyEnabled) private var weeklyNotify = false
@@ -23,8 +35,17 @@ struct SettingsScreen: View {
     @AppStorage(NotifyKey.weeklyHour) private var weeklyHour = 18
     @AppStorage(NotifyKey.hydrationEnabled) private var hydrationNotify = false
     @AppStorage(NotifyKey.runHour) private var runHour = 19
+    // 즐겨찾기 대회 접수 알림 (이슈 #172) — 예약 재료(대회 목록)는 루트의 RaceStore가 쥔다
+    @AppStorage(NotifyKey.raceEnabled) private var raceNotify = false
+    @EnvironmentObject private var raceStore: RaceStore
+    /// 알림 토글을 켰는데 시스템 권한이 없을 때의 안내 (이슈 #94)
+    @State private var showsNotificationDenied = false
+    @Environment(\.openURL) private var openURL
     // 데모 모드 — 워치 기록이 없는 기기(심사자 포함)에서 합성 데이터로 화면을 보여준다 (DemoMode)
     @AppStorage(DemoMode.key) private var demoMode = false
+    /// 정보 섹션 (이슈 #185) — 메일 앱이 없어 주소를 복사했을 때의 안내, 초기화 확인
+    @State private var showsMailCopied = false
+    @State private var confirmsProfileReset = false
 
     /// 앱 내 개인정보 처리방침 — 심사 지침 5.1.1(i)이 요구하는 앱 내 접근 경로.
     /// 원본은 저장소의 docs/privacy.html이고, 같은 내용을 Vercel 정적 배포로 서비스한다
@@ -32,7 +53,100 @@ struct SettingsScreen: View {
     /// App Store Connect의 개인정보 처리방침 URL에도 같은 주소를 넣는다.
     private static let privacyPolicyURL = URL(string: "https://runmisae-privacy.vercel.app/privacy.html")!
 
+    /// 실제 적용되는 심박 기준 — 존 방식 체크 표시·Karvonen 선택 가능 여부의 근거 (이슈 #56)
+    private var heartRate: HeartRateProfile {
+        TrainingGuideEngine.heartRateProfile(estimate: health.hrMaxEstimate,
+                                             manualHrMax: hrMaxManual,
+                                             manualRestingHR: restingHRManual,
+                                             measuredRestingHR: health.restingHRBpm,
+                                             zoneMethodRaw: hrZoneMethodRaw)
+    }
+
     var body: some View {
+        settingsList
+            // 스냅샷에 담기는 설정값 — 바뀌면 병합 기준 시각을 갱신한다 (이슈 #130).
+            // 쓰기 지점(토글·스테퍼·휠·날짜 바인딩)이 흩어져 있어 값 변화로 한 번에 잡는다
+            .onChange(of: purposesRaw) { _, _ in markLocalChanged() }
+            .onChange(of: raceGoalRaw) { _, _ in markLocalChanged() }
+            .onChange(of: raceGoalSec) { _, _ in markLocalChanged() }
+            .onChange(of: raceDateRaw) { _, _ in markLocalChanged() }
+            .onChange(of: hrMaxManual) { _, _ in markLocalChanged() }
+            .onChange(of: restingHRManual) { _, _ in markLocalChanged() }
+            .onChange(of: hrZoneMethodRaw) { _, _ in markLocalChanged() }
+            // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다.
+            // 끌 때는 주간 알림 캐시를 비우고 다시 예약한다 — 데모 수치가 알림 본문에 남지 않게 (이슈 #44)
+            .onChange(of: demoMode) { _, isOn in
+                if !isOn { ReportCache.clear() }
+                Task {
+                    await health.load()
+                    if !isOn { await NotificationScheduler.rescheduleWeekly() }
+                }
+            }
+            .onChange(of: workoutNotify) { _, isOn in
+                if isOn { Task { _ = await confirmNotificationPermission($workoutNotify) } }
+            }
+            .onChange(of: weeklyNotify) { _, isOn in
+                Task {
+                    // 권한이 없어 되돌리면 false로 다시 불려 그쪽에서 예약을 거둔다
+                    if isOn, !(await confirmNotificationPermission($weeklyNotify)) { return }
+                    await NotificationScheduler.rescheduleWeekly()
+                }
+            }
+            .onChange(of: weeklyWeekday) { _, _ in
+                Task { await NotificationScheduler.rescheduleWeekly() }
+            }
+            .onChange(of: weeklyHour) { _, _ in
+                Task { await NotificationScheduler.rescheduleWeekly() }
+            }
+            .onChange(of: hydrationNotify) { _, isOn in
+                if isOn {
+                    Task { _ = await confirmNotificationPermission($hydrationNotify) }
+                } else {
+                    // 예약된 당일분이 있으면 거둔다 — 예보는 오늘 탭이 다시 조회할 때 확인
+                    Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
+                }
+            }
+            .alert("알림이 꺼져 있어요", isPresented: $showsNotificationDenied) {
+                Button("설정 열기") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                }
+                Button("닫기", role: .cancel) {}
+            } message: {
+                Text("설정 > 런미새 > 알림에서 허용해 주세요")
+            }
+    }
+
+    /// 본문 + 시트. body의 modifier 체인이 길어 CI(Xcode 26.6) 타입 체커가 시간 초과해 둘로 나눴다
+    private var settingsList: some View {
+        content
+            .background(RR.bg.ignoresSafeArea())
+            .navigationTitle("설정")
+            .navigationBarTitleDisplayMode(.inline)
+            // 다시 진단받기 — 설문을 처음부터 다시 받는다.
+            // 이전 답을 프리필하지 않는 건 의도다: 다시 진단하는 이유는 그때와 지금이
+            // 달라졌기 때문이다 (기획서 §7). 설문 답은 갱신하지만 성장 사이클은 보존한다 —
+            // 재진단은 명시 파라미터로 알린다 (이슈 #44)
+            .sheet(isPresented: $isRediagnosing) {
+                OnboardingFlowScreen(isRediagnosis: true, onFinish: { isRediagnosing = false })
+                    .environmentObject(health)
+            }
+            // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
+            .sheet(isPresented: $isAddingRecord) {
+                RaceRecordInputSheet {
+                    raceRecords.add($0)
+                    scheduleBackup()
+                }
+            }
+            // 러닝화 등록·편집 (이슈 #171) — 신규와 편집이 같은 시트를 쓴다
+            .sheet(item: $editingShoe) { shoe in
+                ShoeEditSheet(shoe: shoe, isNew: editingShoeIsNew,
+                              isDefault: editingShoeIsNew ? shoes.defaultShoeID == nil : shoes.defaultShoeID == shoe.id,
+                              onSave: saveShoe,
+                              onDelete: { shoes.remove(shoe) })
+            }
+    }
+
+    private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 // 레벨은 설문 결과라 여기서 직접 고르지 않는다 — 다시 진단받아야 바뀐다.
@@ -54,6 +168,14 @@ struct SettingsScreen: View {
                 section(title: "주간 러닝 목표") {
                     weeklyGoalRow
                 }
+                .onChange(of: weeklyGoal) { oldValue, _ in
+                    recordWeeklyGoalChange(from: oldValue)
+                    markLocalChanged()
+                }
+                Text("바뀐 목표는 다음 주부터 보너스에 적용돼요")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+                    .padding(.horizontal, 4)
                 // 대회 목표 묶음 (이슈 #21) — 레이스·기록·날짜를 한 토글 아래 모은다.
                 // 끄면 대회 날짜만 지운다 — 레이스·기록은 훈련 가이드·도감이 계속 쓴다
                 section(title: "대회 목표") {
@@ -70,6 +192,13 @@ struct SettingsScreen: View {
                                 raceGoalRaw = race.rawValue
                             }
                         }
+                        // 새 종류는 사이클 시작 때 고정한 목표로 정해진다 — 여기서 바꾼 목표는 다음 사이클부터 (이슈 #110)
+                        Text("지금 키우는 새의 종류는 이번 사이클을 시작할 때 목표로 정해졌어요. 바꾼 목표는 다음 새부터 적용돼요.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(RR.text2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
                     }
                     section(title: "목표 기록") { goalTimeRow }
                     // 대회 날짜 — 훈련 가이드의 D-day 주기화와 리포트 D-day의 기준 (§4.9)
@@ -81,6 +210,47 @@ struct SettingsScreen: View {
                         ForEach(raceRecords.records) { recordRow($0) }
                         addRecordRow
                     }
+                }
+                // 러닝화 (이슈 #171) — 누적 거리로 교체 시점을 알린다. 은퇴한 신발은 흐리게 목록 끝
+                section(title: "러닝화") {
+                    ForEach(shoes.shoes.filter { !$0.isRetired } + shoes.shoes.filter(\.isRetired)) { shoeRow($0) }
+                    addShoeRow
+                }
+                // 심박 기준 (이슈 #56) — 존·대회 노력도·세션 상세가 모두 이 값을 쓴다. 끄면 추정값으로 돌아간다
+                section(title: "심박 기준") {
+                    toggleRow(label: "최대 심박 직접 입력",
+                              caption: "끄면 추정값 \(Int(health.hrMaxEstimate.bpm.rounded())) bpm(\(health.hrMaxEstimate.source.label))을 써요",
+                              isOn: manualHrMaxBinding)
+                    if hrMaxManual > 0 {
+                        stepperRow(title: "최대 심박 \(hrMaxManual) bpm", caption: "120~230 bpm",
+                                   value: $hrMaxManual, range: HeartRateProfile.hrMaxRange)
+                    }
+                    toggleRow(label: "안정 심박 직접 입력",
+                              caption: health.restingHRBpm.map { "끄면 건강 앱 최근값 \(Int($0.rounded())) bpm을 써요" }
+                                  ?? "건강 앱에 최근 안정 심박 기록이 없어요",
+                              isOn: manualRestingBinding)
+                    if restingHRManual > 0 {
+                        stepperRow(title: "안정 심박 \(restingHRManual) bpm", caption: "30~100 bpm",
+                                   value: $restingHRManual, range: HeartRateProfile.restingRange)
+                    }
+                }
+                // 체크는 실제 적용된 방식을 따른다 — 저장값이 Karvonen이어도 안정 심박이 없으면
+                // %HRmax에 체크가 가고, 저장값은 지우지 않아 안정 심박이 돌아오면 자동 복귀한다
+                section(title: "심박 존 방식") {
+                    optionRow(label: HeartRateZoneMethod.percentMax.label,
+                              caption: "최대 심박의 60·70·80·90%로 다섯 구간을 나눠요",
+                              isSelected: heartRate.zoneMethod == .percentMax) {
+                        hrZoneMethodRaw = HeartRateZoneMethod.percentMax.rawValue
+                    }
+                    optionRow(label: HeartRateZoneMethod.karvonen.label,
+                              caption: heartRate.restingHR == nil
+                                  ? "안정 심박이 있어야 고를 수 있어요"
+                                  : "예비 심박(최대−안정)의 50~100%로 나눠 개인차를 반영해요",
+                              isSelected: heartRate.zoneMethod == .karvonen) {
+                        hrZoneMethodRaw = HeartRateZoneMethod.karvonen.rawValue
+                    }
+                    .disabled(heartRate.restingHR == nil)
+                    .opacity(heartRate.restingHR == nil ? 0.45 : 1)
                 }
                 // 알림 — 로컬 알림 2종 (계획서 M8). 토글을 켤 때 시스템 권한을 요청한다
                 section(title: "알림") {
@@ -96,6 +266,18 @@ struct SettingsScreen: View {
                               caption: "최고기온 25°C 이상이면 러닝 1시간 전에 알려드려요",
                               isOn: $hydrationNotify)
                     if hydrationNotify { runHourRow }
+                    // 즐겨찾기 대회 접수 알림 (이슈 #172) — 대회 목록이 아직 없으면 받아 온 뒤 건다
+                    toggleRow(label: "즐겨찾기 대회 접수 알림",
+                              caption: "접수 시작일과 마감 3일 전 오전 9시에 알려드려요",
+                              isOn: $raceNotify)
+                        .onChange(of: raceNotify) { _, isOn in
+                            Task {
+                                // 권한이 없어 되돌리면 false로 다시 불려 그쪽에서 예약을 거둔다
+                                if isOn, !(await confirmNotificationPermission($raceNotify)) { return }
+                                if isOn { await raceStore.load() }
+                                await raceStore.rescheduleRaceAlarms()
+                            }
+                        }
                 }
 
                 // 데모 모드 (DemoMode) — 워치 기록이 없어도 화면을 둘러볼 수 있게 하는 경로.
@@ -112,57 +294,52 @@ struct SettingsScreen: View {
                             url: Self.privacyPolicyURL)
                 }
 
+                // 정보 (이슈 #185) — 버전·피드백 메일·프로필 설정 초기화. 데모 모드와 무관하게 보인다
+                section(title: "정보") {
+                    infoRow(label: "버전", caption: "런미새 \(Self.appVersion) (\(Self.buildNumber))")
+                    feedbackRow
+                    profileResetRow
+                }
+                .alert("메일 주소를 복사했어요", isPresented: $showsMailCopied) {
+                    Button("확인", role: .cancel) {}
+                } message: {
+                    Text("메일 앱에 \(FeedbackMail.address)로 보내 주세요")
+                }
+                .alert("프로필 설정을 초기화할까요?", isPresented: $confirmsProfileReset) {
+                    Button("초기화", role: .destructive) { resetProfile() }
+                    Button("취소", role: .cancel) {}
+                } message: {
+                    Text("대회 목표·주간 목표·심박 기준·알림 설정이 처음 값으로 돌아가요. 레벨·새·도감·대회 기록·러닝화는 그대로예요.")
+                }
+
                 Text("리포트 카드의 구성과 문장 톤이 프로필에 맞춰 바뀝니다. 러닝 기록 자체는 그대로예요.")
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
                     .padding(.horizontal, 4)
+                // 마지막 iCloud 백업 성공 시각 (이슈 #129) — 갱신이 멈추면 CloudKit 설정 오류를 의심할 수 있다.
+                // 데모 모드는 백업 경로 자체를 막으므로 숨긴다 (시뮬레이터는 토글과 무관하게 항상 데모)
+                if !demoMode && !DemoMode.isActive {
+                    Text("iCloud 백업 · \(backup.lastBackupAt.map(Format.monthDayTime) ?? "아직 없음")")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(RR.text3)
+                        .padding(.horizontal, 4)
+                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 12)
             .padding(.bottom, 26)
         }
-        .background(RR.bg.ignoresSafeArea())
-        .navigationTitle("설정")
-        .navigationBarTitleDisplayMode(.inline)
-        // 다시 진단받기 — 설문을 처음부터 다시 받는다.
-        // 이전 답을 프리필하지 않는 건 의도다: 원답은 저장하지 않고 판정 결과만 남기며,
-        // 다시 진단하는 이유는 그때와 지금이 달라졌기 때문이다 (기획서 §7)
-        .sheet(isPresented: $isRediagnosing) {
-            OnboardingFlowScreen(onFinish: { isRediagnosing = false })
-                .environmentObject(health)
-        }
-        // 대회 기록 추가 (이슈 #35) — 수동 폼이 기본, Apple Intelligence 가용 시 자연어 지름길
-        .sheet(isPresented: $isAddingRecord) {
-            RaceRecordInputSheet { raceRecords.add($0) }
-        }
-        // 데모 모드를 켜면 합성 데이터로, 끄면 실제 HealthKit 기록으로 다시 채운다
-        .onChange(of: demoMode) { _, _ in
-            Task { await health.load() }
-        }
-        .onChange(of: workoutNotify) { _, isOn in
-            if isOn { Task { _ = await NotificationScheduler.requestAuthorization() } }
-        }
-        .onChange(of: weeklyNotify) { _, isOn in
-            Task {
-                if isOn { _ = await NotificationScheduler.requestAuthorization() }
-                await NotificationScheduler.rescheduleWeekly()
-            }
-        }
-        .onChange(of: weeklyWeekday) { _, _ in
-            Task { await NotificationScheduler.rescheduleWeekly() }
-        }
-        .onChange(of: weeklyHour) { _, _ in
-            Task { await NotificationScheduler.rescheduleWeekly() }
-        }
-        .onChange(of: hydrationNotify) { _, isOn in
-            if isOn {
-                Task { _ = await NotificationScheduler.requestAuthorization() }
-            } else {
-                // 예약된 당일분이 있으면 거둔다 — 예보는 오늘 탭이 다시 조회할 때 확인
-                Task { await NotificationScheduler.rescheduleHydration(forecastMaxC: nil) }
-            }
-        }
+    }
+
+    /// 알림 토글을 켤 때 권한 확인 (이슈 #94) — 처음이면 시스템 다이얼로그로 묻고,
+    /// 이미 거부·해제했으면 토글을 되돌리고 설정으로 안내한다. 켜진 채 조용히 안 나가는 상태를 막는다
+    private func confirmNotificationPermission(_ toggle: Binding<Bool>) async -> Bool {
+        if await NotificationScheduler.requestAuthorization() { return true }
+        if await NotificationScheduler.authorizationGranted() { return true }
+        toggle.wrappedValue = false
+        showsNotificationDenied = true
+        return false
     }
 
     /// 현재 레벨 + 다시 진단받기 — 레벨 변경의 유일한 경로 (기획서 §7)
@@ -204,6 +381,19 @@ struct SettingsScreen: View {
         .padding(.vertical, 12)
     }
 
+    /// 주간 목표 변경을 이력에 남긴다 (이슈 #108, #116) — 판정 규칙은 GrowthEngine.recordWeeklyGoalChange.
+    /// 바뀐 목표는 다음 주부터 보너스에 적용된다. 옛 두 키는 읽기 헬퍼가 이관한다
+    private func recordWeeklyGoalChange(from oldValue: Int) {
+        let history = WeeklyGoalChangeLog.load(defaults: .standard)
+        WeeklyGoalChangeLog.save(GrowthEngine.recordWeeklyGoalChange(history: history, oldGoal: oldValue, now: Date()),
+                                 defaults: .standard)
+    }
+
+    /// 스냅샷 내용이 로컬에서 바뀌었음을 기록한다 — CloudKit 병합의 최신 판정 기준 (이슈 #130)
+    private func markLocalChanged() {
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
+    }
+
     /// 목적 복수 선택 토글 — 최소 1개는 남긴다 (전부 끄면 문장 강조점을 정할 수 없다)
     private func togglePurpose(_ purpose: RunPurpose) {
         var selected = RunPurpose.decode(purposesRaw)
@@ -238,6 +428,97 @@ struct SettingsScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// 앱 버전 — Info.plist의 마케팅 버전·빌드 번호 (CI가 주입한 값 그대로)
+    private static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
+    private static let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "-"
+
+    /// 표시 전용 행 — optionRow와 같은 레이아웃, 우측 아이콘 없이 누를 수 없다
+    private func infoRow(label: String, caption: String) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    /// 피드백 메일 — 메일 앱을 못 열면(미설치·계정 없음) 주소를 복사하고 알린다
+    private var feedbackRow: some View {
+        Button {
+            let url = FeedbackMail.url(appVersion: Self.appVersion, build: Self.buildNumber,
+                                       systemVersion: FeedbackMail.systemVersion(ProcessInfo.processInfo.operatingSystemVersion),
+                                       deviceModel: FeedbackMail.deviceModel)
+            guard let url else { return copyMailAddress() }
+            openURL(url) { accepted in
+                if !accepted { copyMailAddress() }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("피드백 보내기")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                    Text("메일로 의견·버그를 알려주세요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "envelope")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 메일 주소 복사 — SwiftUI에 클립보드 쓰기 API가 없어 UIPasteboard(UIKit)를 여기서만 쓴다
+    private func copyMailAddress() {
+        UIPasteboard.general.string = FeedbackMail.address
+        showsMailCopied = true
+    }
+
+    /// 프로필 설정 초기화 — 확인 알림을 거친다
+    private var profileResetRow: some View {
+        Button { confirmsProfileReset = true } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("프로필 설정 초기화")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.dang)
+                    Text("목표·심박·알림 설정만 되돌립니다")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 키를 지우면 @AppStorage가 기본값으로 갱신되고, 값 변화 onChange가 병합 시각·주간 목표 이력을 남긴다.
+    /// 알림은 onChange에 기대지 않고 여기서 직접 다시 예약해 꺼진 설정의 예약분을 거둔다
+    private func resetProfile() {
+        ProfileReset.reset()
+        Task {
+            await NotificationScheduler.rescheduleWeekly()
+            await NotificationScheduler.rescheduleHydration(forecastMaxC: nil)
+            await raceStore.rescheduleRaceAlarms()
+        }
     }
 
     /// 알림 토글 행 — optionRow와 같은 레이아웃, 우측만 스위치
@@ -314,7 +595,10 @@ struct SettingsScreen: View {
                     .foregroundStyle(RR.text2)
             }
             Spacer(minLength: 8)
-            Button { raceRecords.remove(record) } label: {
+            Button {
+                raceRecords.remove(record)
+                scheduleBackup()
+            } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(RR.text3.opacity(0.6))
@@ -323,6 +607,12 @@ struct SettingsScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    /// 대회 기록 변경 직후의 스냅샷 백업 (이슈 #118) — HomeScreen.scheduleBackup과 같은 방식.
+    /// 실패해도 다음 트리거(백그라운드 진입 등)에서 다시 올라간다
+    private func scheduleBackup() {
+        Task { await backup.backupIfChanged() }
     }
 
     /// 기록 추가 버튼 행 — 예측 표본이 되는 이유를 캡션으로 밝힌다
@@ -349,6 +639,106 @@ struct SettingsScreen: View {
         .buttonStyle(.plain)
     }
 
+    /// 러닝화 한 켤레 — 이름·기본 배지, "누적 512 km / 600 km", 교체 기준 대비 진행 바 (이슈 #171)
+    private func shoeRow(_ shoe: Shoe) -> some View {
+        let mileage = shoes.mileage(of: shoe, runs: loadedRuns)
+        let progress = ShoeEngine.progress(mileageKm: mileage, replaceKm: shoe.replaceKm)
+        return Button {
+            editingShoeIsNew = false
+            editingShoe = shoe
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(shoe.name)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(RR.text)
+                            .lineLimit(1)
+                        if shoes.defaultShoeID == shoe.id {
+                            Text("기본")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(RR.brand)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2.5)
+                                .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        }
+                        if shoe.isRetired {
+                            Text("은퇴")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(RR.text3)
+                        }
+                    }
+                    Text("누적 \(Int(mileage.rounded())) km / \(Int(shoe.replaceKm)) km")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(RR.barFill)
+                            Capsule().fill(ShoeEngine.tone(progress: progress).color)
+                                .frame(width: geo.size.width * progress)
+                        }
+                    }
+                    .frame(height: 4)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(shoe.isRetired ? 0.45 : 1)
+    }
+
+    /// 러닝화 추가 버튼 행 — 대회 기록 추가 행과 같은 모양
+    private var addShoeRow: some View {
+        Button {
+            editingShoeIsNew = true
+            editingShoe = Shoe(name: "", createdAt: Date())
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("러닝화 추가")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.brand)
+                    Text("기본 신발로 정하면 새 러닝이 자동으로 쌓이고, 교체할 때가 되면 알려드려요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 러닝화 누적 거리의 재료 — 목록이 아직 없으면 등록 전 거리만 보인다
+    private var loadedRuns: [RunSummary] {
+        if case .loaded(let runs) = health.state { runs } else { [] }
+    }
+
+    /// 편집 시트 저장 — 신규면 추가, 아니면 갱신. 기본 지정이 바뀌었으면 지금 목록으로 자동 배정까지 맞춘다
+    private func saveShoe(_ shoe: Shoe, isDefault: Bool) {
+        if shoes.shoes.contains(where: { $0.id == shoe.id }) {
+            shoes.update(shoe)
+        } else {
+            shoes.add(shoe)
+        }
+        if isDefault {
+            shoes.setDefault(shoe.id)
+        } else if shoes.defaultShoeID == shoe.id {
+            shoes.setDefault(nil)
+        }
+        shoes.syncAssignments(runs: loadedRuns)
+    }
+
     /// "2025년 10월 12일" — 기기 로케일과 무관하게 한국어 고정 (사용자 문자열 규칙)
     fileprivate static func dateLabel(_ date: Date) -> String {
         let comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
@@ -364,6 +754,47 @@ struct SettingsScreen: View {
                         ? Date().addingTimeInterval(8 * 7 * 86_400).timeIntervalSince1970
                         : 0
                 })
+    }
+
+    /// 최대 심박 직접 입력 토글 (이슈 #56) — 켜면 추정값(범위로 클램프)에서 시작하고,
+    /// 끄면 0(미설정)으로 되돌려 추정값을 쓴다. 대회 목표 토글과 같은 패턴
+    private var manualHrMaxBinding: Binding<Bool> {
+        Binding(get: { hrMaxManual > 0 },
+                set: { isOn in
+                    let range = HeartRateProfile.hrMaxRange
+                    let start = Int(health.hrMaxEstimate.bpm.rounded())
+                    hrMaxManual = isOn ? min(max(start, range.lowerBound), range.upperBound) : 0
+                })
+    }
+
+    /// 안정 심박 직접 입력 토글 (이슈 #56) — 켜면 건강 앱 최근값(없으면 60)에서 시작
+    private var manualRestingBinding: Binding<Bool> {
+        Binding(get: { restingHRManual > 0 },
+                set: { isOn in
+                    let range = HeartRateProfile.restingRange
+                    let start = Int((health.restingHRBpm ?? 60).rounded())
+                    restingHRManual = isOn ? min(max(start, range.lowerBound), range.upperBound) : 0
+                })
+    }
+
+    /// 숫자 입력 행 — weeklyGoalRow와 같은 모양에 범위만 받는다 (심박 기준, 이슈 #56)
+    private func stepperRow(title: String, caption: String,
+                            value: Binding<Int>, range: ClosedRange<Int>) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Stepper("", value: value, in: range)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     /// 대회 날짜 선택 — 오늘부터 1년 안. 지난 날짜는 고를 수 없다 (주기화가 무의미해진다)
@@ -451,6 +882,7 @@ struct SettingsScreen: View {
 /// 자연어 한 줄로 폼을 채우는 지름길을 얹는다. 자연어 결과는 폼을 채울 뿐 바로 저장하지
 /// 않는다 — 3B 온디바이스 모델의 오독은 사용자가 저장 전에 잡는다. 못 쓰는 환경이면
 /// 자유 입력 UI 자체를 노출하지 않는다 (이슈 #35 폴백 규칙).
+/// 완주증 사진(사진 앱·카메라)으로 채우는 지름길은 온디바이스 Vision이라 모든 기기에 노출한다 (이슈 #192).
 private struct RaceRecordInputSheet: View {
     let onSave: (RaceRecord) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -460,6 +892,11 @@ private struct RaceRecordInputSheet: View {
     @State private var freeText = ""
     @State private var isParsing = false
     @State private var parseFailed = false
+    // 완주증 OCR (이슈 #192) — 사진은 읽기만 하고 어디에도 저장하지 않는다
+    @State private var certificateItem: PhotosPickerItem?
+    @State private var showsCamera = false
+    @State private var isReadingCertificate = false
+    @State private var certificateFailed = false
 
     /// 입력 가능한 날짜 범위 — 엔진의 최대 나이 가드(2년)와 같은 하한
     private var dateRange: ClosedRange<Date> {
@@ -468,10 +905,16 @@ private struct RaceRecordInputSheet: View {
         return floor...Date()
     }
 
+    /// 입력한 기록이 종목 거리에 비해 비현실적인지 — 0:00:00은 아직 입력 전이라 안내하지 않는다
+    private var isImplausible: Bool {
+        timeSec > 0 && !RaceRecord.isPlausible(timeSec: Double(timeSec), km: race.km)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    certificateSection
                     if RaceResultParser.isAvailable {
                         freeTextSection
                     }
@@ -483,6 +926,12 @@ private struct RaceRecordInputSheet: View {
                         .padding(12)
                     }
                     field(title: "완주 기록") { timeWheels }
+                    if isImplausible {
+                        Text("기록이 종목 거리에 비해 너무 빠르거나 느려요")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(RR.warn)
+                            .padding(.horizontal, 4)
+                    }
                     field(title: "대회 날짜") {
                         DatePicker("대회 날짜",
                                    selection: $date, in: dateRange,
@@ -504,6 +953,19 @@ private struct RaceRecordInputSheet: View {
             .background(RR.bg.ignoresSafeArea())
             .navigationTitle("대회 기록 추가")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: certificateItem) { _, item in
+                guard let item else { return }
+                fillFromCertificate {
+                    guard let data = try? await item.loadTransferable(type: Data.self) else { return nil }
+                    return UIImage(data: data).flatMap(uprightCGImage)
+                }
+            }
+            .fullScreenCover(isPresented: $showsCamera) {
+                CameraPicker { image in
+                    fillFromCertificate { uprightCGImage(image) }
+                }
+                .ignoresSafeArea()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("닫기") { dismiss() }
@@ -514,10 +976,83 @@ private struct RaceRecordInputSheet: View {
                                           timeSec: Double(timeSec), date: date))
                         dismiss()
                     }
-                    .disabled(timeSec == 0)   // 0:00:00은 기록이 아니다
+                    // 0:00:00은 기록이 아니고, 비현실 페이스는 예측을 오염시킨다 (이슈 #93)
+                    .disabled(!RaceRecord.isPlausible(timeSec: Double(timeSec), km: race.km))
                 }
             }
         }
+    }
+
+    /// 완주증 지름길 (이슈 #192) — 사진 앱 선택은 권한이 필요 없고, 촬영은 카메라가 있는 기기에서만 보인다
+    private var certificateSection: some View {
+        field(title: "완주증 사진으로 채우기") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    PhotosPicker(selection: $certificateItem, matching: .images) {
+                        Text("사진 선택")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(RR.brand)
+                    if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                        Button {
+                            showsCamera = true
+                        } label: {
+                            Text("촬영")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(RR.brand)
+                    }
+                    if isReadingCertificate {
+                        ProgressView()
+                    }
+                }
+                .disabled(isReadingCertificate)
+                if certificateFailed {
+                    Text("완주증을 읽지 못했어요 — 아래에서 직접 입력해 주세요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Text("사진은 기기에서만 읽고 저장하지 않아요")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+        }
+    }
+
+    /// 완주증 이미지 → Vision OCR → 폼 프리필. 이미지를 못 얻거나 못 읽으면 실패 안내만 한다
+    private func fillFromCertificate(_ loadImage: @escaping () async -> CGImage?) {
+        isReadingCertificate = true
+        certificateFailed = false
+        Task {
+            let parsed: RaceResultParser.Parsed?
+            if let image = await loadImage() {
+                parsed = await FinisherCertificateReader.read(image)
+            } else {
+                parsed = nil
+            }
+            isReadingCertificate = false
+            // 같은 사진을 다시 골라도 onChange가 불리도록 선택을 비운다
+            certificateItem = nil
+            guard let parsed else {
+                certificateFailed = true
+                return
+            }
+            apply(parsed)
+        }
+    }
+
+    /// 회전 정보(EXIF)를 반영한 CGImage — cgImage는 센서 원본 방향이라 세로로 찍은 사진이 옆으로 누운 채
+    /// Vision에 들어간다. 방향이 .up이 아닐 때만 1배율로 다시 그려 똑바로 세운다
+    private func uprightCGImage(_ image: UIImage) -> CGImage? {
+        guard image.imageOrientation != .up else { return image.cgImage }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: image.size, format: format)
+            .image { _ in image.draw(at: .zero) }.cgImage
     }
 
     /// 자연어 지름길 — 파싱 성공 시 아래 폼을 채우고, 실패는 조용히 안내만 한다
@@ -563,11 +1098,16 @@ private struct RaceRecordInputSheet: View {
                 parseFailed = true
                 return
             }
-            if let parsedRace = parsed.race { race = parsedRace }
-            if let sec = parsed.timeSec { timeSec = Int(sec) }
-            if let parsedDate = parsed.date {
-                date = min(max(parsedDate, dateRange.lowerBound), dateRange.upperBound)
-            }
+            apply(parsed)
+        }
+    }
+
+    /// 파싱 결과로 폼을 채운다 — 확신 없는 필드(nil)는 기존 값을 유지한다 (자연어·완주증 공용)
+    private func apply(_ parsed: RaceResultParser.Parsed) {
+        if let parsedRace = parsed.race { race = parsedRace }
+        if let sec = parsed.timeSec { timeSec = Int(sec) }
+        if let parsedDate = parsed.date {
+            date = min(max(parsedDate, dateRange.lowerBound), dateRange.upperBound)
         }
     }
 
@@ -595,6 +1135,198 @@ private struct RaceRecordInputSheet: View {
         .pickerStyle(.wheel)
         .frame(height: 108)
         .clipped()
+    }
+
+    private func field(title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(RR.text2)
+                .padding(.horizontal, 4)
+            VStack(spacing: 0) { content() }
+                .rrCard()
+        }
+    }
+}
+
+// MARK: - 완주증 촬영 (이슈 #192)
+
+/// SwiftUI에 카메라 촬영 API가 없어 UIImagePickerController를 여기서만 쓴다 (UIPasteboard와 같은 예외).
+/// 찍은 사진은 콜백으로 OCR에 넘길 뿐 사진 앱이나 디스크에 저장하지 않는다
+private struct CameraPicker: UIViewControllerRepresentable {
+    let onCapture: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: CameraPicker
+
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { parent.onCapture(image) }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+    }
+}
+
+// MARK: - 러닝화 편집 시트 (이슈 #171)
+
+/// 이름·등록 전 누적 거리·교체 기준·기본 지정·은퇴·삭제. 신규 등록에서는 은퇴·삭제를 숨긴다
+private struct ShoeEditSheet: View {
+    let isNew: Bool
+    let onSave: (Shoe, Bool) -> Void
+    let onDelete: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var shoe: Shoe
+    @State private var isDefault: Bool
+    @State private var confirmsDelete = false
+
+    init(shoe: Shoe, isNew: Bool, isDefault: Bool,
+         onSave: @escaping (Shoe, Bool) -> Void, onDelete: @escaping () -> Void) {
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _shoe = State(initialValue: shoe)
+        _isDefault = State(initialValue: isDefault)
+    }
+
+    private var trimmedName: String {
+        shoe.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    field(title: "이름") {
+                        TextField("예: 페가수스 41", text: $shoe.name)
+                            .font(.system(size: 15))
+                            .textFieldStyle(.plain)
+                            .padding(14)
+                    }
+                    field(title: "거리") {
+                        stepperRow(title: "등록 전 누적 \(Int(shoe.startKm)) km",
+                                   caption: "앱에 등록하기 전에 이미 달린 거리예요",
+                                   value: $shoe.startKm, range: 0...2_000, step: 10)
+                        Divider().overlay(RR.line)
+                        stepperRow(title: "교체 기준 \(Int(shoe.replaceKm)) km",
+                                   caption: "누적이 이 거리를 넘으면 홈에서 알려드려요",
+                                   value: $shoe.replaceKm, range: 300...1_200, step: 50)
+                    }
+                    field(title: "상태") {
+                        toggleRow(label: "기본 신발로 지정",
+                                  caption: "새 러닝이 자동으로 이 신발에 기록돼요",
+                                  isOn: $isDefault)
+                            .disabled(shoe.isRetired)
+                            .opacity(shoe.isRetired ? 0.45 : 1)
+                        if !isNew {
+                            Divider().overlay(RR.line)
+                            toggleRow(label: "은퇴",
+                                      caption: "목록 끝으로 옮기고 러닝 배정 후보에서 빼요",
+                                      isOn: $shoe.isRetired)
+                        }
+                    }
+                    if !isNew {
+                        Button(role: .destructive) { confirmsDelete = true } label: {
+                            Text("러닝화 삭제")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(RR.dang)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.plain)
+                        .rrCard()
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 26)
+            }
+            .background(RR.bg.ignoresSafeArea())
+            .navigationTitle(isNew ? "러닝화 추가" : "러닝화 편집")
+            .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: shoe.isRetired) { _, retired in
+                // 은퇴한 신발은 자동 배정 대상이 아니다 — 기본 지정을 함께 푼다
+                if retired { isDefault = false }
+            }
+            .confirmationDialog("이 러닝화를 삭제할까요?", isPresented: $confirmsDelete, titleVisibility: .visible) {
+                Button("삭제", role: .destructive) {
+                    onDelete()
+                    dismiss()
+                }
+                Button("취소", role: .cancel) {}
+            } message: {
+                Text("배정된 러닝은 '없음'으로 바뀌어요. 그만 신는다면 은퇴가 기록을 남겨요.")
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("저장") {
+                        var saved = shoe
+                        saved.name = trimmedName
+                        onSave(saved, isDefault && !saved.isRetired)
+                        dismiss()
+                    }
+                    .disabled(trimmedName.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func stepperRow(title: String, caption: String, value: Binding<Double>,
+                            range: ClosedRange<Double>, step: Double) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Stepper("", value: value, in: range, step: step)
+                .labelsHidden()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    private func toggleRow(label: String, caption: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Toggle(label, isOn: isOn)
+                .labelsHidden()
+                .tint(RR.brand)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private func field(title: String, @ViewBuilder content: () -> some View) -> some View {

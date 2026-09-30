@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import RunWrap
 
 /// 알림 본문 빌더(순수 함수)와 리포트 캐시 왕복 검증 (계획서 M8).
@@ -27,35 +28,138 @@ struct NotificationContentTests {
     func weeklyBody() {
         let snapshot = ReportSnapshot(generatedAt: now,
                                       headline: "안정적으로 리듬을 지킨 한 주였습니다.",
-                                      suggestion: nil, weekKm: 21.4, runCount: 3)
-        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot)
+                                      suggestion: nil, weekKm: 21.4, runCount: 3,
+                                      showsDistanceNumbers: true)
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
             == "최근 7일 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
-        #expect(NotificationScheduler.weeklyBody(snapshot: nil)
+        #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: now)
             == "이번 주 러닝을 정리했어요 — 리포트를 열어보세요")
     }
 
-    @Test("주간 트리거 — 요일·시가 정각 DateComponents로 옮겨진다")
-    func weeklyTrigger() {
-        let components = NotificationScheduler.weeklyTrigger(weekday: 1, hour: 18)
-        #expect(components.weekday == 1)
-        #expect(components.hour == 18)
-        #expect(components.minute == 0)
+    @Test("주간 본문 신선도 — 발송 시각 기준 48시간 이내 스냅샷만 수치를 싣는다 (이슈 #61)")
+    func weeklyBodyStaleness() {
+        // 스냅샷 생성 = now(2026-08-10T09:00Z)
+        let snapshot = ReportSnapshot(generatedAt: now,
+                                      headline: "안정적으로 리듬을 지킨 한 주였습니다.",
+                                      suggestion: nil, weekKm: 21.4, runCount: 3,
+                                      showsDistanceNumbers: true)
+        let fallback = "이번 주 러닝을 정리했어요 — 리포트를 열어보세요"
+
+        // 47h59m 뒤 발송(2026-08-12T08:59Z) → 48h 이내라 신선 → 수치 포함
+        let fresh = ISO8601DateFormatter().date(from: "2026-08-12T08:59:00Z")!
+        #expect(!NotificationScheduler.isStale(snapshot, at: fresh))
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: fresh)
+            == "최근 7일 3회 · 21.4 km — 안정적으로 리듬을 지킨 한 주였습니다.")
+
+        // 48h01m 뒤 발송(2026-08-12T09:01Z) → 48h 초과라 오래됨 → 기본 문구
+        let stale = ISO8601DateFormatter().date(from: "2026-08-12T09:01:00Z")!
+        #expect(NotificationScheduler.isStale(snapshot, at: stale))
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: stale) == fallback)
+
+        // 스냅샷이 없으면 발송 시각과 무관하게 기본 문구
+        #expect(NotificationScheduler.weeklyBody(snapshot: nil, at: fresh) == fallback)
+    }
+
+    @Test("주간 본문 레벨 게이트 — 런린이 스냅샷은 km 없이 횟수·헤드라인만 싣는다 (이슈 #141)")
+    func weeklyBodyBeginnerHidesDistance() {
+        // 런린이는 ReportGate.showsNumbers(.distance) = false → make가 showsDistanceNumbers false로 채운다
+        let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
+                                  distance: nil, acwr: nil, efficiency: nil,
+                                  streakWeeks: 2, ranThisWeek: true, weekRunCount: 3)
+        let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
+                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
+        let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .beginner, now: now)
+        #expect(!snapshot.showsDistanceNumbers)
+
+        let body = NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
+        #expect(!body.contains("km"))
+        #expect(body == "최근 7일 3회 — \(report.headline(level: .beginner))")
+    }
+
+    @Test("주간 본문 레벨 게이트 — 런잘알 스냅샷은 기존처럼 횟수·거리·헤드라인 (이슈 #141)")
+    func weeklyBodyIntermediateShowsDistance() {
+        // 창 안 10km 1건 → weekKm 10.0, 횟수는 report.weekRunCount 3
+        let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
+                                  distance: nil, acwr: nil, efficiency: nil,
+                                  streakWeeks: 2, ranThisWeek: true, weekRunCount: 3)
+        let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
+                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
+        let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .intermediate, now: now)
+        #expect(snapshot.showsDistanceNumbers)
+        #expect(NotificationScheduler.weeklyBody(snapshot: snapshot, at: now)
+            == "최근 7일 3회 · 10.0 km — \(report.headline(level: .intermediate))")
+    }
+
+    /// 주간 발송 시각 테스트용 — 시간대를 서울로 고정해 실행 환경과 무관하게 한다
+    private var seoul: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Seoul")!
+        return calendar
+    }
+
+    @Test("주간 발송 시각 — 다음 (요일, 시) 정각부터 7일 간격으로 정확한 날짜 4건 (이슈 #94)")
+    func weeklyFireDates() {
+        // now = 2026-08-10T09:00Z = 8/10(월) 18:00 KST. 일요일(1) 18시 → 다음 회차는 8/16(일)
+        let dates = NotificationScheduler.weeklyFireDates(from: now, weekday: 1, hour: 18,
+                                                          count: 4, calendar: seoul)
+        #expect(dates.map(\.day) == [16, 23, 30, 6])      // 8/16·8/23·8/30·9/6
+        #expect(dates.map(\.month) == [8, 8, 8, 9])
+        #expect(dates.allSatisfy { $0.year == 2026 && $0.hour == 18 && $0.minute == 0 })
+        // 요일 반복 트리거가 아니라 날짜 고정이어야 첫 회와 백업이 겹치지 않는다
+        #expect(dates.allSatisfy { $0.weekday == nil })
+    }
+
+    @Test("주간 발송 시각 — 같은 요일 이전 시각이면 오늘, 정각이면 다음 주부터 센다 (이슈 #94)")
+    func weeklyFireDatesSameDay() {
+        // now = 8/10(월) 18:00 KST. 월요일(2) 19시 → 오늘 19시가 첫 회
+        let later = NotificationScheduler.weeklyFireDates(from: now, weekday: 2, hour: 19,
+                                                          count: 2, calendar: seoul)
+        #expect(later.map(\.day) == [10, 17])
+        // 월요일 18시 정각 = now → 이미 지난 것으로 보고 8/17부터
+        let exact = NotificationScheduler.weeklyFireDates(from: now, weekday: 2, hour: 18,
+                                                          count: 1, calendar: seoul)
+        #expect(exact.map(\.day) == [17])
+        // count 0 → 빈 목록
+        #expect(NotificationScheduler.weeklyFireDates(from: now, weekday: 2, hour: 18,
+                                                      count: 0, calendar: seoul).isEmpty)
+    }
+
+    @Test("주간 백업 id — 첫 회 id와 겹치지 않는 3건 (이슈 #94)")
+    func weeklyBackupIds() {
+        #expect(NotificationScheduler.weeklyBackupIds
+            == ["runwrap.weekly.2", "runwrap.weekly.3", "runwrap.weekly.4"])
+        #expect(!NotificationScheduler.weeklyBackupIds.contains(NotificationScheduler.weeklyId))
+    }
+
+    @Test("알림 권한 판정 — 허용·임시·앱 클립만 발송 가능, 거부·미결정은 불가 (이슈 #94)")
+    func authorizationGranted() {
+        #expect(NotificationScheduler.isGranted(.authorized))
+        #expect(NotificationScheduler.isGranted(.provisional))
+        #expect(NotificationScheduler.isGranted(.ephemeral))
+        #expect(!NotificationScheduler.isGranted(.denied))
+        #expect(!NotificationScheduler.isGranted(.notDetermined))
     }
 
     @Test("스냅샷 생성 — 최근 7일 거리 합과 횟수를 담는다")
     func snapshotMake() {
-        let report = WeeklyReport(dateRange: "8.3 – 8.9",
+        let report = WeeklyReport(dateRange: "8.3 – 8.9", weeks: [],
                                   distance: nil, acwr: nil, efficiency: nil,
-                                  streakWeeks: 2, weekRunCount: 3)
-        // 2일 전 10km는 7일 창 안, 9일 전 10km는 창 밖 → weekKm 10
+                                  streakWeeks: 2, ranThisWeek: true, weekRunCount: 3)
+        // 창은 6일 전 자정 ~ now (weekRunCount와 같은 창, 이슈 #75).
+        // 2일 전 10km는 창 안, 9일 전 10km는 창 밖.
+        // 8일째 날(창 시작 1분 전) 7km는 롤링 7×86_400 안이지만 창 밖 → weekKm 10
+        let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
         let runs = [RunSummary(id: UUID(), start: now.addingTimeInterval(-2 * 86_400),
                                durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150),
                     RunSummary(id: UUID(), start: now.addingTimeInterval(-9 * 86_400),
-                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150)]
-        let snapshot = ReportSnapshot.make(report: report, runs: runs, now: now)
+                               durationSec: 3_000, distanceMeters: 10_000, avgHeartRate: 150),
+                    RunSummary(id: UUID(), start: windowStart.addingTimeInterval(-60),
+                               durationSec: 2_100, distanceMeters: 7_000, avgHeartRate: 150)]
+        #expect(runs[2].start >= now.addingTimeInterval(-7 * 86_400))  // 전제: 롤링 7일 안
+        let snapshot = ReportSnapshot.make(report: report, runs: runs, level: .intermediate, now: now)
         #expect(abs(snapshot.weekKm - 10) < 0.001)
         #expect(snapshot.runCount == 3)
-        #expect(snapshot.headline == report.headline)
+        #expect(snapshot.headline == report.headline(level: .intermediate))
         #expect(snapshot.generatedAt == now)
     }
 
@@ -121,8 +225,99 @@ struct NotificationContentTests {
         let snapshot = ReportSnapshot(generatedAt: now,
                                       headline: "몸이 좋아지고 있는 한 주였습니다.",
                                       suggestion: "지금 리듬 그대로 이어가면 됩니다.",
-                                      weekKm: 32.5, runCount: 4)
+                                      weekKm: 32.5, runCount: 4,
+                                      showsDistanceNumbers: true)
         ReportCache.save(snapshot, in: dir)
         #expect(ReportCache.load(from: dir) == snapshot)
+    }
+
+    @Test("캐시 호환 — showsDistanceNumbers 키가 없는 기존 캐시는 수치 노출(true)로 읽는다 (이슈 #141)")
+    func cacheDecodesLegacySnapshot() throws {
+        // 이슈 #141 이전 형식 — generatedAt은 JSONEncoder 기본(2001-01-01 기준 초)
+        let legacy = """
+        {"generatedAt": \(now.timeIntervalSinceReferenceDate), "headline": "예전 헤드라인",
+         "weekKm": 12.5, "runCount": 2}
+        """
+        let snapshot = try JSONDecoder().decode(ReportSnapshot.self, from: Data(legacy.utf8))
+        #expect(snapshot.showsDistanceNumbers)
+        #expect(snapshot.generatedAt == now)
+        #expect(snapshot.suggestion == nil)
+        #expect(snapshot.runCount == 2)
+    }
+
+    @Test("캐시 삭제 — 데모 모드를 끄면 비운 캐시는 nil로 읽힌다 (이슈 #44)")
+    func cacheClear() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runwrap-cache-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        ReportCache.save(ReportSnapshot(generatedAt: now, headline: "데모 헤드라인",
+                                        suggestion: nil, weekKm: 30, runCount: 5,
+                                        showsDistanceNumbers: true), in: dir)
+        #expect(ReportCache.load(from: dir) != nil)
+
+        ReportCache.clear(in: dir)
+        #expect(ReportCache.load(from: dir) == nil)
+        // 파일이 없을 때 다시 지워도 조용히 넘어간다
+        ReportCache.clear(in: dir)
+    }
+
+    // MARK: 대회 접수 알림 (이슈 #172)
+
+    private func raceEntries(_ races: [Race]) -> [RaceEngine.Entry] {
+        RaceEngine.entries(from: races, now: now)
+    }
+
+    @Test("대회 접수 알림 — 접수 시작일 09:00 KST, 이미 지난 마감 3일 전 알림은 뺀다 (이슈 #172)")
+    func raceAlarmsStartAndPastEnd() throws {
+        // now = 2026-08-10T09:00Z = 8/10 18:00 KST
+        // 대회 1: 접수 8/20~9/5 → 시작 8/20 09:00 KST, 마감 3일 전 9/2 09:00 KST
+        // 대회 2: 마감 8/12만 → 3일 전 8/9 09:00 KST는 이미 지나 0건
+        let alarms = NotificationScheduler.raceAlarms(favorites: raceEntries([
+            Race(id: 1, name: "서울달리기", date: "2026-09-20",
+                 registerStart: "2026-08-20", registerEnd: "2026-09-05"),
+            Race(id: 2, name: "한강 10K", date: "2026-09-27", registerEnd: "2026-08-12"),
+        ]), now: now)
+
+        #expect(alarms.map(\.id) == ["runwrap.race.1.start", "runwrap.race.1.end"])
+        let start = try #require(alarms.first)
+        #expect(start.body == "서울달리기 접수가 오늘 시작돼요")
+        #expect(start.fire.timeZone == TimeZone(identifier: "Asia/Seoul"))
+        #expect([start.fire.year, start.fire.month, start.fire.day, start.fire.hour, start.fire.minute]
+            == [2026, 8, 20, 9, 0])
+        // 성분이 가리키는 절대 시각 — 8/20 09:00 KST = 8/20 00:00Z (기기 시간대와 무관)
+        #expect(Calendar(identifier: .gregorian).date(from: start.fire)
+            == ISO8601DateFormatter().date(from: "2026-08-20T00:00:00Z"))
+        // 알림 트리거도 성분의 KST 시간대를 따르는지 — 고정 날짜는 실제 시계로 이미 지나
+        // nextTriggerDate가 nil이므로, 같은 성분의 연도만 2099로 옮겨 확인한다 (09:00 KST = 00:00Z)
+        var future = start.fire
+        future.year = 2099
+        let trigger = UNCalendarNotificationTrigger(dateMatching: future, repeats: false)
+        #expect(trigger.nextTriggerDate() == ISO8601DateFormatter().date(from: "2099-08-20T00:00:00Z"))
+
+        let end = try #require(alarms.last)
+        #expect(end.body == "서울달리기 접수 마감 3일 전이에요")
+        #expect([end.fire.month, end.fire.day, end.fire.hour] == [9, 2, 9])
+    }
+
+    @Test("대회 접수 알림 — 접수기간을 모르는 대회는 0건 (이슈 #172)")
+    func raceAlarmsNoPeriod() {
+        let alarms = NotificationScheduler.raceAlarms(
+            favorites: raceEntries([Race(id: 3, name: "기간 미상", date: "2026-10-01")]), now: now)
+        #expect(alarms.isEmpty)
+    }
+
+    @Test("대회 접수 알림 — 대회일 순으로 limit개 대회까지만, 알림 없는 대회는 개수에 안 센다 (이슈 #172)")
+    func raceAlarmsLimit() {
+        // 입력 순서와 무관하게 대회일 순: 9/5(기간 미상, 0건) → 9/12(id 11) → 9/19(id 12) → 9/26(id 13)
+        // limit 2 → 알림이 있는 앞의 두 대회(11, 12)의 시작 알림만 남고 13은 잘린다
+        let alarms = NotificationScheduler.raceAlarms(favorites: raceEntries([
+            Race(id: 13, name: "C", date: "2026-09-26", registerStart: "2026-08-21"),
+            Race(id: 11, name: "A", date: "2026-09-12", registerStart: "2026-08-21"),
+            Race(id: 10, name: "미상", date: "2026-09-05"),
+            Race(id: 12, name: "B", date: "2026-09-19", registerStart: "2026-08-21"),
+        ]), now: now, limit: 2)
+        #expect(alarms.map(\.id) == ["runwrap.race.11.start", "runwrap.race.12.start"])
     }
 }

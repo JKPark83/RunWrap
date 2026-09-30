@@ -28,12 +28,14 @@ struct TodayVerdictEngineTests {
     /// zones는 nil로 둔다 — 페이스 존이 없으면 퀄리티 처방을 건너뛰므로(엔진 규칙)
     /// 이 픽스처의 기대값은 이지런·LSD 계열만 나온다.
     private func guide(low: Double = 20, high: Double = 22,
-                       batteryLimited: Bool = false) -> TrainingGuide {
+                       batteryLimited: Bool = false,
+                       zones: TrainingGuide.PaceZones? = nil,
+                       tempoCount: Int = 1) -> TrainingGuide {
         TrainingGuide(prediction: nil,
-                      zones: nil,
+                      zones: zones,
                       prescription: .init(weeklyKmLow: low, weeklyKmHigh: high,
                                           lsdKmLow: low * 0.25, lsdKmHigh: high * 0.35,
-                                          tempoCount: 1, intervalCount: 1,
+                                          tempoCount: tempoCount, intervalCount: 1,
                                           phase: nil, daysToRace: nil,
                                           peakWeeklyKm: 40, batteryLimited: batteryLimited),
                       balance: nil)
@@ -44,10 +46,11 @@ struct TodayVerdictEngineTests {
                          weather: TodayVerdictEngine.WeatherInput = .loading,
                          guide: TrainingGuide? = nil,
                          hasRaceGoal: Bool = true,
-                         weeklyGoal: Int = 4) -> TodayVerdict? {
+                         weeklyGoal: Int = 4,
+                         air: AirGrade? = nil) -> TodayVerdict? {
         TodayVerdictEngine.verdict(runs: runs ?? baseRuns, battery: battery, weather: weather,
                                    guide: guide, hasRaceGoal: hasRaceGoal,
-                                   weeklyGoal: weeklyGoal, now: now)
+                                   weeklyGoal: weeklyGoal, air: air, now: now)
     }
 
     // MARK: - 카드 전체 가드
@@ -79,6 +82,52 @@ struct TodayVerdictEngineTests {
         let result = try #require(verdict(battery: nil))
         #expect(result.tone == nil)
         #expect(result.headline == "오늘은 어떻게 가실까요")
+    }
+
+    // MARK: - 제목줄 대기질 상한 (이슈 #183)
+
+    @Test("대기질 상한 — 매우나쁨이면 배터리가 좋아도 overload·'오늘은 실내가 이깁니다'")
+    func headlineVeryBadAir() throws {
+        let result = try #require(verdict(battery: battery(.improving), air: .veryBad))
+        #expect(result.tone == .overload)
+        #expect(result.headline == "오늘은 실내가 이깁니다")
+
+        // 배터리가 없어도 같은 판정 — 공기는 배터리와 무관한 조건이다
+        let noBattery = try #require(verdict(battery: nil, air: .veryBad))
+        #expect(noBattery.tone == .overload)
+        #expect(noBattery.headline == "오늘은 실내가 이깁니다")
+    }
+
+    @Test("대기질 상한 — 나쁨이면 배터리 steady·improving·없음을 caution으로 낮춘다")
+    func headlineBadAirCapsTone() throws {
+        for tone: RRTone? in [.steady, .improving, nil] {
+            let result = try #require(verdict(battery: tone.map { battery($0) }, air: .bad))
+            #expect(result.tone == .caution)
+            #expect(result.headline == "공기가 나빠요, 가볍게만 다녀오세요")
+        }
+    }
+
+    @Test("대기질 상한 — 나쁨이어도 배터리가 이미 overload·caution이면 배터리 판정을 유지한다")
+    func headlineBadAirKeepsConservativeBattery() throws {
+        let overload = try #require(verdict(battery: battery(.overload), air: .bad))
+        #expect(overload.tone == .overload)
+        #expect(overload.headline == "오늘은 쉬시는 게 이깁니다")
+
+        let caution = try #require(verdict(battery: battery(.caution), air: .bad))
+        #expect(caution.tone == .caution)
+        #expect(caution.headline == "가볍게만 다녀오세요")
+    }
+
+    @Test("대기질 상한 — 좋음·보통·nil이면 배터리 판정 그대로")
+    func headlineMildAirUnchanged() throws {
+        for air: AirGrade? in [.good, .moderate, nil] {
+            let result = try #require(verdict(battery: battery(.improving), air: air))
+            #expect(result.tone == .improving)
+            #expect(result.headline == "몸이 좋습니다, 밀어붙여도 돼요")
+        }
+        let noBattery = try #require(verdict(battery: nil, air: .moderate))
+        #expect(noBattery.tone == nil)
+        #expect(noBattery.headline == "오늘은 어떻게 가실까요")
     }
 
     // MARK: - 체력 배터리 줄
@@ -121,10 +170,58 @@ struct TodayVerdictEngineTests {
         #expect(rainy.weather.content == .value("체감 18°C · 비 · 반팔 티+반바지"))
     }
 
-    private func weather(apparentC: Double, precipitationMm: Double = 0) -> CurrentWeather {
+    @Test("날씨 캡션 — 달리기 좋은 시간이 있으면 '18~20시가 좋아요', 없으면 nil (이슈 #173)")
+    func weatherBestWindowCaption() throws {
+        // now = KST 18:00 → 창 18:00~20:00, 판정문(값)은 추천과 무관하게 그대로
+        let window = RunWindow(start: now, end: now.addingTimeInterval(7_200),
+                               avgScore: 100, apparentC: 20, precipitationProbabilityPct: 10)
+        let withWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4),
+                                                                bestWindow: window)))
+        #expect(withWindow.weather.caption == "18~20시가 좋아요")
+        #expect(withWindow.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+
+        let withoutWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4))))
+        #expect(withoutWindow.weather.caption == nil)
+    }
+
+    @Test("날씨 줄 대기질 — 나쁨 이상이면 문구 뒤에 ' · 대기질 <공식 등급>'을 붙인다 (이슈 #183)")
+    func weatherAirSuffix() throws {
+        let bad = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .bad))
+        #expect(bad.weather.content == .value("체감 22°C · 반팔 티+반바지 · 대기질 나쁨"))
+
+        let veryBad = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .veryBad))
+        #expect(veryBad.weather.content == .value("체감 22°C · 반팔 티+반바지 · 대기질 매우나쁨"))
+
+        // 보통 이하는 붙이지 않는다
+        let moderate = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .moderate))
+        #expect(moderate.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+    }
+
+    @Test("날씨 줄 대기질 — 날씨 값이 없는 유도 문구 줄에는 붙이지 않는다")
+    func weatherAirSuffixSkipsHints() throws {
+        let cases: [(TodayVerdictEngine.WeatherInput, String)] = [
+            (.loading, "날씨를 불러오는 중"),
+            (.denied, "설정에서 위치 허용하기"),
+            (.unavailable, "날씨를 불러오지 못했어요"),
+        ]
+        for (input, hint) in cases {
+            let result = try #require(verdict(weather: input, air: .bad))
+            #expect(result.weather.content == .hint(hint))
+        }
+    }
+
+    @Test("날씨 조각 — 강수량 0mm여도 이슬비 코드(WMO 51)면 raining (이슈 #109)")
+    func weatherPartsRainCode() {
+        let parts = TodayVerdictEngine.weatherParts(
+            weather(apparentC: 18, weatherCode: 51), now: now)
+        #expect(parts.raining)
+    }
+
+    private func weather(apparentC: Double, precipitationMm: Double = 0,
+                         weatherCode: Int? = nil) -> CurrentWeather {
         CurrentWeather(temperatureC: apparentC, apparentC: apparentC, humidityPct: 60,
                        windMs: 2, precipitationMm: precipitationMm, forecastMaxC: nil,
-                       weatherCode: nil, uvIndex: 1)
+                       weatherCode: weatherCode, uvIndex: 1)
     }
 
     // MARK: - 오늘 권장 세션
@@ -197,6 +294,114 @@ struct TodayVerdictEngineTests {
         let result = try #require(verdict(battery: battery(.steady), guide: guide(),
                                           weeklyGoal: 1))
         #expect(result.session.content == .value("이번 주 횟수를 다 채우셨어요"))
+    }
+
+    // MARK: - 권장 세션·배지 대기질 상한 (이슈 #195)
+
+    /// 인터벌이 처방되는 guide — 페이스 존이 있고 템포 0·인터벌 1회.
+    /// baseRuns 기준: 이번 주 6km ≥ LSD 하한 5km라 롱런은 끝났고, 두 러닝 페이스가 같아
+    /// 스피드 세션 0회 < 퀄리티 1회 → 배터리가 좋으면 인터벌 차례다
+    private var intervalGuide: TrainingGuide {
+        guide(zones: .init(vdot: 50, easySecPerKm: 294...338, tempoSecPerKm: 255,
+                           intervalSecPerKm: 235, goalSecPerKm: nil),
+              tempoCount: 0)
+    }
+
+    @Test("대기질 상한 — 매우나쁨이면 권장 세션은 '오늘은 실내에서'(overload), 배지는 '실외 자제'")
+    func sessionVeryBadAir() throws {
+        let result = try #require(verdict(battery: battery(.improving), guide: intervalGuide,
+                                          air: .veryBad))
+        #expect(result.session.content == .value("오늘은 실내에서"))
+        #expect(result.session.tone == .overload)
+        #expect(result.badgeLabel == "실외 자제")
+
+        // 처방이 없어 유도 문구를 낼 자리여도 이 줄이 이긴다
+        let noGuide = try #require(verdict(battery: nil, guide: nil, air: .veryBad))
+        #expect(noGuide.session.content == .value("오늘은 실내에서"))
+        #expect(noGuide.badgeLabel == "실외 자제")
+    }
+
+    @Test("대기질 상한 — 나쁨 + 배터리 좋음이면 인터벌 대신 '가볍게' 이지런(caution), 배지는 '공기 나쁨'")
+    func sessionBadAirCapsIntensity() throws {
+        // 대조군: 공기가 좋으면 같은 픽스처에서 인터벌(중급 5×800m)이 나온다
+        let clean = try #require(verdict(battery: battery(.improving), guide: intervalGuide))
+        guard case .value(let cleanText) = clean.session.content else {
+            Issue.record("권장 세션이 값이 아니다"); return
+        }
+        #expect(cleanText.hasPrefix("인터벌"))
+
+        // 나쁨 → 유효 톤 caution → easy(.battery): 잔여 15km ÷ 3회 = 5.0km,
+        // 이지 페이스 중앙값 (294 + 338) / 2 = 316초 = 5′16″
+        let result = try #require(verdict(battery: battery(.improving), guide: intervalGuide,
+                                          air: .bad))
+        guard case .value(let text) = result.session.content else {
+            Issue.record("권장 세션이 값이 아니다"); return
+        }
+        #expect(text.hasPrefix("가볍게"))
+        #expect(result.session.tone == .caution)
+        #expect(result.badgeLabel == "공기 나쁨")
+    }
+
+    @Test("대기질 상한 — 나쁨이어도 배터리가 overload면 휴식 처방 그대로, 배지는 톤 기본 라벨(nil)")
+    func sessionBadAirKeepsOverload() throws {
+        let result = try #require(verdict(battery: battery(.overload), guide: intervalGuide,
+                                          air: .bad))
+        #expect(result.session.content == .value("오늘은 휴식"))
+        #expect(result.session.tone == .overload)
+        #expect(result.badgeLabel == nil)
+    }
+
+    @Test("대기질 상한 — 좋음이면 권장 세션은 기존 그대로, 배지 라벨 nil")
+    func sessionGoodAirUnchanged() throws {
+        let result = try #require(verdict(battery: battery(.steady), guide: guide(), air: .good))
+        #expect(result.session.content == .value("이지런 5.0km"))
+        #expect(result.session.tone == .steady)
+        #expect(result.badgeLabel == nil)
+    }
+
+    // MARK: - 워치 전송용 처방 (이슈 #197)
+
+    @Test("워치 처방 — 인터벌 차례면 verdict.workout에 같은 처방(중급 5×800m, I 페이스 235초)이 실린다")
+    func workoutCarriesInterval() throws {
+        let result = try #require(verdict(battery: battery(.improving), guide: intervalGuide))
+        let workout = try #require(result.workout)
+        #expect(workout.kind == .interval(reps: 5, meters: 800))
+        #expect(workout.paceSecPerKm == 235...235)
+        #expect(workout.distanceKm == 4)    // 5 × 800m = 4.0km
+
+        // 나쁨 → 유효 톤 caution: 줄 문구와 같은 상한이 처방에도 걸려 이지런(.battery)이 실린다
+        let badAir = try #require(verdict(battery: battery(.improving), guide: intervalGuide,
+                                          air: .bad))
+        #expect(badAir.workout?.kind == .easy)
+        #expect(badAir.workout?.reason == .battery)
+    }
+
+    @Test("워치 처방 가드 — 매우나쁨·휴식·완료·처방 없음이면 nil")
+    func workoutNilWhenNotRunning() throws {
+        let veryBad = try #require(verdict(battery: battery(.improving), guide: intervalGuide,
+                                           air: .veryBad))
+        #expect(veryBad.workout == nil)
+        let rest = try #require(verdict(battery: battery(.overload), guide: intervalGuide))
+        #expect(rest.workout == nil)
+        let done = try #require(verdict(battery: battery(.steady), guide: guide(), weeklyGoal: 1))
+        #expect(done.workout == nil)
+        let noGuide = try #require(verdict(battery: battery(.steady), guide: nil))
+        #expect(noGuide.workout == nil)
+    }
+
+    @Test("배지 라벨 — 대기질이 판정을 정했을 때만 값이 있다 (헤드라인 상한과 같은 조건)")
+    func badgeLabelRules() {
+        #expect(TodayVerdictEngine.badgeLabel(battery: nil, air: .veryBad) == "실외 자제")
+        #expect(TodayVerdictEngine.badgeLabel(battery: battery(.overload), air: .veryBad) == "실외 자제")
+        for tone: RRTone? in [.steady, .improving, nil] {
+            #expect(TodayVerdictEngine.badgeLabel(battery: tone.map { battery($0) }, air: .bad) == "공기 나쁨")
+        }
+        for tone: RRTone in [.overload, .caution] {
+            #expect(TodayVerdictEngine.badgeLabel(battery: battery(tone), air: .bad) == nil)
+        }
+        for air: AirGrade? in [.good, .moderate, nil] {
+            #expect(TodayVerdictEngine.badgeLabel(battery: battery(.improving), air: air) == nil)
+        }
     }
 
     // MARK: - 회복 경과

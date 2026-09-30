@@ -25,6 +25,22 @@ struct LevelEngineTests {
                    avgHeartRate: nil)
     }
 
+    private func run(daysAgo: Double, km: Double, durationSec: Double) -> RunSummary {
+        RunSummary(id: UUID(),
+                   start: now.addingTimeInterval(-daysAgo * 86_400),
+                   durationSec: durationSec,
+                   distanceMeters: km * 1000,
+                   avgHeartRate: nil)
+    }
+
+    /// 런친놈 근거용 최근 4주 기록 — 3일 전 풀(42.195km, `fullSec`) + 5~20일 전 6'00"/km 조깅 16회.
+    /// 풀도 누적 거리에 들어가므로 28일 누적 = `totalKm`이 되도록 나머지를 16회로 나눈다.
+    private func mileageRuns(totalKm: Double, fullSec: Double) -> [RunSummary] {
+        let full = run(daysAgo: 3, km: 42.195, durationSec: fullSec)
+        let eachKm = (totalKm - 42.195) / 16
+        return [full] + (1...16).map { run(daysAgo: Double($0) + 4, km: eachKm, minPerKm: 6) }
+    }
+
     // MARK: 판정 결정표 — 순서 1
 
     @Test("결정표 1행 — Q1 무경험이면 나머지 답과 무관하게 런린이")
@@ -93,7 +109,33 @@ struct LevelEngineTests {
     func promotionCandidateWhenRecentFastTenK() {
         // 8일 전 10km를 55분(분당 5.5분 페이스)에 완주 — 4주 이내, 60분 이내 조건 충족
         let runs = [run(daysAgo: 8, km: 10, minPerKm: 5.5)]
-        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now) == .intermediate)
+        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now) == .tenKmPace(runs[0]))
+    }
+
+    @Test("15km를 75분에 달린 런린이 → 10km 환산 50분이라 런잘알 후보")
+    func promotionCandidateWhenFifteenKTenKmPace() {
+        // 15km × 5'00"/km = 4_500초 → 10km 환산 4_500 / 15 × 10 = 3_000초(50분) ≤ 3_600
+        let runs = [run(daysAgo: 5, km: 15, minPerKm: 5)]
+        let result = LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now)
+        #expect(result == .tenKmPace(runs[0]))
+        #expect(result?.target == .intermediate)
+    }
+
+    @Test("하프(21.1km)를 완주한 런린이 → 10km 환산이 1시간을 넘어도 런잘알 후보")
+    func promotionCandidateWhenHalfFinished() {
+        // 21.1km × 7'30"/km = 9_495초 → 10km 환산 4_500초(75분) > 3_600이라 10km 근거는 아니지만
+        // 21.1km ≥ 21.0975km라 하프 완주 근거
+        let runs = [run(daysAgo: 10, km: 21.1, minPerKm: 7.5)]
+        let result = LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now)
+        #expect(result == .halfFinish(runs[0]))
+        #expect(result?.target == .intermediate)
+    }
+
+    @Test("런린이가 런친놈 근거(월환산 200km + 풀 4:20)를 갖춰도 한 단계(런잘알)만 제안")
+    func beginnerWithAdvancedEvidencePromotesOneStep() {
+        // 28일 187km × 30/28 = 200.4km, 풀 4:20(15_600초) — 그래도 런린이는 런잘알까지만
+        let runs = mileageRuns(totalKm: 187, fullSec: 15_600)
+        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now)?.target == .intermediate)
     }
 
     @Test("10km를 60분 넘게 달렸으면 승급 후보 아님")
@@ -101,6 +143,17 @@ struct LevelEngineTests {
         // 10km를 65분(분당 6.5분 페이스)에 완주 — 60분 조건 미충족
         let runs = [run(daysAgo: 8, km: 10, minPerKm: 6.5)]
         #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now) == nil)
+    }
+
+    @Test("0초·비현실 페이스 10km 기록은 승급 후보 아님 — 정상 10km 55분은 후보 (이슈 #78)")
+    func noPromotionFromZeroDurationTenK() {
+        // 8일 전 0초 10km 임포트 — durationSec 0 ≤ 3_600이지만 paceSecPerKm == nil이라 근거가 아니다
+        let zeroDuration = RunSummary(id: UUID(), start: now.addingTimeInterval(-8 * 86_400),
+                                      durationSec: 0, distanceMeters: 10_000, avgHeartRate: nil)
+        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: [zeroDuration], now: now) == nil)
+        // 같은 창의 정상 10km 55분(330초/km)이 있으면 후보
+        let runs = [zeroDuration, run(daysAgo: 8, km: 10, minPerKm: 5.5)]
+        #expect(LevelEngine.promotionCandidate(current: .beginner, runs: runs, now: now) == .tenKmPace(runs[1]))
     }
 
     @Test("빠른 10km 기록이 4주보다 오래됐으면 승급 후보 아님")
@@ -114,5 +167,48 @@ struct LevelEngineTests {
     func noPromotionWhenAlreadyAdvanced() {
         let runs = [run(daysAgo: 8, km: 10, minPerKm: 5.5)]
         #expect(LevelEngine.promotionCandidate(current: .advanced, runs: runs, now: now) == nil)
+        // 런친놈 근거(28일 187km × 30/28 = 200.4km + 풀 4:20)가 있어도 마찬가지
+        let advancedRuns = mileageRuns(totalKm: 187, fullSec: 15_600)
+        #expect(LevelEngine.promotionCandidate(current: .advanced, runs: advancedRuns, now: now) == nil)
+    }
+
+    // MARK: 실데이터 승급 후보 — 런잘알 → 런친놈
+
+    @Test("런잘알: 월환산 200km 이상 + 풀 4:30 이내 둘 다 충족 → 런친놈 후보")
+    func intermediatePromotesWhenMileageAndFullUnder430() {
+        // 28일 187km × 30/28 = 200.36km ≥ 200, 풀 4:20(15_600초) ≤ 16_200초
+        let runs = mileageRuns(totalKm: 187, fullSec: 15_600)
+        let result = LevelEngine.promotionCandidate(current: .intermediate, runs: runs, now: now)
+        #expect(result?.target == .advanced)
+        guard case .fullUnder430(let full, let monthlyKm) = result else {
+            Issue.record("풀 4:30 근거가 아님: \(String(describing: result))")
+            return
+        }
+        #expect(full == runs[0])
+        #expect(abs(monthlyKm - 187.0 * 30 / 28) < 0.001)
+    }
+
+    @Test("런잘알: 풀 4:20이어도 월환산 200km 미만이면 승급 후보 아님")
+    func intermediateNoPromotionWhenMileageShort() {
+        // 28일 186km × 30/28 = 199.3km < 200 — 마일리지 부족(경계 바로 아래)
+        let runs = mileageRuns(totalKm: 186, fullSec: 15_600)
+        #expect(LevelEngine.promotionCandidate(current: .intermediate, runs: runs, now: now) == nil)
+    }
+
+    @Test("런잘알: 월환산 200km 이상이어도 풀이 4:30을 넘으면 승급 후보 아님")
+    func intermediateNoPromotionWhenFullOver430() {
+        // 28일 187km × 30/28 = 200.4km ≥ 200이지만 풀 4:40(16_800초) > 16_200초
+        let runs = mileageRuns(totalKm: 187, fullSec: 16_800)
+        #expect(LevelEngine.promotionCandidate(current: .intermediate, runs: runs, now: now) == nil)
+    }
+
+    @Test("런잘알: 4주 창 밖 기록은 월환산 마일리지에 넣지 않는다")
+    func intermediateMileageIgnoresRunsOutsideWindow() {
+        // 창 안 187km(200.4km 환산)에서 조깅 1회((187 − 42.195) / 16 = 9.05km)를 30일 전으로 옮기면
+        // 창 안 누적 177.95km × 30/28 = 190.7km < 200 → 후보 아님
+        var runs = mileageRuns(totalKm: 187, fullSec: 15_600)
+        let moved = runs.removeLast()
+        runs.append(run(daysAgo: 30, km: moved.distanceKm ?? 0, minPerKm: 6))
+        #expect(LevelEngine.promotionCandidate(current: .intermediate, runs: runs, now: now) == nil)
     }
 }

@@ -16,7 +16,12 @@ struct RootView: View {
     @StateObject private var weather = WeatherStore()
     /// 직접 입력한 대회 기록 (이슈 #35) — 설정이 입력하고 리포트가 소비해서 루트가 쥔다
     @StateObject private var raceRecords = RaceRecordStore()
+    /// 러닝화 (이슈 #171) — 설정이 등록하고 홈·세션 상세가 쓰며, 러닝 목록 로드 때 자동 배정을 걸어 루트가 쥔다
+    @StateObject private var shoes = ShoeStore()
+    /// 대회 목록 (이슈 #172) — 대회 탭과 홈 목표 대회 카드·설정 접수 알림이 같이 써서 루트가 쥔다
+    @StateObject private var raceStore = RaceStore()
     @AppStorage("didConnectHealth") private var didConnectHealth = false
+    @Environment(\.scenePhase) private var scenePhase
     /// 온보딩 설문 완료 여부 — 빈 문자열이면 아직 레벨이 없다 (= 설문 미완료)
     @AppStorage(ProfileKey.levelV2) private var levelRaw = ""
     /// v0.6 이하 사용자에게 재온보딩 사유를 한 번 알려준다
@@ -81,16 +86,42 @@ struct RootView: View {
         }
         .environmentObject(weather)
         .environmentObject(raceRecords)
+        .environmentObject(shoes)
+        .environmentObject(raceStore)
         .tint(RR.brand)
+        // 복원 선택 (이슈 #44) — 첫 업로드 직전에 서버의 이전 진행도를 발견했을 때 묻는다.
+        // 메인 탭이 아니라 루트에 붙인다: 건강 데이터가 실패·미지원이어도 답할 수 있어야
+        // 백업이 막힌 채 남지 않는다. 스플래시(권한 시트·기동 로딩) 중에는 미룬다
+        .sheet(isPresented: showsRestoreChoice) {
+            if let candidate = backup.restoreCandidate {
+                RestoreChoiceSheet(candidate: candidate,
+                                   onAccept: {
+                                       if let applied = backup.acceptRestoreCandidate() {
+                                           collection.replace(with: applied.birds)
+                                           raceRecords.replace(with: applied.raceRecords)
+                                       }
+                                   },
+                                   onDecline: {
+                                       let merged = backup.declineRestoreCandidate()
+                                       collection.replace(with: merged.birds)
+                                       raceRecords.replace(with: merged.raceRecords)
+                                   })
+                    // 둘 중 하나를 골라야 백업이 풀린다 — 스와이프로 닫아 미정 상태로 두지 않는다
+                    .interactiveDismissDisabled()
+            }
+        }
         // 스플래시 → 홈은 교차 페이드로 잇는다 — 런치 스크린류 화면의 관례
         .animation(.easeOut(duration: 0.35), value: isBooting)
         .task {
             detectReturningUser()
+            // 이전 버전이 남긴 온보딩 원답 파일 정리 — 없으면 아무것도 안 한다 (이슈 #156)
+            OnboardingAnswersStore.removeLegacyFile()
             if levelRaw.isEmpty {
                 // 신규 설치 — 온보딩보다 CloudKit 복원이 먼저다 (이슈 #29).
                 // 성공하면 레벨 저장값이 채워져 onChange(levelRaw)가 데이터 로딩을 이어받는다
                 if let snapshot = await backup.restoreOnFreshInstall() {
                     collection.replace(with: snapshot.collectedBirds)
+                    raceRecords.replace(with: snapshot.raceRecords ?? [])
                 }
             } else {
                 // 온보딩을 마친 사용자는 바로 조회 (권한 시트는 이미 설문 끝에서 지났다)
@@ -122,6 +153,29 @@ struct RootView: View {
         .onChange(of: health.state) { _, newState in
             if case .loaded = newState { didConnectHealth = true }
         }
+        // 러닝화 자동 배정 (이슈 #171) — 렌더 중이 아니라 목록이 로드된 시점에.
+        // initial: 데모 모드는 HealthStore init에서 이미 loaded라 변화가 오지 않는다.
+        // 실기기 데모 모드에서는 합성 러닝 ID가 실제 shoes.json에 쌓이므로 배정을 건너뛴다(시뮬레이터는 예외).
+        .onChange(of: health.state, initial: true) { _, newState in
+            #if !targetEnvironment(simulator)
+            if DemoMode.isEnabled { return }
+            #endif
+            if case .loaded(let runs) = newState { shoes.syncAssignments(runs: runs) }
+        }
+        .onChange(of: backup.mergedResult) { _, merged in
+            // 백업 병합이 서버 쪽 도감·대회 기록을 살렸다 — 메모리도 맞춰야 다음 저장이 되살린 항목을 지우지 않는다 (이슈 #128)
+            guard let merged else { return }
+            collection.replace(with: merged.birds)
+            raceRecords.replace(with: merged.raceRecords)
+            backup.clearMergedResult()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // 포그라운드 복귀 — 날씨가 낡았으면 다시 받아 수분 알람까지 재예약한다 (이슈 #69).
+            // WeatherStore를 쥔 곳이 여기라 RunWrapApp이 아니라 루트에서 건다.
+            // 기동 로딩 전·중이면 refresh()가 스스로 건너뛴다
+            guard phase == .active, !levelRaw.isEmpty else { return }
+            Task { await weather.refreshIfStale() }
+        }
     }
 
     /// 스플래시를 유지할 조건 — 건강 데이터가 로딩 중이거나, 날씨가 아직 결론이 없을 때.
@@ -132,6 +186,13 @@ struct RootView: View {
         case .loaded: !(weather.isSettled || splashTimedOut)
         case .unavailable, .failed: false
         }
+    }
+
+    /// 복원 선택 시트 표시 조건 — 후보가 있고, 온보딩을 마쳤고, 스플래시가 끝났을 때.
+    /// 닫기는 선택 버튼으로만 한다(후보가 비면 저절로 닫힌다)
+    private var showsRestoreChoice: Binding<Bool> {
+        Binding(get: { backup.restoreCandidate != nil && !levelRaw.isEmpty && !isBooting },
+                set: { _ in })
     }
 
     /// 신규 설치 복원을 기다리는 중인지 — 이 동안은 온보딩 대신 스플래시를 유지한다.
@@ -147,8 +208,9 @@ struct RootView: View {
     private var restoreNoticeText: String? {
         guard !noticeDismissed else { return nil }
         switch backup.restoreState {
-        case .unavailable: return "iCloud에 로그인되어 있지 않아 이전 기록을 확인할 수 없었어요. 새로 시작할게요."
-        case .failed: return "iCloud에서 이전 기록을 확인하지 못했어요. 일단 새로 시작할게요."
+        // 확인하지 못한 기록은 나중에 연결되면 다시 찾아 묻는다 (이슈 #44 복원 선택 시트)
+        case .unavailable: return "iCloud에 로그인되어 있지 않아 이전 기록을 확인하지 못했어요. 일단 시작하고, 연결되면 다시 확인할게요."
+        case .failed: return "iCloud에서 이전 기록을 확인하지 못했어요. 일단 시작하고, 연결되면 다시 확인할게요."
         case .idle, .checking, .restored, .empty: return nil
         }
     }
@@ -178,6 +240,97 @@ struct RootView: View {
         guard levelRaw.isEmpty, UserDefaults.standard.bool(forKey: legacyKey) else { return }
         isReturningUser = true
         UserDefaults.standard.removeObject(forKey: legacyKey)
+    }
+}
+
+/// 복원 선택 시트 (이슈 #44) — "이전 기록 불러오기 / 새로 시작".
+///
+/// 복원이 일시 실패한 뒤 새로 시작한 설치가, 첫 업로드 직전에 서버의 다른 사이클 본을 발견했을 때 뜬다.
+/// 조용히 덮어쓰지 않고 묻는 것은 사용자 결정이다. 불러오면 방금 정한 레벨·목표가 이전 값으로 바뀌므로
+/// 그 점을 문구로 밝힌다. 새로 시작해도 도감은 합집합으로 남는다(ProgressBackupStore).
+private struct RestoreChoiceSheet: View {
+    let candidate: ProgressSnapshot
+    let onAccept: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(text: "iCloud")
+
+            Text("이전 기록을 찾았어요")
+                .font(RR.display(26))
+                .foregroundStyle(RR.text)
+                .padding(.top, 12)
+
+            VStack(alignment: .leading, spacing: 10) {
+                summaryRow(label: "레벨", value: levelLabel)
+                summaryRow(label: "성장 단계", value: stageLabel)
+                summaryRow(label: "도감", value: "\(candidate.collectedBirds.count)마리")
+                summaryRow(label: "마지막 백업", value: Self.dateText(candidate.updatedAt))
+            }
+            .padding(16)
+            .background(RR.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(RR.line))
+            .padding(.top, 20)
+
+            Text("불러오면 방금 진단한 레벨과 목표 대신 이전 기록으로 이어가요.")
+                .font(.system(size: 13))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 14)
+
+            Spacer(minLength: 20)
+
+            PrimaryButton(title: "이전 기록 불러오기", action: onAccept)
+
+            Button(action: onDecline) {
+                Text("새로 시작")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text2)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+
+            Text("새로 시작해도 도감의 새는 그대로 남아요")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+                .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 28)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(RR.bg.ignoresSafeArea())
+    }
+
+    private var levelLabel: String {
+        RunnerLevel(rawValue: candidate.levelRaw)?.label ?? candidate.levelRaw
+    }
+
+    private var stageLabel: String {
+        (GrowthStage(rawValue: candidate.maxStage) ?? .egg).label
+    }
+
+    private func summaryRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(RR.text3)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(RR.text)
+        }
+    }
+
+    private static func dateText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "yyyy년 M월 d일"
+        return formatter.string(from: date)
     }
 }
 

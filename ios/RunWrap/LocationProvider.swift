@@ -28,6 +28,12 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
     }
 
     @Published private(set) var state: State = .idle
+    /// 받은 좌표가 흐린지(대략적 위치) — 설정의 '정확한 위치'가 꺼졌거나 오차가 큰 경우 true.
+    /// 날씨는 km 단위라 이 값을 보지 않는다. 주변 보급처럼 100m가 의미를 갖는 쪽만 가드로 쓴다 (이슈 #74)
+    @Published private(set) var isCoarse = false
+    /// 아이폰 전체 위치 서비스가 꺼졌는지 (이슈 #94) — 이때도 권한은 .denied로 와서,
+    /// 안내 카드가 앱 권한이 아니라 시스템 스위치를 가리키도록 구분한다
+    @Published private(set) var servicesDisabled = false
 
     private let manager = CLLocationManager()
 
@@ -40,9 +46,11 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
     }
 
     func request() {
+        isCoarse = false
         switch manager.authorizationStatus {
         case .denied, .restricted:
             state = .denied
+            refreshServicesDisabled()
         case .notDetermined:
             state = .loading
             manager.requestWhenInUseAuthorization()  // 응답은 didChangeAuthorization으로
@@ -50,6 +58,37 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
             state = .loading
             manager.requestLocation()
         }
+    }
+
+    /// '정확한 위치'가 꺼진 사용자에게 이번 사용 동안만 정확한 위치를 청한다.
+    /// 목적 문구는 Info.plist `NSLocationTemporaryUsageDescriptionDictionary`의 `NearbySupply` 키다.
+    /// 허락받으면 좌표를 다시 받고, 거절되면 isCoarse를 그대로 둬 안내 카드가 남는다.
+    /// 완료 블록은 매니저를 만든 런루프(메인)에서 불린다 — CLLocationManager.h
+    func requestFullAccuracy() {
+        manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "NearbySupply") { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.manager.accuracyAuthorization == .fullAccuracy else { return }
+                self.request()
+            }
+        }
+    }
+
+    /// 시스템 위치 서비스 스위치 확인 — 메인 스레드에서 부르면 UI 멈춤 경고가 나므로 밖에서 읽는다
+    private func refreshServicesDisabled() {
+        Task {
+            let enabled = await Task.detached { CLLocationManager.locationServicesEnabled() }.value
+            servicesDisabled = !enabled
+        }
+    }
+
+    /// 좌표가 흐린지 판정 — 순수 함수라 테스트한다.
+    /// 대략적 위치(reducedAccuracy)는 1~20km 단위로 뭉개져 온다. 주변 보급 반경이 1km라
+    /// 오차가 수백 m만 넘어도 가까운 순서가 뒤집히므로 500m를 넘으면 흐리다고 본다.
+    /// 음수 horizontalAccuracy는 좌표가 무효라는 뜻이라 역시 흐린 쪽으로 친다 (CLLocation 문서)
+    nonisolated static func isCoarse(reducedAccuracy: Bool,
+                                     horizontalAccuracy: CLLocationAccuracy,
+                                     threshold: CLLocationAccuracy = 500) -> Bool {
+        reducedAccuracy || horizontalAccuracy < 0 || horizontalAccuracy > threshold
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -60,6 +99,7 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
                 if case .loading = state { self.manager.requestLocation() }
             case .denied, .restricted:
                 state = .denied
+                refreshServicesDisabled()
             default:
                 break
             }
@@ -69,7 +109,13 @@ final class LocationProvider: NSObject, ObservableObject, CLLocationManagerDeleg
     nonisolated func locationManager(_ manager: CLLocationManager,
                                      didUpdateLocations locations: [CLLocation]) {
         let coordinate = locations.first?.coordinate
+        let coarse = locations.first.map {
+            Self.isCoarse(reducedAccuracy: manager.accuracyAuthorization == .reducedAccuracy,
+                          horizontalAccuracy: $0.horizontalAccuracy)
+        } ?? false
         Task { @MainActor in
+            // state보다 먼저 세운다 — state의 onChange에서 검색 가드가 이 값을 본다
+            isCoarse = coarse
             if let coordinate { state = .located(coordinate) } else { state = .failed }
         }
     }

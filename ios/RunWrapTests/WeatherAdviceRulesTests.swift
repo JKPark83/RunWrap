@@ -50,6 +50,28 @@ struct WeatherAdviceRulesTests {
     }
 }
 
+/// 비 판정 단일 기준 — WMO 코드 + 강수량, 뇌우 포함 (이슈 #109)
+struct IsRainingTests {
+    @Test("비 코드(WMO 61)면 강수량 0mm여도 비 — 조언에 '비가 와요'가 붙는다")
+    func rainCodeWithoutPrecipitation() {
+        #expect(WeatherAdviceRules.isRaining(code: 61, precipitationMm: 0))
+        let items = WeatherAdviceRules.advice(apparentC: 20, humidityPct: 50, windMs: 0,
+                                              precipitationMm: 0, uvIndex: nil, weatherCode: 61)
+        #expect(items.contains { $0.text.contains("비가 와요") })
+    }
+
+    @Test("맑음(코드 0)·강수량 0mm면 비가 아니다")
+    func clearIsNotRain() {
+        #expect(!WeatherAdviceRules.isRaining(code: 0, precipitationMm: 0))
+        #expect(!WeatherAdviceRules.isRaining(code: nil, precipitationMm: 0))
+    }
+
+    @Test("뇌우(코드 95)는 비를 동반하므로 비로 본다")
+    func thunderstormIsRain() {
+        #expect(WeatherAdviceRules.isRaining(code: 95, precipitationMm: 0))
+    }
+}
+
 /// 러닝 이름 헤드라인 — 우선순위(뇌우 > 눈 > 비 > 온도)와 온도 구간별 이름 검증
 struct RunNameTests {
     @Test("뇌우 — 좋은 온도여도 트밀런이 최우선")

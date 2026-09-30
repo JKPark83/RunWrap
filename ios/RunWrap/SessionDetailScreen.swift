@@ -12,6 +12,22 @@ struct SessionDetailScreen: View {
     @StateObject private var store = WorkoutDetailStore()
     @Environment(\.dismiss) private var dismiss
     @State private var showShare = false
+    /// 러닝화 (이슈 #171) — 이 세션에 신은 신발을 바꾼다. 등록한 신발이 없으면 행을 숨긴다
+    @EnvironmentObject private var shoes: ShoeStore
+    @State private var showsShoePicker = false
+    // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
+    @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
+    @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
+    @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
+
+    /// 존·노력도·세션 상세가 공유하는 심박 기준 — 수동 > 추정 우선순위는 엔진이 정한다 (이슈 #56)
+    private var heartRate: HeartRateProfile {
+        TrainingGuideEngine.heartRateProfile(estimate: health.hrMaxEstimate,
+                                             manualHrMax: hrMaxManual,
+                                             manualRestingHR: restingHRManual,
+                                             measuredRestingHR: health.restingHRBpm,
+                                             zoneMethodRaw: hrZoneMethodRaw)
+    }
 
     var body: some View {
         ScrollView {
@@ -40,15 +56,26 @@ struct SessionDetailScreen: View {
                                         in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
 
-                    statsGrid
+                    VStack(spacing: 0) {
+                        statsGrid
+                        effortRow
+                    }
+                    .padding(.horizontal, 18)
+                    .rrCard()
+                    if !shoes.shoes.isEmpty {
+                        shoeRow
+                    }
                     if let heat = heatAdjustment {
                         heatCard(heat)
+                    }
+                    if store.loadFailed {
+                        loadFailedCard
                     }
                     if let detail = store.detail, detail.splits.count >= 3 {
                         splitsCard(detail)
                     }
                     if let drift = store.detail?.drift {
-                        driftCard(drift)
+                        driftCard(drift, heat: heatAdjustment)
                     }
                     if let detail = store.detail, let zones = detail.zones {
                         zonesCard(zones, detail: detail)
@@ -74,13 +101,11 @@ struct SessionDetailScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .topLeading) { backButton }
-        .task {
-            // 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4)
-            if case .loaded(let all) = health.state {
-                await store.load(run: run, others: all)
-            } else {
-                await store.load(run: run)
-            }
+        .task { await load() }
+        .onChange(of: health.state) { _, state in
+            // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
+            guard case .loaded(let all) = state else { return }
+            Task { await store.reloadSnapshots(others: all, excluding: run) }
         }
         .sheet(isPresented: $showShare) {
             ShareSheetView(run: run,
@@ -88,6 +113,30 @@ struct SessionDetailScreen: View {
                            route: store.detail?.route ?? [],
                            weeklySummary: weeklySummaryLine)
         }
+    }
+
+    // MARK: 조회 실패
+
+    /// 세부 기록 조회 실패 — 경로·스플릿·존 카드 자리에 다시 시도를 띄운다 (이슈 #102).
+    /// 버튼 스타일은 다른 화면의 안내 카드(.bordered)와 같다
+    private var loadFailedCard: some View {
+        VStack(spacing: 10) {
+            Text("세부 기록을 불러오지 못했어요")
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(RR.text2)
+            Button {
+                Task { await load() }
+            } label: {
+                Label("다시 시도", systemImage: "arrow.clockwise")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
+            .disabled(store.isLoading)
+        }
+        .padding(16)
+        .rrCard()
     }
 
     // MARK: 지도 헤더
@@ -109,7 +158,8 @@ struct SessionDetailScreen: View {
                             Image(systemName: "map")
                                 .font(.system(size: 24))
                                 .foregroundStyle(RR.text3)
-                            Text(store.isLoading ? "경로를 불러오는 중" : "경로 기록이 없어요")
+                            Text(store.isLoading ? "경로를 불러오는 중"
+                                 : store.loadFailed ? "경로를 불러오지 못했어요" : "경로 기록이 없어요")
                                 .font(.system(size: 12.5))
                                 .foregroundStyle(RR.text3)
                         }
@@ -119,6 +169,7 @@ struct SessionDetailScreen: View {
             .frame(height: 320)
             .clipped()
 
+            // 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (히어로 그라데이션·거리 배지·뒤로 버튼)
             LinearGradient(colors: [.black.opacity(0.42), .clear],
                            startPoint: .top, endPoint: .bottom)
                 .frame(height: 110)
@@ -161,11 +212,13 @@ struct SessionDetailScreen: View {
         return formatter.string(from: run.start)
     }
 
-    /// 과부하 주간에 이 세션이 최근 7일 거리의 40% 이상이면 맥락 배지
+    /// 과부하 주간에 이 세션이 최근 7일 거리의 40% 이상이면 맥락 배지.
+    /// 기간 판정은 분모(recent7Km)와 같은 창 — 6일 전 자정부터 (이슈 #75)
     private var contributionBadge: String? {
         guard let context = weeklyContext,
               let km = run.distanceKm, context.recent7Km > 0,
-              run.start >= Date().addingTimeInterval(-7 * 86_400) else { return nil }
+              run.start >= Calendar.current.startOfDay(for: Date().addingTimeInterval(-6 * 86_400))
+        else { return nil }
         let share = km / context.recent7Km
         guard share >= 0.4 else { return nil }
         return "이번 주 거리의 \(Int((share * 100).rounded()))%가 이 한 번에서 나왔어요"
@@ -206,8 +259,59 @@ struct SessionDetailScreen: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
+    }
+
+    /// 그리드 아래 한 줄 — Apple 운동 노력도가 있을 때만 (iOS 18+, 이슈 #178)
+    @ViewBuilder
+    private var effortRow: some View {
+        if let effort = store.detail?.effort {
+            HStack(spacing: 6) {
+                Image(systemName: "flame")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RR.text3)
+                Text("노력도 \(Int(effort.score.rounded()))/10 · \(effort.label) · \(effort.sourceLabel)")
+                    .font(.system(size: 13))
+                    .foregroundStyle(RR.text2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 12)
+            .overlay(alignment: .top) { Divider().overlay(RR.line) }
+        }
+    }
+
+    // MARK: 러닝화 (이슈 #171)
+
+    /// "러닝화 · 페가수스 41" — 탭하면 은퇴하지 않은 신발 + "없음" 중에서 고른다
+    private var shoeRow: some View {
+        Button { showsShoePicker = true } label: {
+            HStack(spacing: 8) {
+                Text("러닝화")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(RR.text3)
+                Text("·")
+                    .foregroundStyle(RR.text3)
+                Text(shoes.shoe(forRun: run.id)?.name ?? "없음")
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
         .rrCard()
+        .confirmationDialog("이 러닝에 신은 러닝화", isPresented: $showsShoePicker, titleVisibility: .visible) {
+            ForEach(shoes.shoes.filter { !$0.isRetired }) { shoe in
+                Button(shoe.name) { shoes.assign(runID: run.id, shoeID: shoe.id) }
+            }
+            Button("없음") { shoes.assign(runID: run.id, shoeID: nil) }
+            Button("취소", role: .cancel) {}
+        }
     }
 
     // MARK: 열 보정 페이스 (제안 문서 A1)
@@ -269,7 +373,7 @@ struct SessionDetailScreen: View {
 
     // MARK: 심박 드리프트 (Pw:HR 디커플링, 제안 문서 A2)
 
-    private func driftCard(_ drift: DriftEngine.Result) -> some View {
+    private func driftCard(_ drift: DriftEngine.Result, heat: HeatEngine.Adjustment?) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("심박 드리프트")
@@ -290,7 +394,7 @@ struct SessionDetailScreen: View {
             }
             .padding(.top, 12)
 
-            Text(driftSentence(drift))
+            Text(driftSentence(drift, heat: heat))
                 .font(.system(size: 12.5))
                 .lineSpacing(4)
                 .foregroundStyle(RR.text2)
@@ -300,11 +404,15 @@ struct SessionDetailScreen: View {
         .rrCard()
     }
 
-    /// 사실 먼저, 위트는 뒤 — 톤별 문장은 Friel 5% 기준을 그대로 옮긴다
-    private func driftSentence(_ drift: DriftEngine.Result) -> String {
+    /// 사실 먼저, 위트는 뒤 — 톤별 문장은 Friel 5% 기준을 그대로 옮긴다.
+    /// 열 보정 카드가 뜬 더운 날(heat non-nil)의 caution은 원인을 유산소 기반으로 단정하지 않는다 —
+    /// 더위도 후반 심박을 끌어올린다. 엔진은 날씨를 모르므로 톤은 그대로, 문장만 화면에서 바꾼다 (이슈 #100)
+    private func driftSentence(_ drift: DriftEngine.Result, heat: HeatEngine.Adjustment?) -> String {
         switch drift.tone {
         case .improving:
             "후반에 오히려 심박 효율이 좋아졌어요. 엔진이 늦게 데워지는 타입이거나 컨디션이 계속 올라왔거나 — 어느 쪽이든 좋은 신호입니다."
+        case .caution where heat != nil:
+            "후반 심박이 \(Int(drift.decouplingPct.rounded()))% 더 들었지만, 더위로 오른 몫이 섞여 있어요. 더운 날엔 흔한 일이라 유산소 기반 문제로 단정하진 않을게요 — 선선한 날 한 번 더 재 보시죠."
         case .caution:
             "같은 페이스인데 후반 심박이 \(Int(drift.decouplingPct.rounded()))% 더 들었어요. 이 거리엔 유산소 기반이 아직 덜 자랐다는 신호 — 편한 페이스 러닝을 늘리면 따라옵니다."
         default:
@@ -369,21 +477,35 @@ struct SessionDetailScreen: View {
             ZoneBarView(fractions: zones)
                 .padding(.top, 14)
 
-            VStack(alignment: .leading, spacing: 5) {
-                // 세션 최고 심박 — HRmax 대비 %로 강도를 한눈에 (제안 문서 A4)
-                if let peak = detail.maxHeartRateBpm, let hrMax = detail.hrMaxBpm, hrMax > 0 {
-                    Text("최고 심박 \(Int(peak.rounded())) bpm · \(detail.hrMaxEstimated ? "추정 " : "")HRmax의 \(Int((peak / hrMax * 100).rounded()))%")
+            if let hr = detail.heartRate {
+                VStack(alignment: .leading, spacing: 5) {
+                    // 세션 최고 심박 — HRmax 대비 %로 강도를 한눈에 (제안 문서 A4).
+                    // 직접 입력한 HRmax면 "추정"을 뗀다 (이슈 #56)
+                    if let peak = detail.maxHeartRateBpm {
+                        Text("최고 심박 \(Int(peak.rounded())) bpm · \(hr.hrMaxSource == .manual ? "" : "추정 ")HRmax의 \(Int((peak / hr.hrMax * 100).rounded()))%")
+                    }
+                    // 존 방식·HRmax 출처 — 어떤 기준으로 나눈 존인지 밝힌다 (이슈 #56)
+                    Text(zoneBasisLine(hr))
+                    if hr.hrMaxSource == .fallback {
+                        Text("건강 앱에 생년월일을 넣거나 설정에서 최대 심박을 입력하면 더 정확해져요")
+                    }
                 }
-                if detail.hrMaxEstimated {
-                    Text("최대 심박 190 bpm 추정 기준 · 건강 앱에 생년월일을 넣으면 더 정확해져요")
-                }
+                .font(.system(size: 11))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
             }
-            .font(.system(size: 11))
-            .foregroundStyle(RR.text3)
-            .padding(.top, 12)
         }
         .padding(18)
         .rrCard()
+    }
+
+    /// "Karvonen(HRR) 기준 · HRmax 186 bpm(관찰 최대) · 안정 53 bpm"
+    private func zoneBasisLine(_ hr: HeartRateProfile) -> String {
+        var line = "\(hr.zoneMethod.label) 기준 · HRmax \(Int(hr.hrMax.rounded())) bpm(\(hr.hrMaxSource.label))"
+        if hr.zoneMethod == .karvonen, let rest = hr.restingHR {
+            line += " · 안정 \(Int(rest.rounded())) bpm"
+        }
+        return line
     }
 
     // MARK: 주법 (러닝 다이내믹스) — 기획서 §4.8, 계획서 M4
@@ -399,7 +521,8 @@ struct SessionDetailScreen: View {
                                    cadenceSpm: detail.cadenceSpm ?? run.cadenceSpm,
                                    verticalOscillationCm: detail.verticalOscillationCm,
                                    groundContactMs: detail.groundContactMs)
-        let engine = FormEngine()
+        // 기준선 창은 '지금'이 아니라 세션 직전 28일 — 과거 세션을 그 이후 기록과 비교하지 않는다 (이슈 #92)
+        let engine = FormEngine(now: run.start)
         let advice = engine.baseline(of: store.formSnapshots, excluding: run.id)
             .map { engine.advice(session: session, baseline: $0) }
 
@@ -429,8 +552,14 @@ struct SessionDetailScreen: View {
                         .font(.system(size: 12.5))
                         .lineSpacing(4)
                         .foregroundStyle(RR.text2)
+                } else if store.isLoadingSnapshots {
+                    // 조회 중 빈 스냅샷으로 표본 부족 안내가 뜨지 않게 (이슈 #92)
+                    Text("주법 기준선을 불러오는 중…")
+                        .font(.system(size: 12.5))
+                        .lineSpacing(4)
+                        .foregroundStyle(RR.text3)
                 } else {
-                    Text("최근 4주 야외 러닝이 5회 모이면 내 기준선과 비교한 주법 조언이 나와요.")
+                    Text("이 러닝 전 4주 야외 러닝이 5회 모이면 내 기준선과 비교한 주법 조언이 나와요.")
                         .font(.system(size: 12.5))
                         .lineSpacing(4)
                         .foregroundStyle(RR.text3)
@@ -525,15 +654,24 @@ struct SessionDetailScreen: View {
             .rrCard()
         }
         .buttonStyle(.plain)
+        // 경로 로딩 중에 열면 카드에 경로가 빠진다 — 불러오는 동안은 막는다 (이슈 #84)
+        .disabled(store.isLoading)
     }
 
-    /// 카드 하단 주간 요약 — 최근 7일 러닝 횟수·거리 (기획서 §4.4)
+    /// 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4).
+    /// 진입 시와 조회 실패 뒤 다시 시도가 같은 경로를 탄다 (이슈 #102)
+    private func load() async {
+        if case .loaded(let all) = health.state {
+            await store.load(run: run, others: all, heartRate: heartRate)
+        } else {
+            await store.load(run: run, heartRate: heartRate)
+        }
+    }
+
+    /// 카드 하단 주간 요약 — 이 세션 기준 7일 러닝 횟수·거리 (기획서 §4.4, 이슈 #92)
     private var weeklySummaryLine: String? {
         guard case .loaded(let all) = health.state else { return nil }
-        let recent = all.filter { $0.start >= Date().addingTimeInterval(-7 * 86_400) }
-        guard !recent.isEmpty else { return nil }
-        let km = recent.compactMap(\.distanceKm).reduce(0, +)
-        return "최근 7일 \(recent.count)회 · \(Format.km(km)) km"
+        return ShareSummary.weeklyLine(runs: all, sessionStart: run.start, now: Date())
     }
 }
 
@@ -556,6 +694,10 @@ private struct ShareSheetView: View {
     @State private var photo: UIImage?
     @State private var photoVersion = 0
     @State private var routeImage: UIImage?
+    /// 경로를 통째로 숨길지 — 다음 공유 때도 기억한다. 양끝 트림은 켜고 끔과 무관하게 항상 적용 (이슈 #84)
+    @AppStorage("share.hidesRoute") private var hidesRoute = false
+    /// 양끝을 가릴 반경(300/500/1000m) — 다음 공유 때도 기억한다 (이슈 #191)
+    @AppStorage(RoutePrivacy.radiusKey) private var trimRadiusRaw = RoutePrivacy.defaultRadius.rawValue
     @State private var rendered: UIImage?
     @State private var saveMessage: String?
     /// 미리보기와 렌더 이미지가 같은 모드로 그려지도록 명시적으로 주입한다
@@ -573,6 +715,14 @@ private struct ShareSheetView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 60)
+
+            // 사진 카드는 경로를 그리지 않으므로 미니멀 카드에서만 보인다
+            if style == .minimal {
+                hideRouteRow
+                    .padding(.horizontal, 40)
+                radiusRow
+                    .padding(.horizontal, 40)
+            }
 
             cardPreview
                 .padding(.top, 4)
@@ -600,10 +750,17 @@ private struct ShareSheetView: View {
         .frame(maxWidth: .infinity)
         .background(RR.bg.ignoresSafeArea())
         .presentationDragIndicator(.visible)
-        .task {
-            guard routeImage == nil, route.count >= 2 else { return }
-            routeImage = await RouteSnapshot.image(route: route,
+        // 시트를 연 뒤 경로가 채워져도 다시 만들도록 route.count를 id로 건다 (이슈 #84)
+        // 가림 반경이 바뀌어도 다시 그린다 (이슈 #191)
+        .task(id: "\(route.count)-\(trimRadiusRaw)") {
+            guard route.count >= 2 else { return }
+            routeImage = nil
+            // 집 근처가 드러나지 않게 시작·끝을 선택한 반경만큼 잘라낸 경로만 그린다 (이슈 #84·#191)
+            let image = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route, meters: radius.meters),
                                                   size: CGSize(width: 360, height: 240))
+            // 스냅샷은 취소를 무시하고 끝나므로, 반경이 바뀐 뒤 늦게 온 옛 반경 이미지를 버린다
+            guard !Task.isCancelled else { return }
+            routeImage = image
         }
         .task(id: renderKey) {
             rendered = ShareCardRenderer.render(currentCard)
@@ -619,9 +776,47 @@ private struct ShareSheetView: View {
         }
     }
 
-    /// 스타일·사진·경로 이미지가 바뀔 때만 다시 렌더한다
+    /// 스타일·사진·경로 이미지·경로 숨김·가림 반경이 바뀔 때만 다시 렌더한다
     private var renderKey: String {
-        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)"
+        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)-\(hidesRoute)-\(trimRadiusRaw)"
+    }
+
+    private var radius: RoutePrivacy.Radius {
+        RoutePrivacy.radius(rawValue: trimRadiusRaw)
+    }
+
+    private var hideRouteRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("경로 숨기기")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text("집 근처 \(radius.label)는 항상 가려져요")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+            }
+            Spacer(minLength: 8)
+            Toggle("경로 숨기기", isOn: $hidesRoute)
+                .labelsHidden()
+                .tint(RR.brand)
+        }
+    }
+
+    /// 가림 반경 선택 — 경로를 통째로 숨기면 의미가 없어 흐리게 막는다 (이슈 #191)
+    private var radiusRow: some View {
+        HStack(spacing: 12) {
+            Text("가릴 반경")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(RR.text)
+            Spacer(minLength: 8)
+            Picker("가릴 반경", selection: $trimRadiusRaw) {
+                ForEach(RoutePrivacy.Radius.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 190)
+        }
+        .disabled(hidesRoute)
+        .opacity(hidesRoute ? 0.5 : 1)
     }
 
     @ViewBuilder
@@ -630,7 +825,8 @@ private struct ShareSheetView: View {
             switch style {
             case .minimal:
                 ShareCardView(run: run, zones: zones,
-                              routeImage: routeImage, weeklySummary: weeklySummary)
+                              routeImage: hidesRoute ? nil : routeImage,
+                              weeklySummary: weeklySummary)
             case .photo:
                 PhotoCardView(run: run, photo: photo)
             }
@@ -646,7 +842,7 @@ private struct ShareSheetView: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(RR.line))
-            .shadow(color: .black.opacity(0.10), radius: 14, y: 8)
+            .shadow(color: RR.shadowStrong, radius: 14, y: 8)
     }
 
     private var actionRow: some View {
@@ -673,7 +869,7 @@ private struct ShareSheetView: View {
                                                 image: Image(uiImage: rendered))) {
                     Label("공유", systemImage: "square.and.arrow.up")
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(RR.onBrand)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 13)
                         .background(RR.brand,

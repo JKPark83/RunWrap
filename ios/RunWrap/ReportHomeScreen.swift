@@ -17,6 +17,10 @@ struct ReportHomeScreen: View {
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @State private var tab: ReportTab = .myState
+    // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
+    @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
+    @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
+    @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
 
     /// 리포트 탭 세그먼트 (이슈 #21) — 내 상태(최근 7일) / 이번달(월간) / 나의 성장기(장기 추이)
     enum ReportTab: String, CaseIterable {
@@ -29,6 +33,15 @@ struct ReportHomeScreen: View {
             case .growth: "나의 성장기"
             }
         }
+    }
+
+    /// 존·노력도·세션 상세가 공유하는 심박 기준 — 수동 > 추정 우선순위는 엔진이 정한다 (이슈 #56)
+    private var heartRate: HeartRateProfile {
+        TrainingGuideEngine.heartRateProfile(estimate: health.hrMaxEstimate,
+                                             manualHrMax: hrMaxManual,
+                                             manualRestingHR: restingHRManual,
+                                             measuredRestingHR: health.restingHRBpm,
+                                             zoneMethodRaw: hrZoneMethodRaw)
     }
 
     var body: some View {
@@ -53,6 +66,11 @@ struct ReportHomeScreen: View {
                                           cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
                                                                             runs: runs, now: Date()),
                                           form: FormTrend.compute(runs: runs, now: Date()),
+                                          zoneDistribution: ZoneDistributionEngine.compute(
+                                              histograms: health.zoneHistograms, runs: runs,
+                                              profile: heartRate, now: Date()),
+                                          trainingLoad: TrainingLoadEngine.compute(
+                                              runs: runs, profile: heartRate, now: Date()),
                                           guide: trainingGuide(runs: runs, level: level,
                                                                batteryTone: battery?.tone),
                                           walkRun: WalkRunEngine.plan(
@@ -66,9 +84,11 @@ struct ReportHomeScreen: View {
                                                   ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                                               runs: runs,
                                               now: Date(),
-                                              hrMaxBpm: health.hrMaxBpm,
+                                              // 폴백 190은 노력도 근거가 아니다 — nil로 넘겨 Riegel 유지
+                                              hrMaxBpm: heartRate.reliableHrMax,
                                               vo2MaxSamples: health.vo2Max,
                                               raceRecords: raceRecords.records),
+                                          trainingPlan: trainingPlan(runs: runs, level: level),
                                           segment: segment)
                             .refreshable { await health.load() }
                     case .month:
@@ -115,6 +135,15 @@ struct ReportHomeScreen: View {
                    raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
                    batteryTone: batteryTone)
     }
+
+    /// 주차별 훈련 계획 (이슈 #189) — 목표 종목·대회 날짜가 모두 있을 때만 계산한다.
+    /// 표본·지평 가드는 엔진이 nil로 처리한다
+    private func trainingPlan(runs: [RunSummary], level: RunnerLevel) -> TrainingPlan? {
+        guard let race = RaceDistance(rawValue: raceGoalRaw), raceDateRaw > 0 else { return nil }
+        return TrainingPlanEngine.plan(runs: runs, race: race, level: level,
+                                       raceDate: Date(timeIntervalSince1970: raceDateRaw),
+                                       now: Date())
+    }
 }
 
 // MARK: - 리포트 본문
@@ -133,12 +162,19 @@ struct ReportHomeContent: View {
     var cross: CrossTrainingEngine.Summary? = nil
     /// 주간 케이던스 추이 — 최근 28일 케이던스 표본이 부족하면 엔진이 nil을 준다 (계획서 M4)
     var form: FormTrend? = nil
+    /// 최근 28일 심박존 분포·80/20 강도 배분 — 심박 기록 세션 8회 미만이면 엔진이 nil을 준다 (이슈 #165)
+    var zoneDistribution: ZoneDistribution? = nil
+    /// TRIMP 기반 체력·피로·폼 — 심박 세션 이력 42일 미만이거나 8회 미만이면 엔진이 nil (이슈 #177)
+    var trainingLoad: TrainingLoad? = nil
     /// 훈련 가이드 — 상세 화면 전달용. 홈 카드는 지금은 숨긴다 (이슈 #21)
     var guide: TrainingGuide? = nil
     /// 걷뛰 처방 — 런린이 전용 (§4). 사이클 시작 시각이 없으면 엔진이 nil을 준다
     var walkRun: WalkRunEngine.Plan? = nil
-    /// 대회 목표 상태 — 체력 배터리 카드 하단 섹션 재료 (이슈 #21). 샘플 시트에서는 nil
+    /// 대회 목표 상태 — 배터리 카드 아래 독립 카드 재료 (이슈 #21·#119). 샘플 시트에서는 nil
     var raceStatus: RaceOutlookEngine.Status? = nil
+    /// 주차별 훈련 계획 — race 카드의 계획 화면 링크 재료 (이슈 #189).
+    /// 표본 부족·대회 24주 초과면 엔진이 nil을 준다. 샘플 시트에서는 nil
+    var trainingPlan: TrainingPlan? = nil
     /// 샘플 리포트 시트에서는 상세 이동 대신 배너를 단다
     var isSample = false
     /// [이번 주 | 발전상] 세그먼트 — 샘플 시트에서는 넘기지 않아 nil이다
@@ -161,17 +197,33 @@ struct ReportHomeContent: View {
                     batteryHintCard
                 }
 
+                // 연속 달린 주 — 레벨 무관 소형 카드, 2주 미만이면 엔진이 nil (이슈 #184)
+                if let streak = StreakEngine.card(streakWeeks: report.streakWeeks,
+                                                  ranThisWeek: report.ranThisWeek) {
+                    streakCard(streak)
+                }
+
+                // 배터리와 따로 그린다 — 배터리가 nil이어도 D-day·예상 기록은 보여야 한다 (이슈 #119)
+                if let raceStatus { raceOutlookCard(raceStatus) }
+
                 // 걷뛰는 런린이에게서 걷어낸 지표들(ACWR·EF·VO₂max·주법)의 자리를 대신 채운다.
                 // 그래서 위쪽 — 배터리 바로 다음 — 에 둔다 (§4 "더하는 차별화")
                 if let walkRun, ReportGate.shows(.walkRun, level: level) {
                     walkRunCard(walkRun)
                 }
 
-                if let distance = report.distance, ReportGate.shows(.distance, level: level) {
-                    distanceCard(distance)
+                // 차트(이력)는 증가율 가드와 무관하게 그린다 — 비율·톤·상한만 distance가 있을 때 (이슈 #91)
+                if !report.weeks.isEmpty, ReportGate.shows(.distance, level: level) {
+                    distanceCard(report.distance, weeks: report.weeks)
                 }
                 if let acwr = report.acwr, ReportGate.shows(.acwr, level: level) {
                     acwrCard(acwr)
+                }
+                if let trainingLoad, ReportGate.shows(.trainingLoad, level: level) {
+                    trainingLoadCard(trainingLoad)
+                }
+                if let zoneDistribution, ReportGate.shows(.zoneBalance, level: level) {
+                    zoneBalanceCard(zoneDistribution)
                 }
                 if let efficiency = report.efficiency, ReportGate.shows(.efficiency, level: level) {
                     efficiencyCard(efficiency)
@@ -187,11 +239,14 @@ struct ReportHomeContent: View {
 
                 // 훈련 가이드 카드는 지금은 숨긴다 (이슈 #21) — 상세 화면의 가이드 섹션은 유지
 
-                if report.isEmpty { insufficientCard }
+                // 레벨 게이트까지 거친 판정 카드 기준 — 런린이가 숨겨진 ACWR·EF 때문에
+                // 안내 없이 빈 상세로 가지 않게 한다 (이슈 #119)
+                let visibleCards = report.visibleCards(level: level)
+                if visibleCards.isEmpty { insufficientCard }
 
-                if !isSample && !report.isEmpty {
+                if !isSample && !visibleCards.isEmpty {
                     NavigationLink {
-                        ReportDetailScreen(report: report, guide: guide)
+                        ReportDetailScreen(report: report, level: level, guide: guide)
                     } label: {
                         HStack(spacing: 7) {
                             Text("리포트 자세히 보기")
@@ -199,7 +254,7 @@ struct ReportHomeContent: View {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 12, weight: .bold))
                         }
-                        .foregroundStyle(.white)
+                        .foregroundStyle(RR.onBrand)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(
@@ -431,10 +486,6 @@ struct ReportHomeContent: View {
                 .foregroundStyle(RR.text3)
                 .padding(.top, 13)
 
-            if let raceStatus {
-                raceOutlookSection(raceStatus)
-            }
-
             disclaimer("건강 상태를 진단하거나 의학적 조언을 하지 않습니다. 통증이나 이상이 있다면 전문가와 상담하세요.")
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
@@ -451,7 +502,7 @@ struct ReportHomeContent: View {
                 .font(.system(size: 13.5, weight: .semibold))
                 .foregroundStyle(RR.text)
             Spacer()
-            Text(factor.detail)
+            Text(factorDetail(factor))
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(RR.text2)
             Text(factor.points > 0 ? "+\(factor.points)"
@@ -460,6 +511,18 @@ struct ReportHomeContent: View {
                 .foregroundStyle(factor.points > 0 ? RR.pos
                                  : factor.points < 0 ? RR.dang : RR.text3)
                 .frame(width: 34, alignment: .trailing)
+        }
+    }
+
+    /// 팩터 수치가 묶인 카드가 이 레벨에서 수치를 숨기면 숫자 없는 문장으로 바꾼다 (이슈 #125).
+    /// 기여 점수는 배터리 합산에 이미 들어가 있으므로 점수 표기는 그대로 둔다.
+    private func factorDetail(_ factor: BatteryReport.Factor) -> String {
+        guard let gate = factor.gate, !ReportGate.showsNumbers(gate, level: level) else {
+            return factor.detail
+        }
+        switch gate {
+        case .acwr: return "이번 주 훈련량이 몸보다 앞섰어요"
+        default: return factor.detail
         }
     }
 
@@ -485,20 +548,61 @@ struct ReportHomeContent: View {
         .rrCard()
     }
 
-    // MARK: 대회 목표 섹션 (배터리 카드 하단, 이슈 #21)
+    // MARK: 스트릭 소형 카드 — 이슈 #184
 
-    /// 설정 상태에 따라 안내·D-day·예상 완주 기록을 보여준다.
+    /// 문구·톤은 StreakEngine이 정한다 — 여기서는 그리기만
+    private func streakCard(_ streak: StreakCard) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(streak.tone.color)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(streak.headline)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Text(streak.caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Text("\(streak.weeks)주")
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(streak.tone.color)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(streak.tone.softColor, in: Capsule())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
+        .rrCard()
+    }
+
+    // MARK: 대회 목표 카드 (배터리 카드 아래 독립 카드, 이슈 #21·#119)
+
+    /// 설정 상태에 따라 D-day·예상 완주 기록을 보여준다.
     /// 상태 판정은 RaceOutlookEngine이 한다 — 여기서는 switch로 그리기만.
+    /// 예전엔 배터리 카드 하단 섹션이라 배터리가 nil이면 함께 사라졌다 (이슈 #119).
+    /// 미설정이면 카드를 아예 그리지 않는다 — 설정 유도는 홈 브리핑이 맡는다.
+    @ViewBuilder
+    private func raceOutlookCard(_ status: RaceOutlookEngine.Status) -> some View {
+        if case .notConfigured = status {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Eyebrow(text: "race")
+                raceOutlookSection(status)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 18))
+            .rrCard()
+        }
+    }
+
     @ViewBuilder
     private func raceOutlookSection(_ status: RaceOutlookEngine.Status) -> some View {
-        Divider().overlay(RR.line).padding(.top, 14)
         switch status {
         case .notConfigured:
-            Text("설정에서 대회 목표(레이스·기록·날짜)를 정하면 여기에 D-day와 예상 완주 기록이 떠요")
-                .font(.system(size: 11.5))
-                .lineSpacing(3)
-                .foregroundStyle(RR.text3)
-                .padding(.top, 12)
+            EmptyView()
         case .raceFinished(let race):
             Text("\(race.label) 대회 날짜가 지났어요 — 설정에서 다음 대회 목표를 정해 주세요")
                 .font(.system(size: 11.5))
@@ -512,6 +616,7 @@ struct ReportHomeContent: View {
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
+                trainingPlanLink(daysToRace: days)
             }
             .padding(.top, 12)
         case .ready(let outlook):
@@ -535,8 +640,38 @@ struct ReportHomeContent: View {
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
                     .foregroundStyle(RR.text3)
+                trainingPlanLink(daysToRace: outlook.daysToRace)
             }
             .padding(.top, 12)
+        }
+    }
+
+    /// 주차별 훈련 계획 화면 링크 (이슈 #189) — 계획이 nil이면 이유를 한 줄로 안내한다.
+    /// 이유 구분은 D-day만으로 한다: 24주보다 멀면 지평 가드, 아니면 표본 가드
+    @ViewBuilder
+    private func trainingPlanLink(daysToRace: Int) -> some View {
+        if isSample {
+            EmptyView()
+        } else if let trainingPlan {
+            NavigationLink {
+                TrainingPlanScreen(plan: trainingPlan)
+            } label: {
+                HStack(spacing: 4) {
+                    Text("주차별 훈련 계획 보기")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(RR.brand)
+            }
+            .padding(.top, 2)
+        } else {
+            Text(daysToRace / 7 > TrainingPlanEngine.maxHorizonWeeks
+                 ? "대회 \(TrainingPlanEngine.maxHorizonWeeks)주 전부터 주차별 계획을 보여드려요"
+                 : "러닝 기록이 3주 이상 쌓이면 주차별 훈련 계획도 보여드려요")
+                .font(.system(size: 11.5))
+                .lineSpacing(3)
+                .foregroundStyle(RR.text3)
         }
     }
 
@@ -571,7 +706,9 @@ struct ReportHomeContent: View {
             caption += String(format: " · 심폐 추세 %+.0f%% 반영", fitnessPct)
         }
         if outlook.sampleHeatDeltaSecPerKm > 0 {
-            caption += String(format: " · 훈련 더위 −%.0f초/km 반영",
+            // 대회 기록은 세션 날씨 대신 기록 월 평년값으로 중립 환산한다 (이슈 #100)
+            caption += String(format: outlook.isRaceRecord ? " · 기록 월 평년 더위 −%.0f초/km 반영"
+                                                            : " · 훈련 더위 −%.0f초/km 반영",
                               outlook.sampleHeatDeltaSecPerKm)
         }
         if outlook.heatDeltaSecPerKm > 0 {
@@ -583,36 +720,50 @@ struct ReportHomeContent: View {
 
     // MARK: 주간 거리 카드
 
-    private func distanceCard(_ card: WeeklyReport.DistanceCard) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// `card`가 nil이면(이전 7일 3km 미만 — 증가율 가드) 차트만 그리고 증감 대신 안내 한 줄을 둔다.
+    /// 런린이는 km 수치(막대 값·상한 라벨·하단 지표)를 감추고 문장만 남긴다 (§4 "문장만", 이슈 #119)
+    private func distanceCard(_ card: WeeklyReport.DistanceCard?, weeks: [WeeklyReport.WeekBar]) -> some View {
+        let overloaded = card?.tone == .overload
+        let cap = overloaded ? card?.capKm : nil
+        let showsNumbers = ReportGate.showsNumbers(.distance, level: level)
+        return VStack(alignment: .leading, spacing: 0) {
             cardHeader(icon: "figure.run", title: "주간 거리", code: "DISTANCE",
-                       tint: card.tone.color, soft: card.tone.softColor, tone: card.tone,
-                       info: CardInfoText.distance)
+                       tint: card?.tone.color ?? RR.brand, soft: card?.tone.softColor ?? RR.brandSoft,
+                       tone: card?.tone, info: CardInfoText.distance)
 
-            distanceHeadline(card)
-                .font(.system(size: 23, weight: .bold))
-                .lineSpacing(4)
-                .padding(.top, 13)
+            if let card {
+                distanceHeadline(card)
+                    .font(.system(size: 23, weight: .bold))
+                    .lineSpacing(4)
+                    .padding(.top, 13)
+            } else {
+                Text("비교할 이전 7일 기록이 모이면 증감을 알려드려요")
+                    .font(.system(size: 14))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 13)
+            }
 
-            WeeklyBarsChart(weeks: card.weeks,
-                            currentColor: card.tone == .overload ? RR.dang : RR.brand,
-                            cap: card.tone == .overload ? card.capKm : nil,
-                            capLabel: card.tone == .overload
-                                ? String(format: "+10%% 상한 %.1f km", card.capKm) : nil)
+            WeeklyBarsChart(weeks: weeks,
+                            currentColor: overloaded ? RR.dang : RR.brand,
+                            cap: cap,
+                            capLabel: showsNumbers ? cap.map { String(format: "+10%% 상한 %.1f km", $0) } : nil,
+                            showsValues: showsNumbers)
                 .padding(.top, 16)
 
-            Divider().overlay(RR.line).padding(.top, 12)
+            if let card, showsNumbers {
+                Divider().overlay(RR.line).padding(.top, 12)
 
-            HStack(spacing: 8) {
-                metric(label: "최근 7일", value: Format.km(card.recent7Km), unit: "km", color: RR.text)
-                metric(label: "이전 7일", value: Format.km(card.previous7Km), unit: "km", color: RR.text2)
-                if card.overKm > 0 {
-                    metric(label: "초과분", value: "+" + Format.km(card.overKm), unit: "km", color: RR.dang)
-                } else {
-                    metric(label: "상한 여유", value: Format.km(-card.overKm), unit: "km", color: RR.pos)
+                HStack(spacing: 8) {
+                    metric(label: "최근 7일", value: Format.km(card.recent7Km), unit: "km", color: RR.text)
+                    metric(label: "이전 7일", value: Format.km(card.previous7Km), unit: "km", color: RR.text2)
+                    if card.overKm > 0 {
+                        metric(label: "초과분", value: "+" + Format.km(card.overKm), unit: "km", color: RR.dang)
+                    } else {
+                        metric(label: "상한 여유", value: Format.km(-card.overKm), unit: "km", color: RR.pos)
+                    }
                 }
+                .padding(.top, 13)
             }
-            .padding(.top, 13)
         }
         .padding(EdgeInsets(top: 20, leading: 18, bottom: 16, trailing: 18))
         .rrCard()
@@ -681,6 +832,132 @@ struct ReportHomeContent: View {
         case .caution: card.ratio >= 1.3 ? "회복보다 훈련량이 앞서 있어요"
                                          : "훈련량이 평소보다 크게 줄었어요"
         default: "훈련과 회복이 균형을 이루고 있어요"
+        }
+    }
+
+    // MARK: 체력·피로·폼 카드 (TRIMP CTL·ATL·TSB) — 이슈 #177
+
+    private func trainingLoadCard(_ load: TrainingLoad) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardHeader(icon: "waveform.path.ecg", title: "체력·피로·폼", code: "TSB",
+                       tint: load.tone.color, soft: load.tone.softColor, tone: load.tone,
+                       info: CardInfoText.trainingLoad)
+
+            Text(trainingLoadHeadline(load))
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(RR.text)
+                .lineSpacing(4)
+                .padding(.top, 13)
+
+            // CTL 28일 추세 — 탭하면 그날 체력 콜아웃
+            TrendLineChart(points: load.points.map(\.ctl),
+                           tint: load.tone.color,
+                           height: 84,
+                           endLabels: ("4주 전", "오늘"),
+                           pointLabels: load.points.map { trainingLoadDayLabel($0.day) },
+                           valueText: { String(format: "%.0f", $0) })
+                .padding(.top, 12)
+
+            HStack(spacing: 8) {
+                loadTile(label: "체력 CTL", value: String(format: "%.0f", load.ctl), color: RR.text)
+                loadTile(label: "피로 ATL", value: String(format: "%.0f", load.atl), color: RR.text)
+                loadTile(label: "폼 TSB", value: String(format: "%+.0f", load.tsb), color: load.tone.color)
+            }
+            .padding(.top, 14)
+
+            Text("최근 42일 심박 세션 \(load.sessionCount)회 · 심박 강도×시간(TRIMP)을 누적한 값이에요")
+                .font(.system(size: 13))
+                .foregroundStyle(RR.text2)
+                .padding(.top, 12)
+        }
+        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
+        .rrCard()
+    }
+
+    /// 문장 분기는 엔진이 정한 폼 구간을 그대로 따른다 — 화면에서 TSB를 재판정하지 않는다
+    private func trainingLoadHeadline(_ load: TrainingLoad) -> String {
+        switch load.band {
+        case .overload: "피로가 체력을 크게 앞섰어요 — 며칠 쉬어 가요"
+        case .productive: "체력이 쌓이는 구간이에요 — 좋은 피로예요"
+        case .maintain: "체력과 피로가 균형이에요"
+        case .fresh: "몸이 가벼운 상태예요 — 대회를 뛰기 좋아요"
+        case .detraining: "훈련이 뜸해 체력이 내려가고 있어요"
+        }
+    }
+
+    /// "8/13" — 추세 콜아웃 날짜 (포맷터는 한 번만 만든다)
+    private static let trainingLoadDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.dateFormat = "M/d"
+        return formatter
+    }()
+
+    private func trainingLoadDayLabel(_ day: Date) -> String {
+        Self.trainingLoadDayFormatter.string(from: day)
+    }
+
+    private func loadTile(label: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(RR.text3)
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: 강도 배분 카드 (80/20) — 이슈 #165
+
+    private func zoneBalanceCard(_ z: ZoneDistribution) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            cardHeader(icon: "heart.text.square.fill", title: "강도 배분", code: "80/20",
+                       tint: z.tone.color, soft: z.tone.softColor, tone: z.tone,
+                       info: CardInfoText.zoneBalance)
+
+            Text(zoneBalanceHeadline(z))
+                .font(.system(size: 21, weight: .bold))
+                .foregroundStyle(RR.text)
+                .lineSpacing(4)
+                .padding(.top, 13)
+
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(String(format: "%d", Int((z.easyShare * 100).rounded())))
+                    .font(.system(size: 42, weight: .bold, design: .monospaced))
+                    .foregroundStyle(z.tone.color)
+                Text("%")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+                Spacer()
+                Text("이지(Z1–Z2) 비율 · 목표 80%")
+                    .font(.system(size: 11))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.top, 8)
+
+            ZoneStackedBarsChart(weeks: z.weeks)
+                .padding(.top, 12)
+
+            ZoneBarView(fractions: z.zoneShare)
+                .padding(.top, 14)
+
+            Text("최근 28일 \(z.sessionCount)회 러닝의 심박 시간 · 존 경계는 설정의 심박 기준")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 12)
+        }
+        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
+        .rrCard()
+    }
+
+    /// 문장 분기는 엔진이 정한 톤을 그대로 따른다 — 화면에서 임계값을 재판정하지 않는다
+    private func zoneBalanceHeadline(_ z: ZoneDistribution) -> String {
+        switch z.tone {
+        case .overload: "쉬운 날이 없으십니다. 80%는 대화가 되는 속도로"
+        case .caution: "이지런이 조금 빠르십니다 — 편한 날은 더 편하게"
+        default: "이지런을 이지하게, 잘 지키고 계십니다"
         }
     }
 
@@ -900,6 +1177,8 @@ private enum CardInfoText {
     static let battery = "밤사이 활력징후(심박 변이·안정 심박·심박 회복·수면)와 훈련 부하를 합쳐 오늘 쓸 수 있는 체력을 0~100으로 추정해요. 75 이상 충전 충분, 50~74 양호, 25~49 주의, 그 밑은 방전 임박 — 낮은 날은 훈련보다 충전이 먼저예요."
     static let distance = "최근 7일 거리를 그 전 7일과 비교해요. 한 주 증가 폭은 10% 이내가 안전하다는 경험칙(10% 룰)이 기준 — 그보다 빠르게 늘리면 몸이 적응할 시간이 부족해 부상 위험이 커져요."
     static let acwr = "최근 7일 부하 ÷ 최근 4주 주평균이에요. 지금 훈련량이 몸에 익숙한 양의 몇 배인지 보는 지표로, 0.8~1.3이 적정 구간이에요. 1.3을 넘으면 몸보다 훈련이 앞선 상태, 1.5 초과는 부상 위험 구간이에요."
+    static let trainingLoad = "세션마다 심박 강도와 시간을 곱한 훈련 자극(TRIMP)을 매일 누적해요. 체력(CTL)은 42일, 피로(ATL)는 7일 가중 평균이고, 폼(TSB)은 체력 − 피로예요. −30 밑이면 과부하, −30~−10은 체력이 쌓이는 구간, +5~+25는 대회 뛰기 좋은 상태, +25 위면 훈련 부족이에요."
+    static let zoneBalance = "최근 28일 러닝의 심박 시간을 존(Z1~Z5)별로 모았어요. 엘리트 지구력 선수는 훈련 시간의 약 80%를 대화가 되는 낮은 강도(Z1~Z2)에서 보낸다는 연구(Seiler, 2006)가 기준 — 80% 이상 유지, 70~80% 주의, 70% 밑은 쉬운 날까지 세게 달리는 상태예요. 존 경계는 설정의 심박 기준(최대 심박·Karvonen)을 따라요."
     static let efficiency = "같은 심박으로 얼마나 빨리 달리는지 — 속도를 심박으로 나눈 값이에요. 최근 2주를 그 전 2주와 비교해요. 절대값보다 방향이 중요해서, 오르고 있으면 같은 힘으로 더 멀리 가는 몸이 되고 있다는 뜻이에요."
     static let vo2Max = "운동 중 몸이 쓸 수 있는 산소의 최대치(mL/kg·분)로, 워치가 야외 러닝에서 추정해요. 지구력의 대표 지표라 높을수록 좋지만 나이·성별에 따라 기준이 달라서, 절대값보다 추세가 오르는지를 봐요. 함께 나오는 심박 회복은 러닝 직후 1분간 심박이 내려간 폭 — 클수록 회복 엔진이 좋은 거예요."
     static let cross = "최근 7일의 러닝 외 운동(자전거·근력 등)을 모아 보여드려요. 러닝 거리 부하(ACWR)에는 넣지 않는 보조 정보지만, 몸의 피로는 같이 쌓이니 회복을 챙길 때는 함께 계산해 주세요."
@@ -962,7 +1241,7 @@ struct EmptyReportScreen: View {
                     } label: {
                         Text("샘플 리포트 둘러보기")
                             .font(.system(size: 14.5, weight: .bold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(RR.onBrand)
                             .padding(.horizontal, 22)
                             .padding(.vertical, 13)
                             .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

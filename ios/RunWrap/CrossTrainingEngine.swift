@@ -105,7 +105,30 @@ enum CrossTrainingEngine {
 
         let kmLabel = String(format: "%.0f", thisWeekKm)
         return "러닝 \(kmLabel)km에 크로스 트레이닝 \(totalTime)까지, "
-             + "그중 \(top.label)이 \(topTime)로 제일 많았어요 — 부지런히도 움직이셨어요."
+             + "그중 \(top.label)\(subjectParticle(top.label)) \(topTime)\(directionParticle(topTime)) "
+             + "제일 많았어요 — 부지런히도 움직이셨어요."
+    }
+
+    // MARK: - 조사 (받침 판정)
+
+    /// 주격 조사 — 받침 있으면 "이"(근력이), 없으면 "가"(자전거가)
+    private static func subjectParticle(_ word: String) -> String {
+        finalConsonantIndex(word) == 0 ? "가" : "이"
+    }
+
+    /// 방향·수단 조사 — 받침 없거나 ㄹ 받침이면 "로", 그 밖의 받침이면 "으로"(45분으로)
+    private static func directionParticle(_ word: String) -> String {
+        let index = finalConsonantIndex(word)
+        return index == 0 || index == 8 ? "로" : "으로"
+    }
+
+    /// 마지막 글자의 종성 인덱스 (0 = 받침 없음, 8 = ㄹ). 한글 음절(가~힣)은
+    /// (코드 - 0xAC00) % 28이 종성 인덱스다 — 유니코드 한글 음절 조합 규칙.
+    /// 한글 음절이 아니면 받침 없음(0)으로 본다.
+    private static func finalConsonantIndex(_ word: String) -> Int {
+        guard let scalar = word.unicodeScalars.last,
+              (0xAC00...0xD7A3).contains(scalar.value) else { return 0 }
+        return Int(scalar.value - 0xAC00) % 28
     }
 
     /// 90 → "1시간 30분", 60 → "1시간", 45 → "45분"

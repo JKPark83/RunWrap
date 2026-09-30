@@ -6,6 +6,8 @@ import SwiftUI
 /// 전 종을 칸으로 깔아 두고 미수집은 실루엣으로 남긴다: 도감의 재미는 빈 칸에서 온다.
 struct CollectionScreen: View {
     @EnvironmentObject private var collection: CollectionStore
+    /// 이력 시트를 띄울 종 — 수집된 칸을 탭하면 채워진다 (이슈 #117)
+    @State private var historySpecies: BirdSpecies?
 
     private let columns = [GridItem(.flexible(), spacing: 12),
                            GridItem(.flexible(), spacing: 12)]
@@ -30,6 +32,12 @@ struct CollectionScreen: View {
         .background(RR.bg.ignoresSafeArea())
         .navigationTitle("도감")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $historySpecies) { species in
+            SpeciesHistorySheet(species: species,
+                                birds: collection.birds
+                                    .filter { $0.species == species }
+                                    .sorted { $0.collectedAt > $1.collectedAt })
+        }
     }
 
     // MARK: - 요약
@@ -110,9 +118,16 @@ struct CollectionScreen: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
         .rrCard()
+        // 칸에는 최근 1마리만 서므로 같은 종의 이력은 시트로 연다. 미수집 칸은 반응하지 않는다
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if latest != nil { historySpecies = species }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(species: species, latest: latest,
                                                 count: collected.count))
+        .accessibilityHint(latest != nil ? "탭하면 수집 이력" : "")
+        .accessibilityAddTraits(latest != nil ? .isButton : [])
     }
 
     private func accessibilityLabel(species: BirdSpecies, latest: CollectedBird?,
@@ -133,10 +148,83 @@ struct CollectionScreen: View {
     }
 
     /// "2026년 8월 13일" — 도감은 이력이라 연도까지 적는다
-    private static let collectedFormatter: DateFormatter = {
+    fileprivate static let collectedFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ko_KR")
         f.dateFormat = "yyyy년 M월 d일"
         return f
     }()
+}
+
+/// 같은 종의 수집 이력 — 도감 칸에는 최근 1마리만 서므로 나머지는 여기서 본다 (기획서 §5, 이슈 #117).
+///
+/// 종별 성조 이미지는 에셋 대기라 목록만 보여준다. 행마다 당시 목표 · 수집일 · 걸린 일수.
+private struct SpeciesHistorySheet: View {
+    let species: BirdSpecies
+    /// 그 종의 수집 이력 — collectedAt 내림차순(최근이 위)
+    let birds: [CollectedBird]
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Eyebrow(text: species.label)
+                        Text("\(birds.count)마리를 키워 냈어요")
+                            .font(RR.display(22))
+                            .foregroundStyle(RR.text)
+                    }
+
+                    VStack(spacing: 0) {
+                        ForEach(Array(birds.enumerated()), id: \.element.id) { index, bird in
+                            row(bird)
+                            if index < birds.count - 1 {
+                                Divider().overlay(RR.line).padding(.leading, 16)
+                            }
+                        }
+                    }
+                    .rrCard()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 28)
+            }
+            .background(RR.bg.ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("닫기") { dismiss() }
+                }
+            }
+        }
+        .tint(RR.brand)
+        .presentationDetents([.medium, .large])
+    }
+
+    private func row(_ bird: CollectedBird) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(bird.goalLabel)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(RR.text)
+                    .lineLimit(1)
+                Text(CollectionScreen.collectedFormatter.string(from: bird.collectedAt))
+                    .font(.system(size: 12))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+            Text(cycleText(bird.cycleDays))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(RR.brand)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// "27일 만에" — 시작한 날 바로 성조가 된 경우(0 이하)는 "당일"
+    private func cycleText(_ days: Int) -> String {
+        days > 0 ? "\(days)일 만에" : "당일"
+    }
 }

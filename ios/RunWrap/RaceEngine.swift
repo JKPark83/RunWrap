@@ -25,7 +25,34 @@ struct Race: Decodable, Identifiable, Equatable {
 struct RaceFile: Decodable {
     let generatedAt: String   // ISO8601 "+09:00"
     let source: String        // "roadrun.co.kr"
+    let schemaVersion: Int    // 없으면 1 — 앱이 지원하는 것보다 크면 RaceStore가 원격 파일을 버린다 (#144)
     let races: [Race]
+}
+
+/// 관대 디코딩 (#144) — races 원소 하나가 깨져도(타입 불일치·필수 필드 누락) 그 원소만 건너뛴다.
+/// 크롤 결과 한 건의 오류로 파일 전체가 디코드에 실패해 대회 탭이 통째로 비는 것을 막는다.
+/// generatedAt·source는 그대로 필수다.
+extension RaceFile {
+    private enum CodingKeys: String, CodingKey {
+        case generatedAt, source, schemaVersion, races
+    }
+
+    /// 원소 단위 실패를 nil로 삼키는 래퍼 — 디코드 자체는 항상 성공해 배열 커서가 다음 원소로 넘어간다.
+    /// (빈 struct로 커서를 넘기는 패턴은 원소가 객체가 아니면(null·문자열) 커서가 멈춰 무한 루프가 된다)
+    private struct LenientRace: Decodable {
+        let race: Race?
+        init(from decoder: Decoder) throws {
+            race = try? Race(from: decoder)
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        generatedAt = try container.decode(String.self, forKey: .generatedAt)
+        source = try container.decode(String.self, forKey: .source)
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        races = try container.decode([LenientRace].self, forKey: .races).compactMap(\.race)
+    }
 }
 
 /// 대회 접수 상태 판정·정렬 — Foundation만 쓰는 순수 로직 (계획서 M13-2)
@@ -35,13 +62,15 @@ struct RaceFile: Decodable {
 /// - 접수예정: 오늘 < 시작일
 /// - 접수완료: 오늘 > 마감일
 /// - 접수기간 정보가 없으면 nil — 모르는 상태를 지어내지 않는다 (미노출 가드)
+/// - 마감일 미상 접수중은 대회 30일 전(D-30 포함)까지만 — 그보다 가까우면 상태 미상(nil).
+///   크롤러가 잘못된 마감일(원문 "9월31일")을 버린 경우의 방어 (#45)
 ///
 /// 대회일이 지난 대회는 목록에서 뺀다 (크롤 사이에 날짜가 지날 수 있다).
 /// 정렬은 대회일이 가까운 순 (기획서 §4.14 "오늘 기준 최근 순").
 enum RaceEngine {
     enum RegisterStatus: Equatable {
         case notYet(start: Date)   // 접수예정
-        case open(end: Date?)      // 접수중 — 마감일을 모르면 nil
+        case open(end: Date?)      // 접수중 — 마감일을 모르면 nil (대회 D-30 이상일 때만)
         case closed                // 접수완료
     }
 
@@ -53,6 +82,12 @@ enum RaceEngine {
         let deadlineDDay: Int?      // 접수중일 때 마감까지 남은 날 (0 = 오늘 마감)
         var id: Int { race.id }
     }
+
+    /// 마감일을 모를 때 '접수중'으로 볼 수 있는 대회까지 최소 남은 날 (#45).
+    /// dev Races.json(2026-09-29)에서 마감일이 있는 270건의 (대회일 − 마감일) 중앙값 31일,
+    /// 25%분위 19일 — D-14에서 실제로 접수중인 대회는 약 18%뿐이라, 마감일을 모르는 채
+    /// 가까운 대회를 접수중으로 보면 대부분 틀린다 ("틀린 인사이트는 없느니만 못하다").
+    static let unknownEndOpenDays = 30
 
     /// 한국 달력 — 대회는 전부 국내 개최라 사용자 시간대와 무관하게 KST로 고정
     static let calendar: Calendar = {
@@ -98,6 +133,11 @@ enum RaceEngine {
         if start == nil && end == nil { return nil }
         if let end, today > end { return .closed }
         if let start, today < start { return .notYet(start: start) }
+        // 마감일 미상 + 대회가 30일 안 → 이미 마감됐을 공산이 커서 상태 미상 (#45)
+        if end == nil, let raceDay = day(race.date),
+           (calendar.dateComponents([.day], from: today, to: raceDay).day ?? 0) < unknownEndOpenDays {
+            return nil
+        }
         return .open(end: end)
     }
 }

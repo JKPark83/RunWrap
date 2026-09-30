@@ -75,6 +75,26 @@ struct CrossTrainingEngineTests {
         #expect(summary?.headline.contains("부지런히") == true)
     }
 
+    @Test("조사 — 받침 없는 종목은 '가', 시간은 '분'(ㄴ 받침)이라 '으로'")
+    func headlineParticlesWithoutFinalConsonant() {
+        let sessions = [cross(daysAgo: 2, minutes: 90, kind: .cycling)]
+        let runs = [run(daysAgo: 2, km: 19)]  // 지난주 0km — 비교 기준 없음, 유지 계열
+        let summary = CrossTrainingEngine.weekly(cross: sessions, runs: runs, now: now)
+        // 자전거(거: 받침 없음) → "가", 1시간 30분(분: ㄴ 받침) → "으로"
+        #expect(summary?.headline == "러닝 19km에 크로스 트레이닝 1시간 30분까지, "
+                + "그중 자전거가 1시간 30분으로 제일 많았어요 — 부지런히도 움직이셨어요.")
+    }
+
+    @Test("조사 — 받침 있는 종목은 '이', 45분은 '으로'")
+    func headlineParticlesWithFinalConsonant() {
+        let sessions = [cross(daysAgo: 2, minutes: 45, kind: .strength)]
+        let runs = [run(daysAgo: 2, km: 10)]
+        let summary = CrossTrainingEngine.weekly(cross: sessions, runs: runs, now: now)
+        // 근력(력: ㄱ 받침) → "이", 45분(분: ㄴ 받침) → "으로"
+        #expect(summary?.headline == "러닝 10km에 크로스 트레이닝 45분까지, "
+                + "그중 근력이 45분으로 제일 많았어요 — 부지런히도 움직이셨어요.")
+    }
+
     @Test("8일 전 세션은 집계 창 밖 — nil")
     func outsideWindowExcluded() {
         let sessions = [cross(daysAgo: 8, minutes: 60, kind: .cycling)]

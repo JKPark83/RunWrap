@@ -1,4 +1,5 @@
 import SwiftUI
+import WorkoutKit
 
 /// 홈 탭 — 새 성장 스테이지와 **오늘의 판단 카드** (기획서 v0.8 §6, 시안 1f/1g/1h).
 ///
@@ -9,7 +10,7 @@ import SwiftUI
 /// 날씨(위치)는 `WeatherStore`가 기동 시점에 조회를 마치고 내려준다 — 홈이 뜨기 전에
 /// 스플래시가 그 완료를 기다리는 구조라, 여기서는 읽기만 하고 로딩을 시작하지 않는다.
 struct HomeScreen: View {
-    /// 판단 카드의 배터리·권장 세션 줄에서 리포트 탭으로 넘어가는 통로 (탭 전환은 RootView 몫)
+    /// 판단 카드의 배터리 줄(과 처방 없는 권장 세션 줄)에서 리포트 탭으로 넘어가는 통로 (탭 전환은 RootView 몫)
     var onSelectReport: () -> Void = {}
 
     @EnvironmentObject private var health: HealthStore
@@ -18,6 +19,7 @@ struct HomeScreen: View {
     /// '오늘' 시트의 스토어와 별개 인스턴스지만 1시간 디스크 캐시를 공유해 중복 조회는 없다
     @StateObject private var airQuality = AirQualityStore()
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var showsToday = false
     @State private var showsLastRun = false
@@ -26,22 +28,42 @@ struct HomeScreen: View {
     /// 주간 목표 — 온보딩 Q5에서 항상 먼저 쓰이므로 이 기본값은 사실상 안전망이다.
     /// 값은 `OnboardingFlowScreen`의 미응답 기본값(2)과 맞춰 둔다
     @AppStorage(ProfileKey.weeklyGoal) private var weeklyGoal = 2
+    /// 주간 목표 변경 이력 (이슈 #108, #116) — 설정·재진단이 기록한다. 바뀌면 다시 그리도록 관찰한다
+    @AppStorage(ProfileKey.weeklyGoalChanges) private var weeklyGoalChangesData: Data?
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @AppStorage(ProfileKey.promotionDeclinedAt) private var promotionDeclinedAtRaw = 0.0
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(GrowthKey.maxStage) private var maxStage = GrowthStage.egg.rawValue
-    /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 정해진 값을 그대로 쓴다
     @AppStorage(ProfileKey.raceGoal) private var raceGoalRaw = ""
     @AppStorage(ProfileKey.raceGoalSec) private var raceGoalSec = 0
+    /// 세러모니에서 수집될 새 종을 정하는 목표 — 사이클 시작 때 고정한 값 (이슈 #110).
+    /// 옵셔널인 이유: 키가 없는(도입 전) 사용자를 가려 현재 목표로 한 번 보정하기 위해서다
+    @AppStorage(GrowthKey.cycleGoal) private var cycleGoalRaw: String?
+    @AppStorage(GrowthKey.cycleGoalSec) private var cycleGoalSecRaw: Int?
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
 
     @EnvironmentObject private var collection: CollectionStore
     /// 성장 상태가 바뀌는 지점(단계 상승·사이클 전환·승급)에서 CloudKit 스냅샷을 갱신한다 (이슈 #29)
     @EnvironmentObject private var backup: ProgressBackupStore
     @State private var showsCeremony = false
+    /// 수집 확정 때 도감 저장이 실패했는지 — 세러모니 위에 알림을 띄운다 (이슈 #67)
+    @State private var showsCollectFailed = false
     // PB 축하 (이슈 #21) — 홈 진입 때 베이스라인과 비교해 새 기록이면 한 번만 띄운다
     @State private var showsPBCongrats = false
     @State private var newPBs: [PersonalRecords.Entry] = []
+    // 결산 리캡 (이슈 #167) — 월초·연말연초 홈 카드. 열어 보거나 X를 누른 기간은 다시 띄우지 않는다
+    @AppStorage(RecapKey.dismissedMonth) private var recapDismissedMonth = ""
+    @AppStorage(RecapKey.dismissedYear) private var recapDismissedYear = ""
+    @State private var recapPeriod: RecapPeriod?
+    // 러닝화 교체 안내 (이슈 #171) — 기본 신발이 교체 기준을 넘으면 판단 카드 아래. 같은 신발·같은 기준으로 닫았으면 다시 안 띄운다
+    @EnvironmentObject private var shoes: ShoeStore
+    @AppStorage("shoe.dismissedAlert") private var shoeDismissedAlert = ""
+    // 목표 대회 카드 (이슈 #172) — 대회 상세의 '목표 대회로 지정'이 정한 대회. 목록은 루트의 RaceStore
+    @EnvironmentObject private var raceStore: RaceStore
+    @AppStorage(RaceKey.targetID) private var targetRaceID = 0
+    @State private var openedTargetRace: RaceEngine.Entry?
+    // 오늘의 훈련 시트 (이슈 #197) — 권장 세션 줄에 처방이 있으면 탭 때 띄워 워치로 보낼 수 있게 한다
+    @State private var sheetWorkout: TodayWorkoutItem?
 
     var body: some View {
         Group {
@@ -54,6 +76,7 @@ struct HomeScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .onAppear { migrateCycleGoalIfNeeded() }
         .sheet(isPresented: $showsToday) { todaySheet }
         // 구독 시점의 현재 좌표부터 흘러온다 — 첫 노출과 늦은 위치 결론(스플래시 타임아웃 경로)을 한 줄로 처리
         .onReceive(weather.$coordinate) { coordinate in
@@ -62,6 +85,23 @@ struct HomeScreen: View {
                 await airQuality.load(latitude: coordinate.latitude,
                                       longitude: coordinate.longitude)
             }
+        }
+        // 포그라운드 복귀 — load()는 첫 조회만 하므로 낡은 대기질은 여기서 갱신한다 (이슈 #69).
+        // 좌표는 직전 위치 결론이다 — 같은 순간 루트가 날씨를 새로 받는 중이어도 측정소가
+        // 바뀔 만큼 이동한 경우가 아니면 결과가 같고, 다음 복귀·당겨서 새로고침이 따라잡는다
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, let coordinate = weather.coordinate else { return }
+            Task {
+                await airQuality.refreshIfStale(latitude: coordinate.latitude,
+                                                longitude: coordinate.longitude)
+            }
+        }
+        // 대기질은 위젯 스냅샷($vitals 신호)보다 늦게 도착한다 — 등급이 정해지면 위젯을 다시 발행해
+        // 홈 판정과 위젯 문구가 어긋나지 않게 한다 (이슈 #195). health.vitals는 대개 이미 채워져 있고,
+        // 아직이면 뒤이은 $vitals 신호가 캐시 등급(cachedFreshGrade)으로 다시 쓴다
+        .onChange(of: loadedAir.flatMap(AirQualityEngine.representativeGrade)) { _, grade in
+            guard let grade else { return }
+            RunWrapApp.publishWidgetSnapshot(health: health, vitals: health.vitals, air: grade)
         }
     }
 
@@ -87,7 +127,8 @@ struct HomeScreen: View {
     private var weatherInput: TodayVerdictEngine.WeatherInput {
         switch weather.state {
         case .idle, .loading: .loading
-        case .loaded(let current): .current(current)
+        case .loaded(let current):
+            .current(current, bestWindow: RunWindowEngine.bestWindow(hourly: current.hourly, now: Date()))
         case .denied: .denied
         case .unavailable: .unavailable
         }
@@ -100,6 +141,7 @@ struct HomeScreen: View {
                                         cycleStartedAt: cycleStartedAt,
                                         maxStage: maxStage,
                                         weeklyGoal: weeklyGoal,
+                                        weeklyGoalChanges: weeklyGoalChanges,
                                         now: now)
         let level = RunnerLevel(rawValue: levelRaw) ?? .beginner
         let promotion = promotionOffer(runs: runs, level: level, now: now)
@@ -115,17 +157,33 @@ struct HomeScreen: View {
             }
         }
         .onAppear {
-            syncMaxStage(growth.stage)
-            // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
-            // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다
-            if CollectionEngine.hasReachedAdult(stage: growth.stage) { showsCeremony = true }
+            syncStage(growth.stage)
             checkNewPBs(runs: runs)
+        }
+        // 포그라운드 복귀·당겨서 새로고침으로 단계가 오르면 홈이 이미 떠 있어 onAppear가 다시 불리지 않는다 —
+        // 단계 변화에도 같은 기록·백업·세러모니를 건다 (이슈 #60)
+        .onChange(of: growth.stage) { _, newStage in
+            syncStage(newStage)
+        }
+        // 베스트 에포트 백필이 끝나면(남은 개수 0) 미뤄 둔 PB 감지를 다시 건다 (이슈 #166)
+        .onChange(of: health.bestEffortPending) { _, pending in
+            if pending == 0 { checkNewPBs(runs: runs) }
         }
         .fullScreenCover(isPresented: $showsCeremony) {
             CeremonyScreen(species: pendingSpecies,
                             goalLabel: pendingGoalLabel,
-                            cycleStartedAt: cycleStartedAt) { newGoal, newSeconds in
+                            cycleStartedAt: cycleStartedAt,
+                            cycleGoal: cycleGoal,
+                            cycleGoalSeconds: cycleGoalSec,
+                            currentGoal: RaceDistance(rawValue: raceGoalRaw),
+                            currentGoalSeconds: raceGoalSec) { newGoal, newSeconds in
                 startNewCycle(goal: newGoal, goalSeconds: newSeconds, now: Date())
+            }
+            // 세러모니는 저장 실패 시 닫히지 않으므로 알림도 그 위에 건다 — 홈에 걸면 커버에 가려진다
+            .alert("도감에 담지 못했어요", isPresented: $showsCollectFailed) {
+                Button("확인", role: .cancel) {}
+            } message: {
+                Text("저장 공간을 확인한 뒤 다시 시도해 주세요. 새는 그대로 기다리고 있어요.")
             }
         }
         .sheet(isPresented: $showsPBCongrats) {
@@ -133,15 +191,14 @@ struct HomeScreen: View {
         }
     }
 
-    /// 지금 수집될 새 종 — 세러모니 표시와 실제 수집이 같은 값을 쓰도록 한 곳에서 낸다
+    /// 지금 수집될 새 종 — 세러모니 표시와 실제 수집이 같은 값을 쓰도록 한 곳에서 낸다.
+    /// 설정의 현재 목표가 아니라 사이클 시작 때 고정한 목표로 판정한다 (이슈 #110)
     private var pendingSpecies: BirdSpecies {
-        CollectionEngine.species(for: RaceDistance(rawValue: raceGoalRaw),
-                                  goalSeconds: raceGoalSec)
+        CollectionEngine.species(for: cycleGoal, goalSeconds: cycleGoalSec)
     }
 
     private var pendingGoalLabel: String {
-        CollectionEngine.goalLabel(for: RaceDistance(rawValue: raceGoalRaw),
-                                    goalSeconds: raceGoalSec)
+        CollectionEngine.goalLabel(for: cycleGoal, goalSeconds: cycleGoalSec)
     }
 
     // MARK: - 헤더
@@ -227,7 +284,7 @@ struct HomeScreen: View {
 
     @ViewBuilder
     private func loadedBody(runs: [RunSummary], growth: GrowthState, level: RunnerLevel,
-                            promotion: RunnerLevel?, now: Date) -> some View {
+                            promotion: PromotionEvidence?, now: Date) -> some View {
         let battery = health.vitals.flatMap { BatteryEngine.compute(vitals: $0, runs: runs, now: now) }
         let verdict = TodayVerdictEngine.verdict(runs: runs,
                                                  battery: battery,
@@ -238,6 +295,7 @@ struct HomeScreen: View {
                                                  hasRaceGoal: RaceDistance(rawValue: raceGoalRaw) != nil,
                                                  weeklyGoal: weeklyGoal,
                                                  level: level,
+                                                 air: loadedAir.flatMap(AirQualityEngine.representativeGrade),
                                                  now: now)
         // 승급 카드가 뜨면 새를 216 → 172로 줄여 카드 자리를 만든다 (시안 1h)
         let birdSize: CGFloat = promotion == nil ? 216 : 172
@@ -255,9 +313,8 @@ struct HomeScreen: View {
                     .padding(.top, 10)
 
                 if let promotion {
-                    PromotionCard(target: promotion,
-                                  evidence: promotionEvidence(runs: runs, now: now),
-                                  onAccept: { accept(promotion) },
+                    PromotionCard(evidence: promotion,
+                                  onAccept: { accept(promotion.target) },
                                   onDecline: { decline(now: now) })
                         .padding(.top, 20)
                 }
@@ -265,9 +322,33 @@ struct HomeScreen: View {
                 if let verdict {
                     VerdictCard(verdict: verdict, battery: battery, weather: weatherInput,
                                 air: loadedAir) { kind in
-                        tap(kind, runs: runs)
+                        tap(kind, verdict: verdict, runs: runs)
                     }
                     .padding(.top, 18)
+                }
+
+                if let alert = ShoeEngine.replacementAlert(shoes: shoes.shoes, defaultShoeID: shoes.defaultShoeID,
+                                                           runs: runs, assignments: shoes.assignments,
+                                                           dismissedKey: shoeDismissedAlert) {
+                    ShoeAlertCard(alert: alert) { shoeDismissedAlert = ShoeEngine.alertKey(for: alert.shoe) }
+                        .padding(.top, 10)
+                }
+
+                // 목표 대회 (이슈 #172) — 대회 목록에 있고 대회일이 지나지 않았을 때만
+                if let target = targetRace(now: now) {
+                    TargetRaceCard(entry: target) { openedTargetRace = target }
+                        .padding(.top, 10)
+                }
+
+                ForEach(recapPrompts(runs: runs, now: now)) { period in
+                    RecapPromptCard(title: recapPromptTitle(period, now: now),
+                                    subtitle: RecapEngine.periodLabel(period) + " 결산이 준비됐어요",
+                                    onOpen: {
+                                        dismissRecap(period)
+                                        recapPeriod = period
+                                    },
+                                    onDismiss: { dismissRecap(period) })
+                        .padding(.top, 10)
                 }
 
                 chipRow(runs: runs, now: now)
@@ -300,14 +381,83 @@ struct HomeScreen: View {
                 SessionDetailScreen(run: last)
             }
         }
+        .sheet(item: $recapPeriod) { period in
+            RecapScreen(period: period)
+        }
+        .sheet(item: $sheetWorkout) { item in
+            TodayWorkoutSheet(workout: item.workout) {
+                sheetWorkout = nil
+                onSelectReport()
+            }
+        }
+        // 목표 대회 카드 재료 — 대회 탭을 열지 않았어도 목표가 있으면 목록을 불러온다 (이슈 #172)
+        .task(id: targetRaceID) {
+            if targetRaceID != 0 { await raceStore.load() }
+        }
+        .sheet(item: $openedTargetRace) { entry in
+            NavigationStack {
+                RaceDetailScreen(entry: entry)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("닫기") { openedTargetRace = nil }
+                        }
+                    }
+            }
+            .environmentObject(raceStore)
+        }
+    }
+
+    // MARK: - 목표 대회 (이슈 #172)
+
+    /// 목표 대회 항목 — 목록에 없거나 대회일이 지났으면(entries가 이미 뺀다) nil → 카드 미노출
+    private func targetRace(now: Date) -> RaceEngine.Entry? {
+        guard targetRaceID != 0, case .loaded(let file) = raceStore.state else { return nil }
+        return RaceEngine.entries(from: file.races.filter { $0.id == targetRaceID }, now: now).first
+    }
+
+    // MARK: - 결산 리캡 (이슈 #167)
+
+    /// 노출할 결산 카드 — 날짜·닫힘 판정은 엔진, 기록 3회 미만 기간은 열어 봐야 빈 화면이라 뺀다
+    private func recapPrompts(runs: [RunSummary], now: Date) -> [RecapPeriod] {
+        RecapEngine.promptKinds(now: now, dismissedMonth: recapDismissedMonth,
+                                dismissedYear: recapDismissedYear)
+            .filter { RecapEngine.hasEnoughRuns($0, runs: runs) }
+    }
+
+    /// "지난달 결산 보기" / "올해 결산 보기" / "지난해 결산 보기"(1월 1~7일)
+    private func recapPromptTitle(_ period: RecapPeriod, now: Date) -> String {
+        switch period {
+        case .month:
+            return "지난달 결산 보기"
+        case .year(let date):
+            let calendar = Calendar.current
+            return calendar.component(.year, from: date) == calendar.component(.year, from: now)
+                ? "올해 결산 보기" : "지난해 결산 보기"
+        }
+    }
+
+    /// 열어 보거나 닫으면 그 기간 키를 남긴다 — 다음 진입부터 카드가 뜨지 않는다
+    private func dismissRecap(_ period: RecapPeriod) {
+        let key = RecapEngine.dismissKey(for: period)
+        switch period {
+        case .month: recapDismissedMonth = key
+        case .year: recapDismissedYear = key
+        }
     }
 
     /// 네 줄의 목적지 — 재료를 만든 화면으로 보낸다 (기획서 v0.8 §6).
-    /// 배터리·권장 세션은 둘 다 리포트 탭의 카드라 같은 곳으로 간다.
-    private func tap(_ kind: TodayVerdict.Line.Kind, runs: [RunSummary]) {
+    /// 배터리는 리포트 탭의 카드로 간다. 권장 세션은 처방이 있으면 오늘의 훈련 시트(워치 전송, 이슈 #197),
+    /// 없으면(휴식·완료·실내·처방 없음) 배터리와 같이 리포트 탭으로 간다.
+    private func tap(_ kind: TodayVerdict.Line.Kind, verdict: TodayVerdict, runs: [RunSummary]) {
         switch kind {
-        case .battery, .session:
+        case .battery:
             onSelectReport()
+        case .session:
+            if let workout = verdict.workout {
+                sheetWorkout = TodayWorkoutItem(workout: workout)
+            } else {
+                onSelectReport()
+            }
         case .weather:
             // 권한을 거부한 상태에서는 앱 안에서 다시 물을 수 없다 — 설정으로 보낸다
             if case .denied = weather.state {
@@ -432,17 +582,20 @@ struct HomeScreen: View {
         return "\(Format.km(km))km · \(Format.paceKm(pace))"
     }
 
+    /// 주간 목표 칩 횟수 — 성장 엔진 주간 목표 판정과 같은 1km 이상 기준
     private func weekRunCount(runs: [RunSummary], now: Date) -> Int {
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = .current
         guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return 0 }
-        return runs.filter { $0.start >= week.start && $0.start <= now }.count
+        return runs.filter {
+            $0.start >= week.start && $0.start <= now && GrowthEngine.countsAsCompletedRun($0)
+        }.count
     }
 
     // MARK: - 승급 제안 (기획서 §3, 시안 1h)
 
     /// 실데이터 승급 후보. 거절한 지 4주가 안 지났으면 다시 묻지 않는다.
-    private func promotionOffer(runs: [RunSummary], level: RunnerLevel, now: Date) -> RunnerLevel? {
+    private func promotionOffer(runs: [RunSummary], level: RunnerLevel, now: Date) -> PromotionEvidence? {
         if promotionDeclinedAtRaw > 0 {
             let declined = Date(timeIntervalSince1970: promotionDeclinedAtRaw)
             guard now.timeIntervalSince(declined) >= 28 * 86_400 else { return nil }
@@ -450,18 +603,9 @@ struct HomeScreen: View {
         return LevelEngine.promotionCandidate(current: level, runs: runs, now: now)
     }
 
-    /// 승급 근거가 된 세션 — 카드 본문의 "지난주 10km를 59분에" 자리를 실제 값으로 채운다.
-    /// LevelEngine의 판정 조건(최근 4주 · 10km 이상 · 60분 이내)과 같은 창을 본다.
-    private func promotionEvidence(runs: [RunSummary], now: Date) -> RunSummary? {
-        let fourWeeksAgo = now.addingTimeInterval(-28 * 86_400)
-        return runs
-            .filter { $0.start >= fourWeeksAgo && $0.start <= now }
-            .filter { ($0.distanceKm ?? 0) >= 10 && $0.durationSec <= 3_600 }
-            .max { $0.start < $1.start }
-    }
-
     private func accept(_ level: RunnerLevel) {
         levelRaw = level.rawValue
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
         // 수락했으면 거절 기록은 의미가 없다 — 지워 둔다
         promotionDeclinedAtRaw = 0
         scheduleBackup()
@@ -482,10 +626,48 @@ struct HomeScreen: View {
         return .distantPast
     }
 
+    /// 주간 목표 변경 이력 — 비어 있으면 모든 주를 현재 목표로 판정한다 (이슈 #108, #116).
+    /// 새 키가 아직 없으면 읽기 헬퍼가 #108의 옛 두 키를 1건짜리 이력으로 이관한다 — 첫 렌더부터
+    /// 옛 기록으로 판정해야 이관 전 계산이 maxStage를 부풀리지 않는다
+    private var weeklyGoalChanges: [WeeklyGoalChange] {
+        if let weeklyGoalChangesData { return WeeklyGoalChangeLog.decode(weeklyGoalChangesData) }
+        return WeeklyGoalChangeLog.load(defaults: .standard)
+    }
+
+    /// 이번 사이클 목표 — 키가 아직 없으면 현재 목표로 대신한다 (보정 저장 전 첫 렌더 대비)
+    private var cycleGoal: RaceDistance? {
+        RaceDistance(rawValue: cycleGoalRaw ?? raceGoalRaw)
+    }
+
+    private var cycleGoalSec: Int {
+        cycleGoalSecRaw ?? raceGoalSec
+    }
+
+    /// 사이클 목표 키가 없는 기존 사용자(이슈 #110 이전 설치·복원)는 지금의 목표를 한 번 복사해 고정한다.
+    /// 이후 설정에서 목표를 바꿔도 이번 사이클의 새 종류는 그대로다
+    private func migrateCycleGoalIfNeeded() {
+        if cycleGoalRaw == nil { cycleGoalRaw = raceGoalRaw }
+        if cycleGoalSecRaw == nil { cycleGoalSecRaw = raceGoalSec }
+    }
+
+    /// 표시 단계를 최고 단계에 기록하고, 성조면 세러모니를 띄운다 — 홈 진입·단계 변화 두 곳에서 부른다 (이슈 #60)
+    private func syncStage(_ stage: GrowthStage) {
+        // 데모(합성 데이터)는 표시만 한다 — 최고 단계·세러모니·사이클 전환을 저장하면
+        // 데모를 꺼도 부풀려진 단계와 가짜 새가 남고 CloudKit까지 올라간다 (이슈 #44).
+        // 세러모니가 뜨지 않으면 startNewCycle도 불리지 않는다
+        guard !DemoMode.isActive else { return }
+        syncMaxStage(stage)
+        // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
+        // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다.
+        // 이미 떠 있으면 다시 세우지 않는다
+        if !showsCeremony && CollectionEngine.hasReachedAdult(stage: stage) { showsCeremony = true }
+    }
+
     /// 이번 사이클 최고 단계를 올려 둔다 — 다음 실행에서 표시 단계가 내려가지 않게 하는 하한.
     private func syncMaxStage(_ stage: GrowthStage) {
         if stage.rawValue > maxStage {
             maxStage = stage.rawValue
+            ProgressSnapshot.markLocalChanged(defaults: .standard, now: Date())
             scheduleBackup()
         }
     }
@@ -496,18 +678,28 @@ struct HomeScreen: View {
     /// 사이클을 초기화한다 — 반대로 하면 저장에 실패했을 때 새를 잃는다.
     /// `cycleStartedAt`을 지금으로 옮기면 XP는 자동으로 0부터 다시 쌓인다
     /// (XP 원장을 저장하지 않는 설계라 리셋할 값이 따로 없다).
-    private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) {
-        collection.add(CollectionEngine.collect(distance: RaceDistance(rawValue: raceGoalRaw),
-                                                 goalSeconds: raceGoalSec,
-                                                 cycleStartedAt: cycleStartedAt,
-                                                 now: now))
+    /// - Returns: 도감 저장 성공 여부. 실패하면 사이클을 그대로 두고 알림만 띄운다 (이슈 #67)
+    private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) -> Bool {
+        let saved = collection.add(CollectionEngine.collect(distance: cycleGoal,
+                                                             goalSeconds: cycleGoalSec,
+                                                             cycleStartedAt: cycleStartedAt,
+                                                             now: now))
+        guard saved else {
+            showsCollectFailed = true
+            return false
+        }
         raceGoalRaw = goal?.rawValue ?? ""
         raceGoalSec = goalSeconds
+        // 새 사이클의 목표를 고정한다 — 다음 새의 종류는 이 값으로 판정한다 (이슈 #110)
+        cycleGoalRaw = goal?.rawValue ?? ""
+        cycleGoalSecRaw = goalSeconds
         cycleStartedAtRaw = now.timeIntervalSince1970
         maxStage = GrowthStage.egg.rawValue
         // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
         UserDefaults.standard.set(UUID().uuidString, forKey: GrowthKey.cycleID)
+        ProgressSnapshot.markLocalChanged(defaults: .standard, now: now)
         scheduleBackup()
+        return true
     }
 
     /// 성장 상태 변경 직후의 스냅샷 백업 — 실패해도 다음 트리거에서 다시 올라간다
@@ -520,7 +712,10 @@ struct HomeScreen: View {
     /// 세러모니와 겹치면 이번에는 베이스라인을 남겨 두고 미룬다 — 다음 진입 때 다시 잡힌다.
     private func checkNewPBs(runs: [RunSummary]) {
         guard !DemoMode.isActive else { return }   // 합성 데이터 기록으로는 축하하지 않는다
-        let current = PersonalRecords.compute(runs: runs)
+        // 베스트 에포트 백필 중이면 미룬다 — 일부만 계산된 기록으로 시드하면, 나중에 계산된
+        // 옛 세션의 기록이 "새 PB"로 축하된다 (이슈 #166)
+        guard health.bestEffortPending == 0 else { return }
+        let current = PersonalRecords.compute(runs: runs, efforts: health.bestEfforts)
         guard !current.isEmpty else { return }
         let fresh = PBEngine.newRecords(current: current, baseline: PBBaselineCache.load())
         guard fresh.isEmpty || !showsCeremony else { return }
@@ -588,7 +783,7 @@ private struct PBCongratsSheet: View {
             } label: {
                 Text("계속 달리기")
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(RR.onBrand)
                     .frame(maxWidth: .infinity)
                     .frame(height: 52)
                     .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -599,6 +794,256 @@ private struct PBCongratsSheet: View {
         }
         .presentationDetents([.medium])
         .background(RR.bg)
+    }
+}
+
+/// 오늘의 훈련 시트 항목 — `TodayWorkout`은 Identifiable이 아니라 `.sheet(item:)`용으로 감싼다
+private struct TodayWorkoutItem: Identifiable {
+    let id = UUID()
+    let workout: TodayWorkout
+}
+
+/// 오늘의 훈련 시트 (이슈 #197) — 권장 세션 줄의 처방을 풀어 보여주고 Apple Watch로 보낸다.
+/// 전달은 시스템 미리보기 시트(`.workoutPreview`)가 맡는다 — 권한이 필요 없고, 워치에 추가할지는
+/// 사용자가 그 시트에서 정한다. 구성·플랜은 `WatchWorkoutBuilder`가 내고 여기서는 그리기만 한다.
+private struct TodayWorkoutSheet: View {
+    let workout: TodayWorkout
+    let onSelectReport: () -> Void
+    /// 렌더마다 새 UUID의 플랜이 생기지 않도록 한 번만 만든다. 워치가 지원하지 않는 구성이면 nil
+    private let plan: WorkoutPlan?
+    @State private var showsPreview = false
+
+    init(workout: TodayWorkout, onSelectReport: @escaping () -> Void) {
+        self.workout = workout
+        self.onSelectReport = onSelectReport
+        self.plan = WatchWorkoutBuilder.plan(for: workout,
+                                             displayName: WatchWorkoutBuilder.displayName(for: workout.kind))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Eyebrow(text: "오늘의 훈련")
+                .padding(.top, 28)
+            Text(workout.kind.label)
+                .font(RR.display(26))
+                .foregroundStyle(RR.text)
+                .padding(.top, 8)
+
+            if let metrics {
+                Text(metrics)
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 6)
+            }
+            if let caption = reasonCaption {
+                Text(caption)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(RR.text2)
+                    .padding(.top, 10)
+            }
+
+            if let summary = WatchWorkoutBuilder.summary(for: workout) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("구성")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(RR.text3)
+                    Text(summary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(EdgeInsets(top: 13, leading: 15, bottom: 13, trailing: 15))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .rrCard()
+                .padding(.top, 18)
+            }
+
+            Spacer(minLength: 16)
+
+            if let plan {
+                Button {
+                    showsPreview = true
+                } label: {
+                    Label("Apple Watch로 보내기", systemImage: "applewatch")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(RR.onBrand)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                        .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .workoutPreview(plan, isPresented: $showsPreview)
+            } else {
+                Text("이 훈련은 워치로 보낼 수 없어요")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(RR.text3)
+                    .frame(maxWidth: .infinity)
+            }
+
+            Button("리포트에서 보기", action: onSelectReport)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(RR.text2)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 14)
+                .padding(.bottom, 18)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(RR.bg)
+        .presentationDetents([.medium, .large])
+    }
+
+    /// "5.0km · 5′00″~5′30″/km" — 값이 없는 조각은 뺀다. 한 점 페이스(템포·인터벌)는 한 값만
+    private var metrics: String? {
+        let km = workout.distanceKm.map { "\(Format.km($0))km" }
+        let pace = workout.paceSecPerKm.map { range in
+            range.lowerBound == range.upperBound
+                ? Format.paceKm(range.lowerBound)
+                : "\(Format.pace(range.lowerBound))~\(Format.paceKm(range.upperBound))"
+        }
+        let parts = [km, pace].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 왜 이 훈련인가 — 배터리 사유는 대기질 상한(나쁨)으로도 생기므로 원인을 단정하지 않는다
+    private var reasonCaption: String? {
+        switch workout.reason {
+        case .battery: "오늘은 가볍게 가는 날이에요"
+        case .hardRecently: "어제·오늘 강도가 높았어요, 회복으로 가시죠"
+        case .lsdDue: "이번 주 롱런이 남았어요"
+        case .qualityDue: "이번 주 퀄리티 세션 차례예요"
+        case .fill: "이번 주 남은 거리를 채워요"
+        case .none: nil
+        }
+    }
+}
+
+/// 결산 리캡 진입 카드 (이슈 #167) — 판단 카드 아래, 칩 위. 탭하면 결산 시트, X는 이번 기간 닫기
+private struct RecapPromptCard: View {
+    let title: String
+    let subtitle: String
+    let onOpen: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onOpen) {
+                HStack(spacing: 12) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(RR.brand)
+                        .frame(width: 34, height: 34)
+                        .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.system(size: 14.5, weight: .bold))
+                            .foregroundStyle(RR.text)
+                        Text(subtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(RR.text3)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(RR.text3)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("결산 카드 닫기")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
+    }
+}
+
+/// 러닝화 교체 안내 카드 (이슈 #171) — 판단 카드 아래, 결산 카드 위. X는 이번 신발·이번 기준에서 닫기
+private struct ShoeAlertCard: View {
+    let alert: ShoeEngine.ReplacementAlert
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                ToneBadge(tone: .caution, label: "교체 시기", code: "SHOES")
+                Spacer(minLength: 8)
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(RR.text3)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, -8)
+                .accessibilityLabel("러닝화 교체 안내 닫기")
+            }
+            Text("\(alert.shoe.name) 누적 \(Int(alert.mileageKm.rounded())) km — 슬슬 교체를 생각해 볼 때예요")
+                .font(.system(size: 14.5, weight: .bold))
+                .foregroundStyle(RR.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("교체 기준 \(Int(alert.shoe.replaceKm)) km · 설정에서 바꿀 수 있어요")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .rrCard()
+    }
+}
+
+/// 목표 대회 카드 (이슈 #172) — 판단 카드 아래, 결산 카드 위. 탭하면 대회 상세 시트
+private struct TargetRaceCard: View {
+    let entry: RaceEngine.Entry
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 12) {
+                Image(systemName: "flag.checkered")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+                    .frame(width: 34, height: 34)
+                    .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("목표 대회 \(RaceFormat.dDay(entry.dDay)) · \(entry.race.name)")
+                        .font(.system(size: 14.5, weight: .bold))
+                        .foregroundStyle(RR.text)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 6) {
+                        Text(RaceFormat.fullDate.string(from: entry.raceDate))
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(RR.text3)
+                        RegisterBadge(status: entry.status)
+                    }
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .rrCard()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -620,7 +1065,7 @@ private struct VerdictCard: View {
         VStack(alignment: .leading, spacing: 0) {
             // 배터리가 없으면 판정 자체가 없다 — 배지를 감추고 중립 문구만 남긴다
             if let tone = verdict.tone {
-                ToneBadge(tone: tone)
+                ToneBadge(tone: tone, label: verdict.badgeLabel)
                     .padding(.bottom, 9)
             }
 
@@ -699,7 +1144,7 @@ private struct VerdictCard: View {
     @ViewBuilder
     private var weatherArt: some View {
         switch weather {
-        case .current(let current):
+        case .current(let current, _):
             let parts = TodayVerdictEngine.weatherParts(current, now: Date())
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -723,6 +1168,14 @@ private struct VerdictCard: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                 }
+                // 달리기 좋은 시간 (이슈 #173) — 추천이 없으면 줄을 내지 않는다
+                if let caption = verdict.weather.caption {
+                    Text(caption)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(RRTone.improving.color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                }
                 // 미세·초미세는 등급 문구를 등급 색으로 — 값이 있는 항목만 (미노출 가드)
                 if let air, air.pm10Grade != nil || air.pm25Grade != nil {
                     HStack(spacing: 8) {
@@ -738,7 +1191,7 @@ private struct VerdictCard: View {
         case .denied:
             hintArt(symbol: "location.slash", line: verdict.weather)
         case .unavailable:
-            hintArt(symbol: "cloud.slash", line: verdict.weather)
+            hintArt(symbol: "icloud.slash", line: verdict.weather)
         }
     }
 
@@ -853,9 +1306,8 @@ private struct GoalDots: View {
 /// 승급 제안 카드 (시안 1h) — 1회 노출, 거절하면 4주 뒤에 다시 묻는다.
 /// 승급만 있고 강등은 없다 ("성장은 되돌리지 않는다", 기획서 §3).
 private struct PromotionCard: View {
-    let target: RunnerLevel
-    /// 승급 근거 세션 — 없으면 거리·기록 문장을 생략한 짧은 본문으로 대체한다
-    let evidence: RunSummary?
+    /// 승급 근거 (LevelEngine 판정 결과) — 제안 레벨과 근거별 본문 문장을 정한다
+    let evidence: PromotionEvidence
     let onAccept: () -> Void
     let onDecline: () -> Void
 
@@ -876,7 +1328,7 @@ private struct PromotionCard: View {
                 Button(action: onAccept) {
                     Text("좋아요, 승급할게요")
                         .font(.system(size: 13.5, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(RR.onBrand)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(RR.brand, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -907,31 +1359,25 @@ private struct PromotionCard: View {
             .strokeBorder(RR.brand, lineWidth: 1.5))
     }
 
-    /// 시안 문구를 실제 값으로 채운 템플릿 — 레벨명만 볼드로 강조한다 (AttributedString 합성)
-    private func body(for run: RunSummary?) -> AttributedString {
-        var level = AttributedString(target.label)
+    /// 시안 문구를 근거별 실제 값으로 채운 템플릿 — 레벨명만 볼드로 강조한다 (AttributedString 합성)
+    private func body(for evidence: PromotionEvidence) -> AttributedString {
+        var level = AttributedString(evidence.target.label)
         level.font = .system(size: 14.5, weight: .bold)
 
-        guard let run, let km = run.distanceKm else {
-            return AttributedString("최근 기록을 보니 한 단계 올려도 되겠어요. 리포트를 ")
-                + level + AttributedString(" 수준으로 올려드릴까요?")
+        let lead: String
+        switch evidence {
+        case .tenKmPace(let run):
+            let km = run.distanceKm ?? 10
+            // 10km 환산 기록(분) — 엔진 판정식 durationSec / km × 10과 같은 값
+            let tenKmMin = Int((run.durationSec / km * 10 / 60).rounded())
+            lead = "\(Format.relativeWeek(of: run.start, now: .now)) \(Format.km(km))km를 "
+                + "10km 환산 \(tenKmMin)분 페이스로 달리셨더라고요. "
+        case .halfFinish(let run):
+            lead = "\(Format.relativeWeek(of: run.start, now: .now)) 하프 거리를 완주하셨더라고요. "
+        case .fullUnder430(let run, let monthlyKm):
+            lead = "\(Format.relativeWeek(of: run.start, now: .now)) 풀 거리를 \(Format.duration(run.durationSec))에 "
+                + "달리고 4주 월환산 \(Format.km(monthlyKm))km — 런친놈 기준이에요. "
         }
-        let period = relativePeriod(of: run)
-        let lead = "\(period) \(Format.km(km))km를 \(Format.duration(run.durationSec))에 달리셨더라고요. 리포트를 "
-        return AttributedString(lead) + level + AttributedString(" 수준으로 올려드릴까요?")
-    }
-
-    /// "지난주" / "이번 주" / "3주 전" — 근거 세션이 언제였는지 앞머리
-    private func relativePeriod(of run: RunSummary) -> String {
-        var calendar = Calendar(identifier: .iso8601)
-        calendar.timeZone = .current
-        let weeks = calendar.dateComponents([.weekOfYear],
-                                            from: calendar.startOfDay(for: run.start),
-                                            to: calendar.startOfDay(for: .now)).weekOfYear ?? 0
-        switch weeks {
-        case ..<1: return "이번 주"
-        case 1: return "지난주"
-        default: return "\(weeks)주 전"
-        }
+        return AttributedString(lead + "리포트를 ") + level + AttributedString(" 수준으로 올려드릴까요?")
     }
 }

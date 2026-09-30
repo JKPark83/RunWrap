@@ -1,0 +1,101 @@
+# PR·dev push마다 테스트 (감사 L75·L81, 이슈 #131)
+#
+# 유닛 테스트가 main 머지(testflight.yml) 때만 돌면 dev에서 깨진 테스트를 릴리스 직전에야 알게 된다.
+# dev·main으로 가는 PR과 dev push마다 아래를 돌린다:
+#   1. 대회 크롤러 단위 테스트 (tools/race-info/test_crawl.py, 네트워크 없음)
+#   2. Races.json 스키마 검사 — 앱(RaceFile/Race 디코딩)이 필수로 요구하는 키가 빠지면 실패
+#   3. xcodegen(버전 고정) → 시뮬레이터 유닛 테스트
+# 싼 파이썬 검사를 먼저 돌려 깨지면 macOS 빌드까지 가지 않는다.
+#
+# 서명·시크릿이 필요 없다 — 에어코리아 키만 있으면 넣고 없으면 건너뛴다(포크 PR에서도 돈다).
+name: test
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+
+# 같은 브랜치에 새 커밋이 오면 이전 실행은 의미가 없다 — 취소하고 최신만 돌린다.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 로컬과 같은 버전으로 고정 — brew 최신을 받으면 생성 결과가 로컬과 달라질 수 있다 (L81).
+  # testflight.yml의 같은 값과 함께 올린다.
+  XCODEGEN_VERSION: 2.45.4
+
+jobs:
+  test:
+    runs-on: macos-26   # Xcode 26.6 기본 + iPhone 17 Pro 시뮬 포함 (testflight.yml과 동일)
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 대회 크롤러 단위 테스트
+        run: cd tools/race-info && python3 -B -m unittest -v
+
+      # 앱의 Race 디코딩에서 id(Int)·name·date(yyyy-MM-dd)는 비옵셔널이다 —
+      # 빠진 건은 앱이 조용히 건너뛰므로(관대 디코딩, #144) 여기서 먼저 잡는다.
+      # schemaVersion은 선택 필드(없으면 1)지만, 있으면 정수여야 파일 전체가 읽힌다.
+      - name: Races.json 스키마 검사
+        run: |
+          python3 - <<'EOF'
+          import json, re, sys
+          data = json.load(open("ios/RunWrap/Races.json"))
+          errors = [f"최상위 키 없음: {k}" for k in ("generatedAt", "source", "races") if k not in data]
+          if "schemaVersion" in data and type(data["schemaVersion"]) is not int:
+              errors.append(f"schemaVersion이 정수가 아님: {data['schemaVersion']!r}")
+          for i, race in enumerate(data.get("races", [])):
+              if not isinstance(race.get("id"), int):
+                  errors.append(f"races[{i}] id가 정수가 아님: {race.get('id')!r}")
+              if not isinstance(race.get("name"), str) or not race["name"]:
+                  errors.append(f"races[{i}] name 없음")
+              if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(race.get("date", ""))):
+                  errors.append(f"races[{i}] date 형식 오류: {race.get('date')!r}")
+          if errors:
+              print("\n".join(errors))
+              sys.exit(1)
+          print(f"Races.json 정상 — {len(data['races'])}건")
+          EOF
+
+      # 이미지 기본 Xcode를 그대로 쓴다 — testflight.yml과 같은 이유(Xcode 27 프리뷰 회피).
+      - name: Xcode 버전 확인
+        run: xcodebuild -version
+
+      # 에어코리아 인증키(선택) — testflight.yml과 동일. xcodegen보다 먼저 만들어야 리소스로 잡힌다.
+      - name: 에어코리아 인증키 주입 (선택)
+        env:
+          AIRKOREA_SERVICE_KEY: ${{ secrets.AIRKOREA_SERVICE_KEY }}
+        run: |
+          if [ -n "$AIRKOREA_SERVICE_KEY" ]; then
+            printf '{"serviceKey":"%s"}\n' "$AIRKOREA_SERVICE_KEY" > ios/RunWrap/AirQualityKey.json
+            echo "AirQualityKey.json 생성"
+          else
+            echo "AIRKOREA_SERVICE_KEY 시크릿 없음 — 대기질 기능 없이 빌드"
+          fi
+
+      # 릴리스 zip의 bin/xcodegen은 ../share/xcodegen(설정 프리셋)을 함께 찾으므로 압축 구조 그대로 둔다.
+      - name: xcodegen ${{ env.XCODEGEN_VERSION }} 설치 → 프로젝트 생성
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          XCODEGEN="$RUNNER_TEMP/xcodegen/bin/xcodegen"
+          "$XCODEGEN" --version
+          cd ios && "$XCODEGEN" generate
+
+      # 시뮬레이터 유닛 테스트 — 서명 없이 돌린다(엔진 로직 테스트라 엔타이틀먼트가 필요 없다).
+      - name: 테스트
+        run: |
+          xcodebuild test \
+            -project ios/RunWrap.xcodeproj \
+            -scheme RunWrap \
+            -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+            CODE_SIGNING_ALLOWED=NO

@@ -63,6 +63,17 @@ struct GrowthEngineTests {
         #expect(state.xp == 26 + 30)
     }
 
+    @Test("주간 목표 — 1km 미만 러닝은 횟수에 세지 않아 0.5km 3회로는 목표 3회를 달성하지 못한다")
+    func subKmRunsDoNotCountTowardWeeklyGoal() {
+        // 지난주(완결)에 0.5km 3회 — 세션 XP 0, 1km 기준으로 세면 0회 → 보너스 없음
+        let runs = [run(daysAgo: 8, km: 0.5), run(daysAgo: 7, km: 0.5), run(daysAgo: 6, km: 0.5)]
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 3, now: now)
+        #expect(state.xp == 0)
+        #expect(!GrowthEngine.countsAsCompletedRun(run(daysAgo: 1, km: 0.5)))
+        #expect(GrowthEngine.countsAsCompletedRun(run(daysAgo: 1, km: 1)))
+    }
+
     @Test("4주 연속 달성 — 완결된 4주 각각 목표 채우면 주당 +30 네 번 + 연속 보너스 +50")
     func fourWeekStreakBonus() {
         // cycleStartedAt을 4주 전 월요일로 맞추고, 그 이후 완결된 4개 ISO 주 각각에
@@ -78,6 +89,89 @@ struct GrowthEngineTests {
                                         maxStage: 1, weeklyGoal: 1, now: now)
         // 세션 XP: 11 * 4 = 44. 주간 보너스: 30 * 4 = 120. 4주 연속 보너스: +50.
         #expect(state.xp == 44 + 120 + 50)
+    }
+
+    @Test("주간 목표 변경 — 이번 주에 3→1로 낮춰도 완결된 과거 주(러닝 1~2회)에는 +30이 붙지 않는다")
+    func weeklyGoalLoweredDoesNotRewardPastWeeks() {
+        // 지난주(08-03 주) 3km 2회, 그 전 주(07-27 주) 3km 1회. 세션 XP: 13 * 3 = 39.
+        // 변경 시각이 이번 주(08-10 주)라 완결된 두 주 모두 변경 전 목표 3으로 판정 → 둘 다 미달, 보너스 0
+        let runs = [run(daysAgo: 6, km: 3), run(daysAgo: 8, km: 3), run(daysAgo: 15, km: 3)]
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 1,
+                                        weeklyGoalChanges: [WeeklyGoalChange(at: now, before: 3)], now: now)
+        #expect(state.xp == 39)
+    }
+
+    @Test("주간 목표 변경 — 변경한 주까지는 옛 목표, 다음 주부터는 새 목표 1회로 달성한다")
+    func weeklyGoalChangeAppliesFromNextWeek() {
+        // 변경 시각 = 14일 전(07-30 목, 07-27 주)에 3→1.
+        // 07-27 주(변경한 주) 3km 1회 → 옛 목표 3으로 판정 → 미달.
+        // 08-03 주(변경 다음 주) 3km 1회 → 새 목표 1로 판정 → +30 (연속 1주라 연속 보너스 없음).
+        // 세션 XP: 13 * 2 = 26. 합계 26 + 30 = 56
+        let runs = [run(daysAgo: 15, km: 3), run(daysAgo: 8, km: 3)]
+        let changedAt = now.addingTimeInterval(-14 * 86_400)
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 1,
+                                        weeklyGoalChanges: [WeeklyGoalChange(at: changedAt, before: 3)], now: now)
+        #expect(state.xp == 26 + 30)
+    }
+
+    @Test("주간 목표 변경 이력이 비어 있으면 기존처럼 모든 완결된 주를 현재 목표로 판정한다")
+    func weeklyGoalChangeNilKeepsLegacyBehavior() {
+        // 첫 테스트와 같은 러닝. 현재 목표 1로 두 주(07-27 주 1회, 08-03 주 2회) 모두 달성 → +30 * 2.
+        // 연속 2주라 4주 연속 보너스 없음. 세션 XP 39 + 60 = 99
+        let runs = [run(daysAgo: 6, km: 3), run(daysAgo: 8, km: 3), run(daysAgo: 15, km: 3)]
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 1,
+                                        weeklyGoalChanges: [], now: now)
+        #expect(state.xp == 39 + 60)
+    }
+
+    @Test("주간 목표 변경 이력 — 첫 변경·다른 주 변경은 뒤에 붙이고, 같은 주 재변경은 첫 변경 전 값을 유지한다")
+    func recordWeeklyGoalChange() {
+        // 이력 없음 → [(now, 직전 값 3)]
+        let first = GrowthEngine.recordWeeklyGoalChange(history: [], oldGoal: 3, now: now)
+        #expect(first == [WeeklyGoalChange(at: now, before: 3)])
+
+        // 같은 주(08-10 주) 안에서 2→1로 다시 바꿔도 이력을 그대로 둔다
+        let sameWeek = GrowthEngine.recordWeeklyGoalChange(history: first, oldGoal: 2,
+                                                          now: now.addingTimeInterval(86_400))
+        #expect(sameWeek == first)
+
+        // 다음 주(7일 뒤)에 바꾸면 기존 항목을 지우지 않고 (그 시각, 직전 값 1)을 뒤에 붙인다
+        let nextWeekTime = now.addingTimeInterval(7 * 86_400)
+        let nextWeek = GrowthEngine.recordWeeklyGoalChange(history: first, oldGoal: 1, now: nextWeekTime)
+        #expect(nextWeek == [WeeklyGoalChange(at: now, before: 3),
+                             WeeklyGoalChange(at: nextWeekTime, before: 1)])
+    }
+
+    @Test("주간 목표 두 단계 변경 — 주 A에 3→1, 주 C에 1→2면 A 이전 주는 3, A 다음~C 주는 1, C 이후는 2로 판정한다 (이슈 #116)")
+    func weeklyGoalTwoStepChangesKeepEachBoundary() {
+        // A = 07-13 주(28일 전 07-16 목에 3→1), C = 07-27 주(14일 전 07-30 목에 1→2). 현재 목표 2.
+        // 완결된 주별 3km 러닝(수·목, 주 경계와 먼 요일)과 판정:
+        //   07-06 주: 2회 — A 이전(A 포함 이하) → 목표 3 → 미달
+        //   07-13 주(A): 1회 — 목표 3 → 미달
+        //   07-20 주: 1회 — A 다음~C → 목표 1 → +30
+        //   07-27 주(C): 1회 — 목표 1 → +30 (연속 2주, 4주 연속 보너스 없음)
+        //   08-03 주: 1회 — C 이후 → 현재 목표 2 → 미달
+        // 세션 XP: 13 * 6 = 78. 보너스 30 * 2 = 60. 합계 138.
+        // (#108처럼 C 기록 1건만 남기면 08-03 주 이전이 전부 목표 1 → 07-06~07-27 네 주 달성 +120·연속 +50으로 부풀었다)
+        let changeA = now.addingTimeInterval(-28 * 86_400)
+        let changeC = now.addingTimeInterval(-14 * 86_400)
+        var history = GrowthEngine.recordWeeklyGoalChange(history: [], oldGoal: 3, now: changeA)
+        history = GrowthEngine.recordWeeklyGoalChange(history: history, oldGoal: 1, now: changeC)
+        #expect(history == [WeeklyGoalChange(at: changeA, before: 3),
+                            WeeklyGoalChange(at: changeC, before: 1)])
+
+        let runs = [run(daysAgo: 36, km: 3), run(daysAgo: 35, km: 3),  // 07-06 주
+                    run(daysAgo: 29, km: 3),                            // 07-13 주(A)
+                    run(daysAgo: 22, km: 3),                            // 07-20 주
+                    run(daysAgo: 15, km: 3),                            // 07-27 주(C)
+                    run(daysAgo: 8, km: 3)]                             // 08-03 주
+        let state = GrowthEngine.state(runs: runs, cycleStartedAt: farPastCycleStart,
+                                        maxStage: 1, weeklyGoal: 2,
+                                        weeklyGoalChanges: history, now: now)
+        #expect(state.xp == 78 + 60)
     }
 
     @Test("단계 경계 — XP 정확히 50이면 금 간 알")

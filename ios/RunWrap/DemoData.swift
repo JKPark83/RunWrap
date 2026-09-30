@@ -35,7 +35,14 @@ enum DemoMode {
 /// 그 이전 22주는 시드 고정(0xC0FFEE) 생성 — 월이 지날수록 페이스가 월 −2초/km씩
 /// 완만히 향상되는 패턴을 심어 장기 추이(발전상) 화면 검증에 쓴다 (계획서 M0).
 enum DemoData {
-    static var runs: [RunSummary] { recentTuned + history }
+    /// 한 번만 만든다 — 계산 프로퍼티면 접근마다 UUID·시각이 새로 생겨, 같은 세션을 다시 열 때
+    /// 합성 상세(시드 = id·시작 시각)가 달라진다. fillWithDemoData가 여러 번 불려도 같은 목록 (이슈 #102)
+    static let runs: [RunSummary] = recentTuned + history
+
+    /// 인덱스 기반 결정적 UUID — 00000000-0000-0000-0000-000000000001 꼴 (이슈 #102)
+    static func demoID(_ index: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!
+    }
 
     /// 최근 4주(1~26일 전) — 리포트 홈 톤 시나리오에 맞춘 고정 배열.
     /// 생성 러닝이 28일 창(증가율·ACWR·EF 계산 구간)에 섞이면 톤이 바뀌므로
@@ -46,17 +53,28 @@ enum DemoData {
     /// 초여름(38~46 구간)·선선한 날(38 이하 → 보정 카드 미노출 가드 확인)을 섞는다.
     private static var recentTuned: [RunSummary] {
         [
-            run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171, tempC: 28, humidityPct: 72),
-            run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170, tempC: 26, humidityPct: 65),
-            run(daysAgo: 5, km: 6.6, minPerKm: 6.0, hr: 144, indoor: true, cadence: 169),
-            run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167, tempC: 30, humidityPct: 78),
-            run(daysAgo: 10, km: 6, minPerKm: 5.8, hr: 148, cadence: 166, tempC: 22, humidityPct: 55),
-            run(daysAgo: 12, km: 4, minPerKm: 6.0, hr: 145, indoor: true, cadence: 165),
-            run(daysAgo: 16, km: 6, minPerKm: 6.1, hr: 153, cadence: 166, tempC: 27, humidityPct: 70),
-            run(daysAgo: 18, km: 5, minPerKm: 6.0, hr: 152, indoor: true, cadence: 165),
-            run(daysAgo: 20, km: 5, minPerKm: 6.2, hr: 154, cadence: 166),
-            run(daysAgo: 23, km: 6, minPerKm: 6.0, hr: 153, cadence: 165, tempC: 25, humidityPct: 68),
-            run(daysAgo: 26, km: 5, minPerKm: 6.1, hr: 155, indoor: true, cadence: 165),
+            run(daysAgo: 1, km: 10, minPerKm: 6.1, hr: 145, cadence: 171, tempC: 28, humidityPct: 72,
+                id: pausedRunID),  // 신호 대기 정지 시나리오(pauseScenario) — 이슈 #47
+            run(daysAgo: 3, km: 8, minPerKm: 5.9, hr: 147, cadence: 170, tempC: 26, humidityPct: 65,
+                id: demoID(2)),
+            run(daysAgo: 5, km: 6.6, minPerKm: 6.0, hr: 144, indoor: true, cadence: 169,
+                id: demoID(3)),
+            run(daysAgo: 8, km: 10, minPerKm: 6.2, hr: 146, cadence: 167, tempC: 30, humidityPct: 78,
+                id: demoID(4)),
+            run(daysAgo: 10, km: 6, minPerKm: 5.8, hr: 148, cadence: 166, tempC: 22, humidityPct: 55,
+                id: demoID(5)),
+            run(daysAgo: 12, km: 4, minPerKm: 6.0, hr: 145, indoor: true, cadence: 165,
+                id: demoID(6)),
+            run(daysAgo: 16, km: 6, minPerKm: 6.1, hr: 153, cadence: 166, tempC: 27, humidityPct: 70,
+                id: demoID(7)),
+            run(daysAgo: 18, km: 5, minPerKm: 6.0, hr: 152, indoor: true, cadence: 165,
+                id: demoID(8)),
+            run(daysAgo: 20, km: 5, minPerKm: 6.2, hr: 154, cadence: 166,
+                id: demoID(9)),
+            run(daysAgo: 23, km: 6, minPerKm: 6.0, hr: 153, cadence: 165, tempC: 25, humidityPct: 68,
+                id: demoID(10)),
+            run(daysAgo: 26, km: 5, minPerKm: 6.1, hr: 155, indoor: true, cadence: 165,
+                id: demoID(11)),
         ]
     }
 
@@ -74,7 +92,8 @@ enum DemoData {
                            km: 6 + rng.unit() * 12,
                            minPerKm: basePace + (rng.unit() - 0.5) * 0.15,
                            hr: 144 + rng.unit() * 10,
-                           indoor: slot == 1)  // 주 1회꼴 실내(트레드밀) 세션
+                           indoor: slot == 1,  // 주 1회꼴 실내(트레드밀) 세션
+                           id: demoID(100 + week * 10 + slot))  // 주·슬롯 인덱스 — 최근 4주(2~11)와 겹치지 않는다
             }
         }
     }
@@ -82,8 +101,9 @@ enum DemoData {
     private static func run(daysAgo: Double, km: Double, minPerKm: Double,
                             hr: Double, indoor: Bool = false,
                             cadence: Double? = nil,
-                            tempC: Double? = nil, humidityPct: Double? = nil) -> RunSummary {
-        RunSummary(id: UUID(),
+                            tempC: Double? = nil, humidityPct: Double? = nil,
+                            id: UUID) -> RunSummary {
+        RunSummary(id: id,
                    start: Date().addingTimeInterval(-daysAgo * 86_400),
                    durationSec: km * minPerKm * 60,
                    distanceMeters: km * 1000,
@@ -94,6 +114,62 @@ enum DemoData {
                    cadenceSpm: cadence,
                    weatherTempC: tempC,
                    weatherHumidityPct: humidityPct)
+    }
+
+    /// 신호 대기 정지 시나리오를 심은 세션(1일 전 10km)의 고정 ID.
+    /// 새 세션을 28일 창에 추가하면 리포트 홈 톤(증가율·ACWR·EF)이 바뀌므로 기존 세션을 쓴다.
+    static let pausedRunID = UUID(uuidString: "4E3A7C1D-2B9F-4E57-A0C6-47F1A2B3C4D5")!
+
+    /// 도심 신호 대기 시나리오 — 세션 상세의 스플릿·드리프트 카드가 정지 구간을 빼고
+    /// 계산되는지 시뮬레이터에서 확인하는 재료 (이슈 #47). pausedRunID 세션에만 값을 준다.
+    ///
+    /// 활동 시간은 세션 요약 그대로(10km · 3,660초), km별 페이스는 평균 ±4초 고정 흔들림.
+    /// 정지 1: 1.5km 지점 90초(전반 — 드리프트 중앙 시각 검증),
+    /// 정지 2: 8.5km 지점 120초(후반 1/4 — 스플릿 문장 검증). 정지 중에는 거리 샘플이 없고
+    /// 심박은 115bpm(제외되는지 드러내는 값). 달리는 동안 심박은 145→150bpm으로 완만히 오른다.
+    /// 기대 화면: 스플릿은 막대가 튀지 않고 "고르게 유지" 문장(마지막 2km 흔들림 합 0),
+    /// 드리프트는 전반 평균 146.25 · 후반 148.75bpm, 거리 5,000m씩 → 148.75/146.25 − 1 ≈ +1.7% steady.
+    /// (정지를 빼지 않으면 2km·9km 스플릿이 90·120초 느려져 "페이스 유지 실패"가 뜬다)
+    static func pauseScenario(for run: RunSummary)
+        -> (distance: [(start: Date, end: Date, meters: Double)],
+            hr: [(time: Date, bpm: Double)],
+            pauses: [DateInterval], end: Date)? {
+        guard run.id == pausedRunID else { return nil }
+        let jitter: [Double] = [-3, 2, -1, 4, -2, 1, -4, 3, 0, 0]  // 합 0 · 전반 5km 합 0 — 난수를 쓰지 않는다
+        let pauseAfterHalfKm: [Int: Double] = [2: 90, 16: 120]      // 반 km 구간 번호(0부터, 2 = 1.5km 끝) → 정지 초
+        let basePace = run.durationSec / 10
+        let samplesPerHalfKm = 20  // 반 km ≈ 183초 → 약 9초 간격, 샘플당 25m(누적 오차 없이 km 경계에 딱 맞는다)
+
+        var distance: [(start: Date, end: Date, meters: Double)] = []
+        var hr: [(time: Date, bpm: Double)] = []
+        var pauses: [DateInterval] = []
+        var cursor = run.start
+        var activeElapsed = 0.0
+
+        for half in 0..<20 {
+            let segmentSec = (basePace + jitter[half / 2]) / 2
+            for j in 0..<samplesPerHalfKm {
+                let sampleStart = cursor.addingTimeInterval(segmentSec * Double(j) / Double(samplesPerHalfKm))
+                distance.append((start: sampleStart,
+                                 end: sampleStart.addingTimeInterval(segmentSec / Double(samplesPerHalfKm)),
+                                 meters: 500 / Double(samplesPerHalfKm)))
+            }
+            for offset in stride(from: 0.0, to: segmentSec, by: 5) {
+                let bpm = 145 + 5 * (activeElapsed + offset) / run.durationSec
+                hr.append((time: cursor.addingTimeInterval(offset), bpm: bpm))
+            }
+            cursor = cursor.addingTimeInterval(segmentSec)
+            activeElapsed += segmentSec
+
+            if let pauseSec = pauseAfterHalfKm[half] {
+                pauses.append(DateInterval(start: cursor, duration: pauseSec))
+                for offset in stride(from: 0.0, to: pauseSec, by: 5) {
+                    hr.append((time: cursor.addingTimeInterval(offset), bpm: 115))
+                }
+                cursor = cursor.addingTimeInterval(pauseSec)
+            }
+        }
+        return (distance: distance, hr: hr, pauses: pauses, end: cursor)
     }
 
     /// 합성 VO₂max — 12주에 걸친 완만한 상승(주 +0.3), 주 1~2회 추정 기록.
@@ -159,6 +235,39 @@ enum DemoData {
         }
     }
 
+    /// 합성 세션별 심박 히스토그램 (이슈 #165) — 기간별 심박존 분포(80/20) 카드 재료.
+    ///
+    /// 최근 28일(28일 전 자정 이후) 세션마다 두 개의 종 모양(σ 5bpm, ±12bpm로 자름) 분포를 섞는다:
+    /// 세션 평균 심박 중심의 "빠른 구간"과 HRmax 62% 중심의 "이지 구간".
+    /// 데모 세션 평균 심박(144~155)은 관찰 HRmax(≈180)의 80% 이상이라 평균 심박만으로 만들면
+    /// 이지 비율이 0%가 된다 — 세션마다 이지 구간 비중을 0.68~0.82로 시드 고정해
+    /// 28일 누적 이지 비율이 0.75 언저리(주의 톤)로 계산되게 한다. 총 초 = 세션 시간.
+    static var zoneHistograms: [UUID: ZoneHistogram] {
+        let now = Date()
+        let windowStart = Calendar.current.startOfDay(for: now.addingTimeInterval(-28 * 86_400))
+        // fillWithDemoData와 같은 추정 — %HRmax 기본 설정에서 이지 구간이 Z1~Z2에 머물게 한다
+        let easyCenter = (TrainingGuideEngine.hrMaxEstimate(runs: runs, now: now, birthYear: nil).bpm * 0.62)
+            .rounded()
+        let offsets = Array(-12...12)
+        let bell = offsets.map { exp(-Double($0 * $0) / (2 * 5 * 5)) }
+        let bellSum = bell.reduce(0, +)
+
+        var result: [UUID: ZoneHistogram] = [:]
+        for run in runs where run.start >= windowStart && run.start <= now {
+            var rng = SplitMix64(seed: WorkoutDetailStore.syntheticSeed(for: run) &+ 0x2020)
+            let easyFraction = 0.68 + rng.unit() * 0.14
+            let hardCenter = (run.avgHeartRate ?? 150).rounded()
+            var seconds: [Int: Double] = [:]
+            for (i, offset) in offsets.enumerated() {
+                let share = bell[i] / bellSum * run.durationSec
+                seconds[Int(easyCenter) + offset, default: 0] += share * easyFraction
+                seconds[Int(hardCenter) + offset, default: 0] += share * (1 - easyFraction)
+            }
+            result[run.id] = ZoneHistogram(secondsByBpm: seconds)
+        }
+        return result
+    }
+
     /// 합성 대기질 — 시뮬레이터에는 위치·측정소 실데이터가 없다 (이슈 #8).
     /// '보통' 시나리오: 배지·수치·등급·측정소 캡션이 모두 그려지는 구성을 확인하는 재료
     static var airQuality: AirQuality {
@@ -171,6 +280,19 @@ enum DemoData {
                           pm10Grade: .moderate, pm25Grade: .moderate,
                           o3Grade: .moderate, khaiGrade: .moderate)
     }
+
+    /// 합성 베스트 에포트 (이슈 #166) — 세션 거리 안에 드는 목표 거리마다
+    /// 평균 페이스 × D × (0.93~0.99). 세션 안 가장 빠른 구간은 평균보다 조금 빠르다는 근사.
+    /// 시드는 세션 인덱스라 결정론적이다 (runs가 static let이라 순서도 고정).
+    static let bestEfforts: BestEffortTable = Dictionary(uniqueKeysWithValues:
+        runs.enumerated().map { index, run -> (UUID, [Double: Double]) in
+            var rng = SplitMix64(seed: 0xBE57 &+ UInt64(index))
+            guard let pace = run.paceSecPerKm, let meters = run.distanceMeters else { return (run.id, [:]) }
+            let efforts = BestEffortEngine.targets.filter { $0.meters <= meters }.map { target in
+                (target.meters, pace * target.meters / 1_000 * (0.93 + rng.unit() * 0.06))
+            }
+            return (run.id, Dictionary(uniqueKeysWithValues: efforts))
+        })
 
     /// 합성 크로스 트레이닝 — 이번 주 자전거 90분 + 근력 45분 (계 2시간 15분).
     /// 걷기 25분 세션은 CrossTrainingEngine의 30분 미만 걷기 가드에 걸러지는 걸 확인하는 재료.

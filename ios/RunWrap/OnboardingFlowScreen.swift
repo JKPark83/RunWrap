@@ -7,10 +7,13 @@ import SwiftUI
 /// 설문 자체는 자기 신고라 HealthKit이 필요 없기 때문이다 (기획서 §2 설계 원칙).
 ///
 /// 답은 전부 로컬에만 남는다: 판정 결과는 `ProfileKey.*`(@AppStorage),
-/// 원답은 `OnboardingAnswersStore`(재진단 프리필용). 네트워크 전송은 없다.
+/// 원답은 저장하지 않는다 — 판정 결과(레벨·목표)만 남긴다. 네트워크 전송은 없다.
 struct OnboardingFlowScreen: View {
-    /// 재진단("다시 진단받기", §7) 진입 시 이전 답을 프리필한다. 첫 실행이면 nil
+    /// 이전 답 프리필 — 원답을 저장하지 않으므로 앱 호출부는 넘기지 않는다(nil). 테스트가 답을 심는 용도 (이슈 #156)
     var prefill: OnboardingAnswers?
+    /// 설정의 "다시 진단받기"(§7)에서 열었는지 — 참이면 성장 사이클을 보존한다 (이슈 #44).
+    /// 프리필 유무로 판정하면 안 된다: 재진단은 의도적으로 프리필 없이 열린다
+    var isRediagnosis: Bool = false
     /// 플로우 완료(권한 요청까지) 후 호출 — 재진단 시트를 닫는 데 쓴다
     var onFinish: () -> Void = {}
 
@@ -152,22 +155,32 @@ struct OnboardingFlowScreen: View {
                 .multilineTextAlignment(.center)
                 .padding(.top, 10)
 
-            BirdView(stage: .egg)
-                .frame(width: 130, height: 130)
-                .padding(.top, 26)
+            if isRediagnosis {
+                // 재진단은 사이클을 보존하므로 알을 새로 주지 않는다 (이슈 #44).
+                // "알이 도착했어요"를 그대로 두면 지금 키우는 새가 사라진 것처럼 읽힌다
+                Text("새는 지금 단계 그대로 자라요")
+                    .font(.system(size: 14))
+                    .foregroundStyle(RR.text2)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 26)
+            } else {
+                BirdView(stage: .egg)
+                    .frame(width: 130, height: 130)
+                    .padding(.top, 26)
 
-            Text("알이 도착했어요")
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(RR.text)
-                .padding(.top, 16)
+                Text("알이 도착했어요")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(RR.text)
+                    .padding(.top, 16)
 
-            Text("달릴수록 부화가 가까워집니다. 정상은 아니지만 멋있을 예정입니다.")
-                .font(.system(size: 14))
-                .lineSpacing(14 * 0.6)
-                .foregroundStyle(RR.text2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-                .padding(.top, 12)
+                Text("달릴수록 부화가 가까워집니다. 정상은 아니지만 멋있을 예정입니다.")
+                    .font(.system(size: 14))
+                    .lineSpacing(14 * 0.6)
+                    .foregroundStyle(RR.text2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 300)
+                    .padding(.top, 12)
+            }
 
             Spacer(minLength: 24)
 
@@ -176,7 +189,7 @@ struct OnboardingFlowScreen: View {
             // 요청 이유는 아래 캡션으로만 설명하고, 버튼은 다음 단계로 넘어간다는 뜻만 갖는다.
             PrimaryButton(title: "다음") {
                 // 저장이 먼저, 권한 요청이 나중 — 권한 시트에서 이탈해도 진단 결과는 남는다
-                model.persist(isRediagnosis: prefill != nil)
+                model.persist(isRediagnosis: isRediagnosis)
                 Task {
                     await health.connect()
                     onFinish()
@@ -185,11 +198,14 @@ struct OnboardingFlowScreen: View {
                 Task { await backup.backupIfChanged() }
             }
 
-            Text("리포트를 만들려면 러닝 기록이 필요해서, 다음 화면에서 Apple 건강 읽기 권한을 물어봐요. 허용 여부는 직접 정하시면 됩니다.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(RR.text3)
-                .multilineTextAlignment(.center)
-                .padding(.top, 12)
+            // 재진단은 권한 시트를 이미 지난 사용자라 권한 안내를 되풀이하지 않는다
+            if !isRediagnosis {
+                Text("리포트를 만들려면 러닝 기록이 필요해서, 다음 화면에서 Apple 건강 읽기 권한을 물어봐요. 허용 여부는 직접 정하시면 됩니다.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 12)
+            }
         }
         // maxHeight까지 채워야 위 Spacer가 벌어져 CTA가 화면 아래에 붙는다
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -324,6 +340,8 @@ final class OnboardingFlowModel: ObservableObject {
         case .raceExperience(let value):
             answers.q6Race = value
         case .target(let value):
+            // 종목이 바뀌면 이전 종목 기준 목표 기록은 무의미하다 — 지워서 Q8이 새 종목 프리셋으로 다시 잡히게 한다
+            if value != answers.q7Target { answers.q8GoalSec = nil }
             answers.q7Target = value
             if value == nil { answers.q8GoalSec = nil }  // "아직 없어요"면 Q8도 건너뛴다
         }
@@ -375,24 +393,38 @@ final class OnboardingFlowModel: ObservableObject {
     // MARK: 저장
 
     /// 판정 결과·원답을 로컬에 저장한다.
-    /// 재진단(`isRediagnosis`)이면 성장 사이클은 건드리지 않는다 — "성장은 되돌리지 않는다"(§5)
+    /// 재진단(`isRediagnosis`)이면 성장 사이클은 건드리지 않는다 — "성장은 되돌리지 않는다"(§5).
+    /// 설문 답(레벨·목적·주간 목표·대회 목표)은 갱신하고, 사이클 키(시작 시각·최고 단계·식별자·사이클 목표)와 온보딩 시각은 보존한다.
+    /// 온보딩 시각까지 지키는 이유: 사이클 시작 시각이 없는 구버전 사용자는 홈·리포트가
+    /// 온보딩 시각을 사이클 시작으로 대신 쓰므로, 이걸 덮으면 XP가 0이 된다 (이슈 #44)
     func persist(isRediagnosis: Bool, now: Date = Date(), defaults: UserDefaults = .standard) {
         let decided = LevelEngine.decide(answers)
         defaults.set(decided.rawValue, forKey: ProfileKey.levelV2)
         defaults.set(RunPurpose.encode(answers.q9Purposes), forKey: ProfileKey.purposes)
+        // 재진단으로 주간 목표가 바뀌면 변경 이력에 남긴다 — 설정 화면의 onChange에 기대지 않고
+        // 여기서 직접 기록해 과거 주가 새 목표로 소급 판정되는 일을 막는다 (이슈 #108, #116)
+        let oldGoal = defaults.integer(forKey: ProfileKey.weeklyGoal)
+        if isRediagnosis, oldGoal > 0, oldGoal != weeklyGoal {
+            let history = WeeklyGoalChangeLog.load(defaults: defaults)
+            WeeklyGoalChangeLog.save(GrowthEngine.recordWeeklyGoalChange(history: history, oldGoal: oldGoal, now: now),
+                                     defaults: defaults)
+        }
         defaults.set(weeklyGoal, forKey: ProfileKey.weeklyGoal)
         defaults.set(answers.q7Target?.rawValue ?? "", forKey: ProfileKey.raceGoal)
         defaults.set(answers.q8GoalSec ?? 0, forKey: ProfileKey.raceGoalSec)
-        defaults.set(now.timeIntervalSince1970, forKey: ProfileKey.onboardedAt)
 
         if !isRediagnosis {
+            defaults.set(now.timeIntervalSince1970, forKey: ProfileKey.onboardedAt)
             defaults.set(now.timeIntervalSince1970, forKey: GrowthKey.cycleStartedAt)
             defaults.set(GrowthStage.egg.rawValue, forKey: GrowthKey.maxStage)
+            // 첫 사이클의 목표를 고정한다 — 새 종류는 이 값으로 판정한다 (이슈 #110)
+            defaults.set(answers.q7Target?.rawValue ?? "", forKey: GrowthKey.cycleGoal)
+            defaults.set(answers.q8GoalSec ?? 0, forKey: GrowthKey.cycleGoalSec)
             // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
             defaults.set(UUID().uuidString, forKey: GrowthKey.cycleID)
         }
-
-        OnboardingAnswersStore.save(answers)
+        // 레벨·목표·사이클 모두 스냅샷 내용이다 — 병합 기준 시각을 지금으로 (이슈 #130)
+        ProgressSnapshot.markLocalChanged(defaults: defaults, now: now)
     }
 
     /// 주간 러닝 목표 초기값 — Q5의 1·3·4회. 무경험자는 Q5를 묻지 않으므로 기본 주 2회 (§2)
@@ -630,7 +662,7 @@ private struct OptionButton: View {
                         .overlay {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white)
+                                .foregroundStyle(RR.onBrand)
                         }
                 }
             }
@@ -647,8 +679,9 @@ private struct OptionButton: View {
     }
 }
 
-/// 브랜드 채움 CTA — 시안 온보딩 primary 버튼(800 16px, radius 10, padding 16)
-private struct PrimaryButton: View {
+/// 브랜드 채움 CTA — 시안 온보딩 primary 버튼(800 16px, radius 10, padding 16).
+/// 복원 선택 시트(RootView)도 같은 버튼을 쓴다
+struct PrimaryButton: View {
     let title: String
     let action: () -> Void
 
@@ -656,7 +689,7 @@ private struct PrimaryButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 16, weight: .heavy))
-                .foregroundStyle(.white)
+                .foregroundStyle(RR.onBrand)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
                 .background(RR.brand, in: RoundedRectangle(cornerRadius: 10, style: .continuous))

@@ -8,28 +8,34 @@
 | 항목 | 값 |
 |---|---|
 | 스킴 / 프로젝트 | `RunWrap` / `ios/RunWrap.xcodeproj` (워크스페이스 없음) |
-| 타깃 | `RunWrap`(앱), `RunWrapTests`(유닛 테스트) |
+| 타깃 | `RunWrap`(앱), `RunWrapWidget`(위젯 확장), `RunWrapTests`(유닛 테스트) |
 | 배포 타깃 | iOS 17.0 · 아이폰 세로 전용(`TARGETED_DEVICE_FAMILY = 1`) |
 | 기본 시뮬레이터 | iPhone 17 Pro |
 | 의존성 | **없음** — SPM·CocoaPods·Carthage 모두 미사용. 애플 프레임워크만 쓴다 |
 | UI | 전부 SwiftUI. UIKit은 `Theme.swift` 한 곳뿐(다이내믹 컬러 프로바이더용) |
-| 영속화 | `ReportCache`가 Application Support에 `Codable`+JSON으로 저장, 그 외는 `@AppStorage`. SwiftData·Core Data 미사용 |
+| 영속화 | `ReportCache`가 Application Support에 `Codable`+JSON으로 저장, 그 외는 `@AppStorage`. 위젯 스냅샷은 App Group(`group.com.jkpark.runwrap`) JSON. SwiftData·Core Data 미사용 |
 | 테스트 | Swift Testing 139개 / 16스위트 (`ios/RunWrapTests`) |
+| 프로젝트 생성 | xcodegen **2.45.4** — CI 고정 버전(`XCODEGEN_VERSION`, `test.yml`·`testflight.yml`). 로컬도 같은 버전을 쓴다 |
 | 포매터·린터 | 없음 (SwiftFormat·SwiftLint 미설치). 주변 코드 스타일을 눈으로 맞춘다 |
 
 ## 절대 하지 말 것
 
 - `*.xcodeproj/` 내부, 특히 `project.pbxproj`를 편집하지 않는다. **생성물이고 gitignore 대상**이다.
   타깃 멤버십이 어긋나면 `ios/project.yml`을 고쳐 xcodegen을 다시 돌린다.
-  같은 이유로 `ios/RunWrap/Info.plist`와 `ios/RunWrap/RunWrap.entitlements`도 직접 편집 금지 —
-  둘 다 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
+  같은 이유로 `ios/RunWrap/Info.plist`와 `ios/RunWrap/RunWrap.entitlements`,
+  `ios/RunWrapWidget/Info.plist`·`RunWrapWidget.entitlements`도 직접 편집 금지 —
+  모두 `project.yml`의 `info:`/`entitlements:` 섹션에서 생성된다.
 - `xcodebuild`를 직접 쓰지 않는다. 아래 MCP 도구를 쓴다.
 - `ios/RunWrap/Races.json`을 손으로 고치지 않는다 — `.github/workflows/race-info.yml`이
-  매일 05:00 KST에 크롤 결과로 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
-- 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo)와
-  대회정보(`RaceStore` → GitHub raw) 둘뿐이고, 둘 다 개인 데이터를 싣지 않는다.
-- 비밀값을 커밋하지 않는다. 이 앱은 API 키가 필요한 서비스를 쓰지 않는다 —
-  키가 필요해지는 설계라면 먼저 물어본다. (`DEVELOPMENT_TEAM`은 비밀이 아닌 팀 ID다.)
+  매일 02:00 KST(UTC 17:00)에 크롤을 시작해 아침 전에 덮어쓴다. 스키마를 바꾸려면 `tools/race-info/crawl.py`를 함께 고친다.
+- 건강 데이터를 네트워크로 보내지 않는다. 외부 통신은 날씨(`WeatherClient` → open-meteo, 소수 2자리 좌표),
+  대기질(`AirQualityClient` → data.go.kr, 측정소 이름만), 대회정보(`RaceStore` → GitHub raw),
+  대회 이미지(대회 JSON의 외부 URL), 진행도 백업(`ProgressBackupStore` → 사용자 본인 iCloud 개인 DB)
+  다섯뿐이고, 어디에도 건강 데이터를 싣지 않는다. 새 외부 통신을 추가하면 `docs/privacy.html`과
+  `docs/appstore/review-notes.md`를 같이 고친다.
+- 비밀값을 커밋하지 않는다. 유일한 API 키는 대기질(data.go.kr)용으로, gitignore된
+  `ios/RunWrap/AirQualityKey.json`에만 두고 CI가 시크릿(`AIRKOREA_SERVICE_KEY`)으로 생성한다.
+  다른 키가 필요해지는 설계라면 먼저 물어본다. (`DEVELOPMENT_TEAM`은 비밀이 아닌 팀 ID다.)
 - `.gpx` 같은 xml 계열 리소스는 xcodegen이 자동으로 빼므로, 추가할 때 `project.yml`에
   `buildPhase: resources`로 명시해야 한다.
 

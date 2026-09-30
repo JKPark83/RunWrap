@@ -24,7 +24,9 @@ struct CourseScreen: View {
     @StateObject private var store = CoursePOIStore()
     /// 보급 지점은 100m 단위가 의미를 가져 날씨(km)보다 정밀한 위치를 요청한다
     @StateObject private var location = LocationProvider(accuracy: kCLLocationAccuracyNearestTenMeters)
-    @State private var course: [GeoPoint] = []
+    /// 끊긴 구간마다 나뉜 코스 좌표 — 지도도 세그먼트별로 따로 그어 점프를 잇지 않는다 (#150)
+    @State private var course: [[GeoPoint]] = []
+    @Environment(\.openURL) private var openURL
     @State private var courseName = ""
     @State private var result: CourseSupplyEngine.Result?
     @State private var nearby: NearbySupplyEngine.Result?
@@ -49,6 +51,9 @@ struct CourseScreen: View {
     private static let focusMeters: Double = 500
     /// 핀 탭 판정 여유(pt) — 핀(16pt)보다 넉넉해야 손가락으로 짚힌다
     private static let pinTapSlop: CGFloat = 22
+    /// GPX 파일 크기 상한 — 이보다 크면 읽지 않는다. 풀코스 1초 기록도 수 MB라 넉넉하고,
+    /// 수십 MB XML을 통째로 메모리에 올려 파싱하는 일을 막는다 (#147)
+    private static let maxFileBytes = 20 * 1_048_576
 
     private var mode: Mode { result == nil ? .nearby : .course }
 
@@ -56,6 +61,12 @@ struct CourseScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 header
+
+                // 두 모드 모두에서 보인다 — 코스를 보다가 잘못된 GPX를 골라도 이유를 알 수 있게 (이슈 #148).
+                // 코스 모드에서는 닫기 없이 다음 성공 업로드나 코스 지우기에서 지운다
+                if let notice {
+                    noticeCard("코스를 읽지 못했어요", message: notice, symbol: "map")
+                }
 
                 if case .failed = store.state {
                     noticeCard("보급 데이터를 불러오지 못했어요",
@@ -70,9 +81,6 @@ struct CourseScreen: View {
                     uploadButtons(compact: true)
                     attribution
                 } else {
-                    if let notice {
-                        noticeCard("코스를 읽지 못했어요", message: notice, symbol: "map")
-                    }
                     nearbySection
                     uploadButtons(compact: false)
                     attribution
@@ -85,19 +93,40 @@ struct CourseScreen: View {
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: [.gpx, .xml]) { pick in
             guard case .success(let url) = pick else { return }
-            // fileImporter가 주는 URL은 보안 스코프 밖 접근이 막혀 있다
-            let secured = url.startAccessingSecurityScopedResource()
-            defer { if secured { url.stopAccessingSecurityScopedResource() } }
-            guard let data = try? Data(contentsOf: url) else {
-                notice = "파일을 여는 데 실패했어요. 다른 앱에서 내보낸 GPX인지 확인해 주세요."
-                return
+            let maxBytes = Self.maxFileBytes
+            Task {
+                // 파일 읽기는 백그라운드에서 — 큰 GPX가 메인 스레드를 붙잡지 않게 (#147)
+                let read = await Task.detached(priority: .userInitiated) { () -> (data: Data?, tooLarge: Bool) in
+                    // fileImporter가 주는 URL은 보안 스코프 밖 접근이 막혀 있다
+                    let secured = url.startAccessingSecurityScopedResource()
+                    defer { if secured { url.stopAccessingSecurityScopedResource() } }
+                    let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
+                    guard size <= maxBytes else { return (nil, true) }
+                    return (try? Data(contentsOf: url), false)
+                }.value
+                if read.tooLarge {
+                    notice = "파일이 너무 커요. GPX는 20MB까지만 읽을 수 있어요."
+                    return
+                }
+                guard let data = read.data else {
+                    notice = "파일을 여는 데 실패했어요. 다른 앱에서 내보낸 GPX인지 확인해 주세요."
+                    return
+                }
+                await apply(data: data, name: url.deletingPathExtension().lastPathComponent)
             }
-            apply(data: data, name: url.deletingPathExtension().lastPathComponent)
         }
         .task {
             await store.load()
-            restoreLastCourse()
-            analyze()
+            // 탭 재진입마다 .task가 다시 돈다 — 이미 분석한 코스가 있으면 복원·재분석을 건너뛴다 (#147)
+            guard result == nil else { return }
+            let restored = await restoreLastCourse()
+            await analyze()
+            // 되살린 코스가 분석되지 않으면 저장본을 지운다 — 재진입마다 같은 실패를 되풀이하지 않게 (감사 M12).
+            // POI 로드 실패로 분석을 못 한 경우는 코스 탓이 아니니 남긴다
+            if restored, result == nil, case .loaded = store.state {
+                try? FileManager.default.removeItem(at: Self.lastCourseURL)
+                lastCourseName = ""
+            }
             // 코스가 복원됐다면 주변 검색은 건너뛴다 — 화면에 안 쓸 위치를 굳이 받지 않는다
             if result == nil {
                 location.request()
@@ -133,15 +162,15 @@ struct CourseScreen: View {
         case .idle, .loading:
             locatingCard
         case .denied:
-            noticeCard("위치를 쓸 수 없어요",
-                       message: "설정 앱 → 개인정보 보호 및 보안 → 위치 서비스에서 런미새를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
-                       symbol: "location.slash")
+            deniedCard
         case .failed:
             noticeCard("위치를 못 받았어요",
                        message: "실내나 지하에서는 위치를 잡기 어려울 수 있어요. 잠시 뒤 다시 들어와 주세요.",
                        symbol: "location.slash")
         case .located:
-            if let nearby {
+            if location.isCoarse {
+                coarseLocationCard
+            } else if let nearby {
                 nearbyMapCard(nearby)
                 nearbyListCard(nearby)
                 if !nearby.matches.contains(where: { $0.poi.kind == .water }) {
@@ -151,6 +180,49 @@ struct CourseScreen: View {
                 // 위치는 받았는데 POI가 아직 안 올라온 찰나 — 로딩과 같은 카드로 덮는다
                 locatingCard
             }
+        }
+    }
+
+    /// '정확한 위치'가 꺼져 좌표가 km 단위로 흐린 경우 — 틀린 거리를 보여주느니 목록을 내지 않는다 (이슈 #74)
+    private var coarseLocationCard: some View {
+        VStack(spacing: 10) {
+            noticeCard("정확한 위치가 꺼져 있어요",
+                       message: "지금은 대략적인 위치만 받고 있어서 보급 지점까지의 거리가 km 단위로 어긋날 수 있어요. 이번만 정확한 위치를 허락해 주시면 제대로 짚어 드릴게요.",
+                       symbol: "location.viewfinder")
+            Button {
+                location.requestFullAccuracy()
+            } label: {
+                Label("이번만 정확한 위치 쓰기", systemImage: "location")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    /// 위치 거부 안내 + 설정 바로가기 (이슈 #94) — 버튼 스타일은 coarseLocationCard와 같다.
+    /// 아이폰 전체 위치 서비스가 꺼진 경우도 .denied로 오므로 문구를 시스템 스위치 쪽으로 바꾼다
+    private var deniedCard: some View {
+        VStack(spacing: 10) {
+            if location.servicesDisabled {
+                noticeCard("아이폰의 위치 서비스가 꺼져 있어요",
+                           message: "설정 > 개인정보 보호 및 보안 > 위치 서비스를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
+                           symbol: "location.slash")
+            } else {
+                noticeCard("위치를 쓸 수 없어요",
+                           message: "설정 앱 → 개인정보 보호 및 보안 → 위치 서비스에서 런미새를 켜 주시면 지금 근처의 보급 지점을 짚어 드릴게요. 그동안은 아래에서 GPX 코스를 올려 주셔도 됩니다.",
+                           symbol: "location.slash")
+            }
+            Button {
+                openURL(URL(string: UIApplication.openSettingsURLString)!)
+            } label: {
+                Label("설정 열기", systemImage: "gearshape")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -276,6 +348,11 @@ struct CourseScreen: View {
         guard result == nil,
               case .located(let coordinate) = location.state,
               case .loaded(let file) = store.state else { return }
+        // 흐린 좌표로는 검색하지 않는다 — km 오차면 가까운 순서가 뒤집혀 틀린 답이 된다 (이슈 #74)
+        guard !location.isCoarse else {
+            nearby = nil
+            return
+        }
         nearby = NearbySupplyEngine.search(
             center: GeoPoint(lat: coordinate.latitude, lon: coordinate.longitude),
             pois: file.pois,
@@ -293,38 +370,77 @@ struct CourseScreen: View {
 
     // MARK: 코스 적용 · 분석
 
-    private func apply(data: Data, name: String) {
-        let points = GPXParser.parse(data)
+    private func apply(data: Data, name: String) async {
+        let points = await Task.detached(priority: .userInitiated) { GPXParser.parseSegments(data) }.value
         guard !points.isEmpty else {
             notice = "이 파일에는 경로가 없어요. 지점(웨이포인트)만 있는 GPX일 수 있으니 트랙이 담긴 파일로 부탁드려요."
             return
         }
+        // 분석이 유효할 때만 상태를 바꾼다 — 짧은 코스가 보던 코스·저장본을 덮어쓰지 않게 (이슈 #149).
+        // 실패한 파일을 남기면 탭 재진입마다 되살아나므로 저장도 성공한 코스만 한다 (감사 M12).
+        // POI가 아직 로드 중이면 분석이 미뤄진 것뿐이니(위 .task가 로드 뒤 다시 분석) 코스 탓으로 보지 않고 저장한다
+        var analyzed: CourseSupplyEngine.Result?
+        if case .loaded(let file) = store.state {
+            // 매칭 계산은 백그라운드에서 (#147)
+            let pois = file.pois
+            analyzed = await Task.detached(priority: .userInitiated) {
+                CourseSupplyEngine.analyze(segments: points, pois: pois)
+            }.value
+            guard analyzed != nil else {
+                notice = Self.shortCourseNotice
+                return
+            }
+        }
         notice = nil
         course = points
         courseName = name
+        if let analyzed { applyResult(analyzed) }
         try? data.write(to: Self.lastCourseURL)
         lastCourseName = name
-        analyze()
     }
 
-    private func analyze() {
+    /// 되살린 코스를 분석한다 — `.task` 복원 경로 전용. 올린 파일은 `apply`가 분석을 먼저 해 본다
+    private func analyze() async {
         guard case .loaded(let file) = store.state, !course.isEmpty else { return }
-        result = CourseSupplyEngine.analyze(course: course, pois: file.pois)
-        selected = nil
-        if result == nil {
-            notice = "코스가 500m보다 짧아서 분석을 접었어요. 이 정도면 보급 없이도 완주하실 거라 믿어요."
+        // 매칭 계산은 백그라운드에서 (#147). 기다리는 사이 코스가 바뀌었으면(새 파일·지우기) 옛 결과는 버린다
+        let analyzed = course
+        let pois = file.pois
+        let fresh = await Task.detached(priority: .userInitiated) {
+            CourseSupplyEngine.analyze(segments: analyzed, pois: pois)
+        }.value
+        guard course == analyzed else { return }
+        if let fresh {
+            applyResult(fresh)
         } else {
-            // 새 코스가 통째로 보이게 카메라를 잡는다 (예전 Map(initialPosition:) + .id 리셋을 대신한다)
-            camera = .region(RouteSnapshot.region(for: courseCoordinates))
+            result = nil
+            selected = nil
+            notice = Self.shortCourseNotice
         }
     }
 
-    private func restoreLastCourse() {
-        guard course.isEmpty, let data = try? Data(contentsOf: Self.lastCourseURL) else { return }
-        let points = GPXParser.parse(data)
-        guard !points.isEmpty else { return }
+    /// 분석 결과를 화면에 반영한다 — `course`를 먼저 바꿔 둬야 카메라가 새 코스를 잡는다
+    private func applyResult(_ analyzed: CourseSupplyEngine.Result) {
+        result = analyzed
+        selected = nil
+        // 새 코스가 통째로 보이게 카메라를 잡는다 (예전 Map(initialPosition:) + .id 리셋을 대신한다)
+        camera = .region(RouteSnapshot.region(for: courseCoordinates.flatMap { $0 }))
+    }
+
+    private static let shortCourseNotice = "코스가 500m보다 짧아서 분석을 접었어요. 이 정도면 보급 없이도 완주하실 거라 믿어요."
+
+    /// 저장된 마지막 코스를 되살린다 — 되살렸으면 true
+    private func restoreLastCourse() async -> Bool {
+        guard course.isEmpty else { return false }
+        let url = Self.lastCourseURL
+        let points = await Task.detached(priority: .userInitiated) { () -> [[GeoPoint]] in
+            guard let data = try? Data(contentsOf: url) else { return [] }
+            return GPXParser.parseSegments(data)
+        }.value
+        // 읽는 사이 사용자가 새 코스를 올렸으면 그쪽이 우선이다
+        guard !points.isEmpty, course.isEmpty else { return false }
         course = points
         courseName = lastCourseName
+        return true
     }
 
     /// 올린 코스를 지우고 현재 위치 모드로 돌아간다 — 캐시 파일까지 지워야 재진입 시 안 살아난다
@@ -339,9 +455,9 @@ struct CourseScreen: View {
         if case .located = location.state { searchNearby() } else { location.request() }
     }
 
-    /// 코스 폴리라인 좌표 — 지도와 카메라 리셋이 같은 값을 본다
-    private var courseCoordinates: [CLLocationCoordinate2D] {
-        course.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+    /// 코스 폴리라인 좌표(세그먼트별) — 지도와 카메라 리셋이 같은 값을 본다
+    private var courseCoordinates: [[CLLocationCoordinate2D]] {
+        course.map { $0.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) } }
     }
 
     private static var lastCourseURL: URL {
@@ -356,9 +472,11 @@ struct CourseScreen: View {
         ZStack(alignment: .bottomLeading) {
             MapReader { proxy in
                 Map(position: $camera, interactionModes: [.pan, .zoom]) {
-                    MapPolyline(coordinates: courseCoordinates)
-                        .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
-                                                             lineCap: .round, lineJoin: .round))
+                    ForEach(Array(courseCoordinates.enumerated()), id: \.offset) { _, coordinates in
+                        MapPolyline(coordinates: coordinates)
+                            .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
+                                                                 lineCap: .round, lineJoin: .round))
+                    }
                     ForEach(Array(visibleMatches(result).enumerated()), id: \.offset) { _, match in
                         Annotation("", coordinate: CLLocationCoordinate2D(latitude: match.poi.lat,
                                                                          longitude: match.poi.lon)) {
@@ -444,7 +562,7 @@ struct CourseScreen: View {
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .opacity(0.75)
                     }
-                    .foregroundStyle(isOn ? .white : kind.color.opacity(total > 0 ? 1 : 0.45))
+                    .foregroundStyle(isOn ? RR.onBrand : kind.color.opacity(total > 0 ? 1 : 0.45))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 9)
                     .background(isOn ? kind.color : kind.softColor,
@@ -515,6 +633,7 @@ struct CourseScreen: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (핀·mapBadge의 흰/검)
     private func poiPin(_ poi: CoursePOI, caption: String) -> some View {
         let isSelected = selected?.poi == poi
         return ZStack {

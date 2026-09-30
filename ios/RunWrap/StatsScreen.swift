@@ -10,11 +10,14 @@ struct StatsScreen: View {
 
     @EnvironmentObject private var health: HealthStore
     @State private var monthIndex = 0   // availableMonths 기준 (0 = 이번 달)
+    /// 결산 리캡 시트 (이슈 #167)
+    @State private var recapPeriod: RecapPeriod?
 
     var body: some View {
         Group {
-            if case .loaded(let runs) = health.state {
-                let months = MonthlyStats.availableMonths(in: runs)
+            // availableMonths는 이번 달을 항상 담지만, 빈 배열이면 months[-1]로 크래시하므로 한 번 더 막는다 (이슈 #68)
+            if case .loaded(let runs) = health.state,
+               case let months = MonthlyStats.availableMonths(in: runs), !months.isEmpty {
                 let index = min(monthIndex, months.count - 1)
                 let stats = MonthlyStats.compute(runs: runs, month: months[index])
 
@@ -31,6 +34,7 @@ struct StatsScreen: View {
                         if let segment { segment.padding(.bottom, 2) }
 
                         monthSelector(months: months, index: index)
+                        recapRow(runs: runs, month: months[index])
                         distanceCard(stats)
                         tileGrid(stats)
                         sessionList(stats)
@@ -44,6 +48,60 @@ struct StatsScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(item: $recapPeriod) { period in
+            RecapScreen(period: period)
+        }
+    }
+
+    // MARK: 결산 리캡 (이슈 #167)
+
+    /// "이 달 결산 보기" + 연간 결산 메뉴(선택한 달의 연도와 그 전 연도). 기록 3회 미만 기간은 비활성
+    private func recapRow(runs: [RunSummary], month: Date) -> some View {
+        let calendar = Calendar.current
+        let monthly = RecapPeriod.month(month)
+        let monthEnabled = RecapEngine.hasEnoughRuns(monthly, runs: runs)
+        let thisYear = calendar.dateInterval(of: .year, for: month)!.start
+        let years = [thisYear, calendar.date(byAdding: .year, value: -1, to: thisYear)!]
+            .map { RecapPeriod.year($0) }
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button {
+                    recapPeriod = monthly
+                } label: {
+                    Label("이 달 결산 보기", systemImage: "sparkles")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(monthEnabled ? RR.brand : RR.text3)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(RR.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(RR.line))
+                }
+                .buttonStyle(.plain)
+                .disabled(!monthEnabled)
+
+                Menu {
+                    ForEach(years) { year in
+                        Button(RecapEngine.periodLabel(year) + " 결산") { recapPeriod = year }
+                            .disabled(!RecapEngine.hasEnoughRuns(year, runs: runs))
+                    }
+                } label: {
+                    Label("연간 결산", systemImage: "calendar")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(RR.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(RR.line))
+                }
+            }
+            if !monthEnabled {
+                Text("기록 3회 이상이면 결산이 열립니다")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+                    .padding(.horizontal, 4)
+            }
+        }
     }
 
     // MARK: 월 선택
@@ -58,6 +116,7 @@ struct StatsScreen: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
             }
+            .accessibilityLabel("이전 달")
             .disabled(index >= months.count - 1)
 
             Spacer()
@@ -75,6 +134,7 @@ struct StatsScreen: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
             }
+            .accessibilityLabel("다음 달")
             .disabled(index <= 0)
         }
         .padding(8)
@@ -166,7 +226,7 @@ struct StatsScreen: View {
             tile(label: "러닝 횟수",
                  value: "\(stats.count)",
                  unit: "회",
-                 delta: (String(format: "주 %.1f회", stats.perWeek), RR.text3),
+                 delta: stats.perWeek.map { (String(format: "주 %.1f회", $0), RR.text3) },
                  spark: nil)
 
             tile(label: "누적 시간",
@@ -234,10 +294,12 @@ struct StatsScreen: View {
                     .padding(.vertical, 28)
                     .rrCard()
             } else {
+                // 행마다 전체 주간 리포트를 다시 돌리지 않는다 — 목록 전체에 한 번만 (이슈 #158)
+                let context = weeklyOverloadContext
                 VStack(spacing: 0) {
                     ForEach(Array(stats.runs.enumerated()), id: \.element.id) { index, run in
                         NavigationLink {
-                            SessionDetailScreen(run: run, weeklyContext: weeklyContext(for: run))
+                            SessionDetailScreen(run: run, weeklyContext: context)
                         } label: {
                             sessionRow(run)
                         }
@@ -305,8 +367,9 @@ struct StatsScreen: View {
         .contentShape(Rectangle())
     }
 
-    /// 세션 상세의 맥락 배지용 — 이번 주 리포트가 과부하일 때만 전달
-    private func weeklyContext(for run: RunSummary) -> WeeklyReport.DistanceCard? {
+    /// 세션 상세의 맥락 배지용 — 이번 주 리포트가 과부하일 때만 전달.
+    /// 세션과 무관한 값이라 목록을 그릴 때 한 번만 계산한다 (이슈 #158)
+    private var weeklyOverloadContext: WeeklyReport.DistanceCard? {
         guard case .loaded(let runs) = health.state,
               let card = ReportEngine().weeklyReport(from: runs).distance,
               card.tone == .overload else { return nil }

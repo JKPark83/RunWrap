@@ -99,3 +99,137 @@ struct OnboardingFlowTests {
         #expect(Set(full.map(\.seconds)).count == full.count)
     }
 }
+
+/// 온보딩 저장 — 재진단이 성장 사이클을 보존하는지 (이슈 #44).
+/// 설정의 "다시 진단받기"가 사이클을 새로 열어 XP가 0이 되던 회귀를 막는다.
+/// now = 2026-09-29T09:00:00Z 고정, UserDefaults는 스위트별로 비우고 시작한다.
+@MainActor
+@Suite("온보딩 저장 — 재진단 사이클 보존")
+struct OnboardingPersistTests {
+    let now = ISO8601DateFormatter().date(from: "2026-09-29T09:00:00Z")!
+    /// 재진단 전부터 키우던 사이클 — 8/1 시작, 4단계(fledgling), 고정 식별자, 사이클 목표 풀 4:00:00
+    let cycleStartedAt = ISO8601DateFormatter().date(from: "2026-08-01T00:00:00Z")!
+    let onboardedAt = ISO8601DateFormatter().date(from: "2026-07-01T00:00:00Z")!
+    let cycleID = "AAAAAAAA-0000-0000-0000-000000000001"
+
+    /// 기존 사이클 값을 미리 넣어 둔 격리 UserDefaults
+    private func seededDefaults(_ name: String) -> UserDefaults {
+        let suite = "OnboardingPersistTests.\(name)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(cycleStartedAt.timeIntervalSince1970, forKey: GrowthKey.cycleStartedAt)
+        defaults.set(GrowthStage.fledgling.rawValue, forKey: GrowthKey.maxStage)
+        defaults.set(cycleID, forKey: GrowthKey.cycleID)
+        defaults.set(RaceDistance.full.rawValue, forKey: GrowthKey.cycleGoal)
+        defaults.set(4 * 3_600, forKey: GrowthKey.cycleGoalSec)
+        defaults.set(onboardedAt.timeIntervalSince1970, forKey: ProfileKey.onboardedAt)
+        return defaults
+    }
+
+    /// 재진단 답 — 주 4회 이상(Q5 fourPlus → 주간 목표 4회), 하프 목표 1:45:00(6_300초)
+    private func model() -> OnboardingFlowModel {
+        let model = OnboardingFlowModel()
+        model.prefillIfNeeded(OnboardingAnswers(
+            q1Experience: .experienced, q2aActivity: nil, q2Longest: .halfToFull, q3Record: nil,
+            q4Monthly: .hundredTo200, q5Frequency: .fourPlus, q6Race: .finished,
+            q7Target: .half, q8GoalSec: 6_300, q9Purposes: [.record]))
+        return model
+    }
+
+    @Test("재진단 저장 — 사이클 시작·최고 단계·사이클 식별자·온보딩 시각을 보존하고 설문 답만 갱신한다")
+    func rediagnosisKeepsCycle() {
+        let defaults = seededDefaults("rediagnosis")
+        let model = model()
+
+        model.persist(isRediagnosis: true, now: now, defaults: defaults)
+
+        // 사이클 키 3종 + 온보딩 시각: 미리 넣은 값 그대로
+        #expect(defaults.double(forKey: GrowthKey.cycleStartedAt) == cycleStartedAt.timeIntervalSince1970)
+        #expect(defaults.integer(forKey: GrowthKey.maxStage) == GrowthStage.fledgling.rawValue)
+        #expect(defaults.string(forKey: GrowthKey.cycleID) == cycleID)
+        #expect(defaults.double(forKey: ProfileKey.onboardedAt) == onboardedAt.timeIntervalSince1970)
+        // 사이클 목표(이슈 #110): 재진단의 하프 목표로 바뀌지 않고 풀 4:00:00 그대로 — 새 종류는 다음 사이클부터
+        #expect(defaults.string(forKey: GrowthKey.cycleGoal) == RaceDistance.full.rawValue)
+        #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 4 * 3_600)
+        // 설문 답: 레벨은 LevelEngine 판정, 주간 목표는 Q5 fourPlus → 4회, 대회 목표는 Q7·Q8
+        #expect(defaults.string(forKey: ProfileKey.levelV2) == LevelEngine.decide(model.answers).rawValue)
+        #expect(defaults.integer(forKey: ProfileKey.weeklyGoal) == 4)
+        #expect(defaults.string(forKey: ProfileKey.raceGoal) == RaceDistance.half.rawValue)
+        #expect(defaults.integer(forKey: ProfileKey.raceGoalSec) == 6_300)
+    }
+
+    @Test("재진단 저장 — 주간 목표가 바뀌면 변경 시각과 이전 목표를 이력에 남긴다 (이슈 #108)")
+    func rediagnosisRecordsWeeklyGoalChange() {
+        let defaults = seededDefaults("rediagnosisGoalChange")
+        defaults.set(2, forKey: ProfileKey.weeklyGoal)  // 재진단 전 주 2회
+
+        model().persist(isRediagnosis: true, now: now, defaults: defaults)  // Q5 fourPlus → 4회
+
+        #expect(defaults.integer(forKey: ProfileKey.weeklyGoal) == 4)
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults) == [WeeklyGoalChange(at: now, before: 2)])
+    }
+
+    @Test("재진단 저장 — #108의 옛 기록(다른 주)이 있으면 이관한 뒤 지우지 않고 새 변경을 뒤에 붙인다 (이슈 #116)")
+    func rediagnosisAppendsToMigratedHistory() {
+        let defaults = seededDefaults("rediagnosisGoalHistory")
+        defaults.set(2, forKey: ProfileKey.weeklyGoal)  // 재진단 전 주 2회 — 8/12에 3→2로 바꾼 옛 기록
+        let earlier = ISO8601DateFormatter().date(from: "2026-08-12T00:00:00Z")!
+        defaults.set(earlier.timeIntervalSince1970, forKey: WeeklyGoalChangeLog.legacyChangedAtKey)
+        defaults.set(3, forKey: WeeklyGoalChangeLog.legacyBeforeKey)
+
+        model().persist(isRediagnosis: true, now: now, defaults: defaults)  // Q5 fourPlus → 4회
+
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults) == [WeeklyGoalChange(at: earlier, before: 3),
+                                                                 WeeklyGoalChange(at: now, before: 2)])
+        #expect(defaults.object(forKey: WeeklyGoalChangeLog.legacyChangedAtKey) == nil)
+    }
+
+    @Test("재진단 저장 — 주간 목표가 그대로면 변경 기록을 남기지 않는다")
+    func rediagnosisSameGoalLeavesNoRecord() {
+        let defaults = seededDefaults("rediagnosisSameGoal")
+        defaults.set(4, forKey: ProfileKey.weeklyGoal)
+
+        model().persist(isRediagnosis: true, now: now, defaults: defaults)
+
+        #expect(WeeklyGoalChangeLog.load(defaults: defaults).isEmpty)
+    }
+
+    @Test("첫 온보딩 저장 — 새 사이클을 연다: 시작=지금, 단계=알, 새 식별자, 온보딩 시각=지금, 사이클 목표=Q7·Q8")
+    func firstOnboardingOpensNewCycle() throws {
+        let defaults = seededDefaults("firstOnboarding")
+
+        model().persist(isRediagnosis: false, now: now, defaults: defaults)
+
+        #expect(defaults.double(forKey: GrowthKey.cycleStartedAt) == now.timeIntervalSince1970)
+        #expect(defaults.integer(forKey: GrowthKey.maxStage) == GrowthStage.egg.rawValue)
+        let newID = try #require(defaults.string(forKey: GrowthKey.cycleID))
+        #expect(newID != cycleID)
+        #expect(UUID(uuidString: newID) != nil)
+        #expect(defaults.double(forKey: ProfileKey.onboardedAt) == now.timeIntervalSince1970)
+        // 사이클 목표(이슈 #110): Q7 하프·Q8 1:45:00(6_300초)으로 고정
+        #expect(defaults.string(forKey: GrowthKey.cycleGoal) == RaceDistance.half.rawValue)
+        #expect(defaults.integer(forKey: GrowthKey.cycleGoalSec) == 6_300)
+    }
+}
+
+/// 온보딩 원답 파일 정리 (이슈 #156) — 원답은 더 이상 저장하지 않고, 이전 버전이 남긴 파일은 지운다.
+@Suite("온보딩 원답 파일 정리")
+struct OnboardingAnswersStoreTests {
+    @Test("이전 버전이 남긴 원답 파일을 지우고, 파일이 없어도 조용히 넘어간다")
+    func removesLegacyFile() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("onboarding-answers-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent(OnboardingAnswersStore.filename)
+        try Data("{}".utf8).write(to: file)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+
+        OnboardingAnswersStore.removeLegacyFile(in: dir)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        // 두 번째 호출 — 파일이 없어도 오류 없이 끝나고 디렉터리도 그대로다
+        OnboardingAnswersStore.removeLegacyFile(in: dir)
+        #expect(FileManager.default.fileExists(atPath: dir.path))
+    }
+}

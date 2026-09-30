@@ -105,10 +105,11 @@ struct CollectionEngineTests {
 
     @Test("풀코스 이후는 기록 단축으로 방향을 튼다")
     func recommendationTightensTime() throws {
-        // 기록 미입력 → 우선 sub-4 제안
+        // 기록 미입력 → 우선 sub-4 제안. 종 경계가 배타(<)라 4:00:00이 아니라 3:59:00
         let first = try #require(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 0))
         #expect(first.distance == .full)
-        #expect(first.seconds == 4 * 3_600)
+        #expect(first.seconds == 4 * 3_600 - 60)
+        #expect(CollectionEngine.species(for: .full, goalSeconds: first.seconds) == .crane)
 
         // 4:00:00 → 30분 당겨 3:30:00
         let tighter = try #require(CollectionEngine.recommendedGoal(after: .full,
@@ -116,17 +117,94 @@ struct CollectionEngineTests {
         #expect(tighter.seconds == 3 * 3_600 + 30 * 60)
     }
 
-    @Test("서브3 아래로는 더 당기지 않는다 — 추천 없음")
-    func recommendationStopsAtSub3() {
-        // 3:00:00에서 30분을 당기면 2:30:00 < 서브3 → 추천하지 않는다
-        #expect(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 3 * 3_600) == nil)
-        // 이미 서브3인 경우도 마찬가지
-        #expect(CollectionEngine.recommendedGoal(after: .full,
-                                                 goalSeconds: 2 * 3_600 + 50 * 60) == nil)
-        // 3:30:00 → 3:00:00은 경계에 딱 걸려 허용된다
+    @Test("서브3 경계 이하로 당겨지면 서브3 바로 아래(2:59:00)로 맞추고, 이미 서브3이면 추천 없음")
+    func recommendationStopsAtSub3() throws {
+        // 3:00:00은 서브3(< 3:00:00)이 아니다 — 30분 당긴 2:30:00 대신 2:59:00으로 맞춘다
+        #expect(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 3 * 3_600)?.seconds
+                == 3 * 3_600 - 60)
+        // 3:30:00 → 3:00:00은 경계에 걸려 종이 오르지 않는다 → 2:59:00
         #expect(CollectionEngine.recommendedGoal(after: .full,
                                                  goalSeconds: 3 * 3_600 + 30 * 60)?.seconds
-                == 3 * 3_600)
+                == 3 * 3_600 - 60)
+        // 이미 서브3(2:59:00 이하)이면 더 올릴 종이 없다
+        #expect(CollectionEngine.recommendedGoal(after: .full, goalSeconds: 3 * 3_600 - 60) == nil)
+        #expect(CollectionEngine.recommendedGoal(after: .full,
+                                                 goalSeconds: 2 * 3_600 + 50 * 60) == nil)
+    }
+
+    @Test("3:10:00 목표 — 30분 당기면 서브3 아래라 nil이 아니라 2:59:00(백조)을 추천한다")
+    func recommendationClampsToSub3() throws {
+        // 3:10:00 − 30분 = 2:40:00 ≤ 3:00:00 → 서브3 바로 아래 2:59:00으로 clamp
+        let next = try #require(CollectionEngine.recommendedGoal(after: .full,
+                                                                 goalSeconds: 3 * 3_600 + 10 * 60))
+        #expect(next.distance == .full)
+        #expect(next.seconds == 2 * 3_600 + 59 * 60)
+        #expect(CollectionEngine.species(for: .full, goalSeconds: next.seconds) == .swan)
+    }
+
+    // MARK: - 세러모니 다음 목표 초기 선택 (이슈 #127)
+
+    @Test("초기 선택 — 현재 목표가 사이클 목표와 같으면 사이클 목표 기준 추천")
+    func initialNextGoalSameAsCycle() {
+        // 10K 사이클 → 한 칸 올린 하프
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .tenK, cycleGoalSeconds: 0,
+                                                    currentGoal: .tenK, currentSeconds: 0)
+        #expect(pick.distance == .half)
+        #expect(pick.seconds == 0)
+        // 풀 4:00:00 사이클 → 30분 당긴 3:30:00 (recommendedGoal과 같은 결과)
+        let full = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 4 * 3_600,
+                                                    currentGoal: .full, currentSeconds: 4 * 3_600)
+        #expect(full.distance == .full)
+        #expect(full.seconds == 3 * 3_600 + 30 * 60)
+        // 이미 서브3이면 추천이 없어 사이클 목표를 유지한다
+        let sub3 = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 2 * 3_600 + 50 * 60,
+                                                    currentGoal: .full, currentSeconds: 2 * 3_600 + 50 * 60)
+        #expect(sub3.distance == .full)
+        #expect(sub3.seconds == 2 * 3_600 + 50 * 60)
+    }
+
+    @Test("초기 선택 — 사이클 도중 더 먼 종목으로 바꿨으면 그 목표를 그대로 둔다")
+    func initialNextGoalFartherCurrent() {
+        // 5K 사이클 중 풀 3:50:00으로 변경 → 추천(10K) 대신 풀 3:50:00
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .fiveK, cycleGoalSeconds: 0,
+                                                    currentGoal: .full, currentSeconds: 3 * 3_600 + 50 * 60)
+        #expect(pick.distance == .full)
+        #expect(pick.seconds == 3 * 3_600 + 50 * 60)
+        // 목표 없음 사이클 중 하프로 변경 → 추천(5K) 대신 하프
+        let fromNone = CollectionEngine.initialNextGoal(cycleGoal: nil, cycleGoalSeconds: 0,
+                                                        currentGoal: .half, currentSeconds: 0)
+        #expect(fromNone.distance == .half)
+    }
+
+    @Test("초기 선택 — 같은 종목에 더 빠른 기록으로 바꿨으면 그 목표를 그대로 둔다")
+    func initialNextGoalFasterCurrent() {
+        // 풀 4:00:00 사이클 중 3:45:00으로 당김 → 추천(3:30:00) 대신 3:45:00
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 4 * 3_600,
+                                                    currentGoal: .full, currentSeconds: 3 * 3_600 + 45 * 60)
+        #expect(pick.distance == .full)
+        #expect(pick.seconds == 3 * 3_600 + 45 * 60)
+        // 기록 없는 풀 완주 사이클 중 기록 4:10:00을 입력 → 추천(3:59:00) 대신 4:10:00
+        let fromFinish = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 0,
+                                                          currentGoal: .full, currentSeconds: 4 * 3_600 + 10 * 60)
+        #expect(fromFinish.seconds == 4 * 3_600 + 10 * 60)
+    }
+
+    @Test("초기 선택 — 현재 목표가 더 낮으면 사이클 목표 기준 추천")
+    func initialNextGoalLowerCurrent() {
+        // 하프 사이클 중 5K로 낮춤 → 하프 기준 추천 풀코스
+        let pick = CollectionEngine.initialNextGoal(cycleGoal: .half, cycleGoalSeconds: 0,
+                                                    currentGoal: .fiveK, currentSeconds: 0)
+        #expect(pick.distance == .full)
+        #expect(pick.seconds == 0)
+        // 풀 3:30:00 사이클 중 4:00:00으로 늦춤 → 3:30:00 기준 추천 2:59:00
+        let slower = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 3 * 3_600 + 30 * 60,
+                                                      currentGoal: .full, currentSeconds: 4 * 3_600)
+        #expect(slower.seconds == 3 * 3_600 - 60)
+        // 풀 사이클 중 목표를 지움 → 풀 기준 추천 3:59:00
+        let cleared = CollectionEngine.initialNextGoal(cycleGoal: .full, cycleGoalSeconds: 0,
+                                                       currentGoal: nil, currentSeconds: 0)
+        #expect(cleared.distance == .full)
+        #expect(cleared.seconds == 4 * 3_600 - 60)
     }
 }
 
@@ -185,5 +263,47 @@ struct CollectionCacheTests {
         #expect(loaded.count == 2)
         #expect(loaded.allSatisfy { $0.species == .swallow })
         #expect(Set(loaded.map(\.id)).count == 2)
+    }
+}
+
+/// 도감 스토어 수집 — 저장 성공 여부를 호출부에 돌려주는지 (이슈 #67).
+/// 실패를 삼키면 홈이 사이클을 초기화해 수집한 새를 잃는다.
+@Suite("도감 스토어 수집")
+@MainActor
+struct CollectionStoreAddTests {
+
+    private func makeBird() throws -> CollectedBird {
+        let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
+        return CollectionEngine.collect(distance: .half, goalSeconds: 0,
+                                        cycleStartedAt: now.addingTimeInterval(-30 * 86_400),
+                                        now: now)
+    }
+
+    @Test("저장에 성공하면 true — 메모리와 파일에 모두 남는다")
+    func addSucceeds() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("collection-store-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let bird = try makeBird()
+        let store = CollectionStore(directory: dir)
+        #expect(store.add(bird))
+        #expect(store.birds.count == 1)
+        #expect(CollectionCache.load(from: dir).count == 1)
+    }
+
+    @Test("저장에 실패하면 false — 메모리에도 넣지 않아 재시도 때 중복되지 않는다")
+    func addFailsWhenDirectoryIsFile() throws {
+        // 디렉터리 자리에 일반 파일을 둬서 file/collection.json 쓰기가 반드시 실패하게 한다
+        let notADirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("collection-store-file-\(UUID().uuidString)")
+        try Data("x".utf8).write(to: notADirectory)
+        defer { try? FileManager.default.removeItem(at: notADirectory) }
+
+        let bird = try makeBird()
+        let store = CollectionStore(directory: notADirectory)
+        #expect(!store.add(bird))
+        #expect(store.birds.isEmpty)
     }
 }

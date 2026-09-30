@@ -67,9 +67,13 @@ enum HomeBriefingEngine {
             let over = String(format: "%.1f", max(0, distance.overKm))
             return "지난주보다 \(pct) 늘었어요 — 안전선을 \(over)km 넘겼습니다. 다음 주는 조금 접어 두세요."
         }
+        // ACWR caution은 높은 쪽(1.3~1.5)과 낮은 쪽(<0.8) 두 갈래다 — 문장을 나눈다
         if let acwr = report.acwr, acwr.tone == .caution {
             let ratio = String(format: "%.1f", acwr.ratio)
-            return "평소보다 \(ratio)배 달리고 있어요. 아직 괜찮지만, 한 칸만 낮춰도 좋습니다."
+            if acwr.ratio >= 1.3 {
+                return "평소보다 \(ratio)배 달리고 있어요. 아직 괜찮지만, 한 칸만 낮춰도 좋습니다."
+            }
+            return "평소보다 \(ratio)배로 쉬어 가는 중이에요. 다시 시작할 땐 가볍게 한 번부터."
         }
         return nil
     }
@@ -142,11 +146,13 @@ enum HomeBriefingEngine {
         }
     }
 
-    /// 이번 달력 주(ISO 8601, 월요일 시작) 러닝 횟수
+    /// 이번 달력 주(ISO 8601, 월요일 시작) 러닝 횟수 — 주간 목표와 같은 1km 이상 기준
     private static func weekRunCount(runs: [RunSummary], now: Date) -> Int {
         var calendar = Calendar(identifier: .iso8601)
         calendar.timeZone = .current
         guard let week = calendar.dateInterval(of: .weekOfYear, for: now) else { return 0 }
-        return runs.filter { $0.start >= week.start && $0.start <= now }.count
+        return runs.filter {
+            $0.start >= week.start && $0.start <= now && GrowthEngine.countsAsCompletedRun($0)
+        }.count
     }
 }

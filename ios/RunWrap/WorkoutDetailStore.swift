@@ -16,10 +16,10 @@ struct WorkoutDetail {
     var zones: [Double]?          // Z1~Z5 비율 (합 1)
     var cadenceSpm: Double?
     var elevationM: Double?
-    var hrMaxEstimated = false    // true면 생년월일이 없어 HRmax 190 폴백
-    /// 세션 최고 심박(bpm)과 존 계산에 쓴 HRmax — 존 카드의 "최고 심박 · HRmax 대비 %" 라인 재료
+    /// 세션 최고 심박(bpm) — 존 카드의 "최고 심박 · HRmax 대비 %" 라인 재료
     var maxHeartRateBpm: Double?
-    var hrMaxBpm: Double?
+    /// 존 계산에 쓴 심박 기준 — 존 카드의 방식·HRmax 출처·HRmax 대비 % 재료 (이슈 #56)
+    var heartRate: HeartRateProfile?
     /// 심박 드리프트(Pw:HR 디커플링) — 존·스플릿용 샘플을 재사용해 추가 쿼리 없음 (제안 문서 A2)
     var drift: DriftEngine.Result?
 
@@ -28,38 +28,101 @@ struct WorkoutDetail {
     var groundContactMs: Double?
     var strideLengthM: Double?
     var runningPowerW: Double?
+
+    /// Apple 운동 노력도 — iOS 18 미만이거나 기록이 없으면 nil(미노출) (이슈 #178)
+    var effort: EffortScore?
+}
+
+/// Apple 운동 노력도 (이슈 #178) — 워치에서 입력한 1~10 척도. 직접 입력 > Apple 추정
+struct EffortScore: Equatable {
+    let score: Double
+    let isEstimated: Bool
+
+    /// Apple 척도 구간: 1~3 편안 · 4~6 보통 · 7~8 힘듦 · 9~10 전력
+    var label: String { Self.label(for: score) }
+    var sourceLabel: String { isEstimated ? "Apple 추정" : "직접 입력" }
+
+    /// 구간 경계는 정수 척도 사이(3.5·6.5·8.5)에 둔다 — 추정값이 소수로 와도 가까운 구간에 붙는다
+    static func label(for score: Double) -> String {
+        if score < 3.5 { return "편안" }
+        if score < 6.5 { return "보통" }
+        if score < 8.5 { return "힘듦" }
+        return "전력"
+    }
 }
 
 @MainActor
 final class WorkoutDetailStore: ObservableObject {
     @Published private(set) var detail: WorkoutDetail?
     @Published private(set) var isLoading = false
-    /// 주법 기준선 재료 — 최근 28일 야외 세션들의 다이내믹스 스냅샷 (계획서 M4)
+    /// 워크아웃 조회 자체가 실패했는지 — '데이터 없음'(빈 detail)과 구분해 다시 시도를 띄운다.
+    /// 실패하면 detail을 nil로 둬 load() 재호출이 guard에 막히지 않는다 (이슈 #102)
+    @Published private(set) var loadFailed = false
+    /// 주법 기준선 재료 — 세션 직전 28일 야외 세션들의 다이내믹스 스냅샷 (계획서 M4)
     @Published private(set) var formSnapshots: [FormSnapshot] = []
+    /// 스냅샷 조회 중 — 이 동안 표본 부족 안내 대신 로딩 문구를 띄운다 (이슈 #92)
+    @Published private(set) var isLoadingSnapshots = false
+    /// 스냅샷 조회 세대 — 마지막으로 시작한 조회만 결과를 반영한다.
+    /// load()는 detail 조회 중 세대가 바뀌었으면 옛 others로 재조회하지 않는다
+    private var snapshotGeneration = 0
 
     private let store = HKHealthStore()
 
     /// others: 기준선 재료 후보(전체 목록 그대로) — 창·표본 가드는 FormEngine이 건다
-    func load(run: RunSummary, others: [RunSummary] = []) async {
+    /// heartRate: 화면이 TrainingGuideEngine.heartRateProfile로 해석한 값만 받는다 —
+    /// 존 기준 산출을 엔진 한 곳으로 모은다 (이슈 #48·#56). 스토어 참조가 아니라 값만 받는다
+    func load(run: RunSummary, others: [RunSummary] = [], heartRate: HeartRateProfile) async {
         guard detail == nil, !isLoading else { return }
         isLoading = true
+        loadFailed = false
         defer { isLoading = false }
+        // detail 조회 동안 목록이 로드돼 화면이 reloadSnapshots를 이미 불렀다면
+        // 진입 시점의 (비어 있을 수 있는) others로 그 조회를 덮지 않는다 (이슈 #92)
+        let startGeneration = snapshotGeneration
         // 데모 모드에서는 HealthKit을 건드리지 않고 합성 상세를 만든다 (DemoMode)
         if DemoMode.isActive {
-            detail = Self.synthetic(for: run)
-            formSnapshots = Self.syntheticSnapshots(others: others, excluding: run.id)
+            detail = Self.synthetic(for: run, heartRate: heartRate)
         } else {
-            detail = await fetch(run: run)
-            formSnapshots = await fetchFormSnapshots(others: others, excluding: run.id)
+            detail = await fetch(run: run, heartRate: heartRate)
+            loadFailed = detail == nil
         }
+        guard snapshotGeneration == startGeneration else { return }
+        await reloadSnapshots(others: others, excluding: run)
+    }
+
+    /// 기준선 스냅샷만 다시 조회한다 — 진입 시 목록이 아직 로드 전이라 빈 목록으로
+    /// 한 번 불렸을 때, 목록이 로드되면 화면이 부른다. detail은 재조회하지 않는다 (이슈 #92)
+    func reloadSnapshots(others: [RunSummary], excluding run: RunSummary) async {
+        snapshotGeneration += 1
+        let generation = snapshotGeneration
+        isLoadingSnapshots = true
+        let snapshots = DemoMode.isActive
+            ? Self.syntheticSnapshots(others: others, excluding: run)
+            : await fetchFormSnapshots(others: others, excluding: run)
+        guard generation == snapshotGeneration else { return }  // 더 새 조회가 결과를 낸다
+        formSnapshots = snapshots
+        isLoadingSnapshots = false
     }
 
     // MARK: - 실기기: HealthKit 조회
 
-    private func fetch(run: RunSummary) async -> WorkoutDetail {
+    /// 워크아웃 조회가 에러로 실패하면 nil — 워크아웃은 있는데 경로·스플릿이 없는 정상 케이스
+    /// (실내 등)는 빈 detail을 돌려준다. 둘을 섞으면 실패가 '기록 없음'으로 굳는다 (이슈 #102)
+    private func fetch(run: RunSummary, heartRate: HeartRateProfile) async -> WorkoutDetail? {
         var detail = WorkoutDetail()
-        guard HKHealthStore.isHealthDataAvailable(),
-              let workout = try? await fetchWorkout(id: run.id) else { return detail }
+        guard HKHealthStore.isHealthDataAvailable() else { return detail }
+        let workout: HKWorkout
+        do {
+            guard let found = try await fetchWorkout(id: run.id) else { return detail }
+            workout = found
+        } catch {
+            return nil
+        }
+
+        // 운동 노력도는 실내·실외 모두 기록된다 — iOS 18 전용 API (이슈 #178)
+        if #available(iOS 18, *) {
+            detail.effort = await fetchEffortScore(of: workout)
+        }
 
         // 실내(트레드밀) 세션에는 경로·고도가 없다 — 쿼리 자체를 생략한다 (계획서 M1)
         if !run.isIndoor {
@@ -82,16 +145,21 @@ final class WorkoutDetailStore: ObservableObject {
         let bpmUnit = HKUnit.count().unitDivided(by: .minute())
         let hrSamples = (try? await fetchQuantitySamples(.heartRate, in: workout)) ?? []
         if !hrSamples.isEmpty {
-            let (hrMax, estimated) = heartRateMax()
-            detail.zones = Self.zoneFractions(samples: hrSamples, hrMax: hrMax)
-            detail.hrMaxEstimated = estimated
-            detail.hrMaxBpm = hrMax
-            detail.maxHeartRateBpm = hrSamples.map { $0.quantity.doubleValue(for: bpmUnit) }.max()
+            let points = hrSamples.map {
+                (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
+            }
+            detail.zones = TrainingGuideEngine.heartRateZones(samples: points, profile: heartRate)
+            detail.heartRate = heartRate
+            detail.maxHeartRateBpm = TrainingGuideEngine.sessionPeakBpm(points.map(\.bpm))
         }
 
-        let distanceSamples = (try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout)) ?? []
+        let distanceSamples = ((try? await fetchQuantitySamples(.distanceWalkingRunning, in: workout)) ?? [])
+            .map { (start: $0.startDate, end: $0.endDate, meters: $0.quantity.doubleValue(for: .meter())) }
+        // 오토포즈·신호 대기 구간 — 스플릿·드리프트에서 정지 시간을 뺀다 (이슈 #47)
+        let pauses = Self.pauses(of: workout, distanceSamples: distanceSamples)
         if !distanceSamples.isEmpty {
-            detail.splits = Self.splits(from: distanceSamples)
+            detail.splits = ActiveTimeline.splits(distanceSamples: distanceSamples, pauses: pauses)
+                .map { WorkoutDetail.Split(index: $0.index, paceSecPerKm: $0.paceSecPerKm) }
         }
 
         // 심박 드리프트 — 존·스플릿용으로 이미 가져온 샘플을 재사용한다 (추가 쿼리 없음, 제안 문서 A2)
@@ -100,12 +168,11 @@ final class WorkoutDetailStore: ObservableObject {
                 hrSamples: hrSamples.map {
                     (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
                 },
-                distanceSamples: distanceSamples.map {
-                    (start: $0.startDate, end: $0.endDate,
-                     meters: $0.quantity.doubleValue(for: .meter()))
-                },
+                distanceSamples: distanceSamples,
                 start: workout.startDate,
-                durationSec: workout.duration)
+                durationSec: workout.duration,
+                pauses: pauses,
+                end: workout.endDate)
         }
 
         // 케이던스: ① 평균 속도 ÷ 평균 보폭 (다이내믹스가 있는 워치)
@@ -119,6 +186,36 @@ final class WorkoutDetailStore: ObservableObject {
         return detail
     }
 
+    /// 워크아웃에 연결된 노력도 — 직접 입력이 있으면 그것, 없으면 Apple 추정, 둘 다 없으면 nil.
+    /// 노력도는 워크아웃이 끝난 뒤 따로 저장되는 샘플이라 관계 쿼리로 연결을 읽는다 (이슈 #178).
+    /// 콜백형 HKWorkoutEffortRelationshipQuery는 장기 실행 쿼리(stop 필요)라 1회성 async 래퍼인
+    /// 쿼리 디스크립터를 쓴다. 실패는 조용히 nil — 부가 정보라 화면을 막지 않는다
+    @available(iOS 18, *)
+    private func fetchEffortScore(of workout: HKWorkout) async -> EffortScore? {
+        let descriptor = HKWorkoutEffortRelationshipQueryDescriptor(
+            predicate: HKQuery.predicateForObject(with: workout.uuid),
+            anchor: nil, option: .default)  // 전부 받아 아래 규칙(직접 입력 > 추정)으로 고른다
+        guard let result = try? await descriptor.result(for: store) else { return nil }
+        let samples = result.relationships
+            .flatMap { $0.samples ?? [] }
+            .compactMap { $0 as? HKQuantitySample }
+        // 같은 종류가 여러 개면(수정 입력 등) 가장 최근 것
+        func latest(_ id: HKQuantityTypeIdentifier) -> HKQuantitySample? {
+            let type = HKQuantityType(id)
+            let matching = samples.filter { $0.quantityType == type }
+            return matching.max { $0.endDate < $1.endDate }
+        }
+        if let manual = latest(.workoutEffortScore) {
+            return EffortScore(score: manual.quantity.doubleValue(for: .appleEffortScore()),
+                               isEstimated: false)
+        }
+        if let estimated = latest(.estimatedWorkoutEffortScore) {
+            return EffortScore(score: estimated.quantity.doubleValue(for: .appleEffortScore()),
+                               isEstimated: true)
+        }
+        return nil
+    }
+
     /// 워크아웃 구간 샘플 평균 — 다이내믹스는 세션 평균 하나면 충분하다 (계획서 M4)
     private func average(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
                          in workout: HKWorkout) async -> Double? {
@@ -128,13 +225,14 @@ final class WorkoutDetailStore: ObservableObject {
             / Double(samples.count)
     }
 
-    /// 기준선 재료 수집 — 최근 28일 야외 세션의 케이던스·진폭·접촉시간.
+    /// 기준선 재료 수집 — 세션 직전 28일 야외 세션의 케이던스·진폭·접촉시간.
+    /// 창은 '지금'이 아니라 run.start 기준 — 과거 세션을 그 이후 기록과 비교하지 않는다 (이슈 #92).
     /// 케이던스는 목록(HealthStore)이 백필한 값을 재사용해 세션당 쿼리를 줄인다.
     private func fetchFormSnapshots(others: [RunSummary],
-                                    excluding id: UUID) async -> [FormSnapshot] {
-        let cutoff = Date().addingTimeInterval(-FormEngine.windowDays * 86_400)
+                                    excluding run: RunSummary) async -> [FormSnapshot] {
+        let cutoff = run.start.addingTimeInterval(-FormEngine.windowDays * 86_400)
         let candidates = others
-            .filter { !$0.isIndoor && $0.id != id && $0.start >= cutoff }
+            .filter { !$0.isIndoor && $0.id != run.id && $0.start >= cutoff && $0.start < run.start }
             .prefix(20)  // 쿼리 상한 — 기준선 평균에는 20회면 충분하다
         var snapshots: [FormSnapshot] = []
         for other in candidates {
@@ -236,71 +334,45 @@ final class WorkoutDetailStore: ObservableObject {
         }
     }
 
-    /// Tanaka 공식 HRmax = 208 − 0.7×나이. 생년월일이 없으면 190 폴백(추정 표기)
-    private func heartRateMax() -> (Double, estimated: Bool) {
-        if let dob = try? store.dateOfBirthComponents(),
-           let birthYear = dob.year {
-            let age = Calendar.current.component(.year, from: Date()) - birthYear
-            if (10...100).contains(age) { return (208 - 0.7 * Double(age), false) }
-        }
-        return (190, true)
-    }
-
-    /// 심박 샘플 → Z1~Z5 시간 비율. 샘플 간격(≤15초 캡)으로 가중한다.
-    static func zoneFractions(samples: [HKQuantitySample], hrMax: Double) -> [Double] {
-        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
-        var seconds = [Double](repeating: 0, count: 5)
-        for (i, sample) in samples.enumerated() {
-            let bpm = sample.quantity.doubleValue(for: bpmUnit)
-            let weight: Double
-            if i + 1 < samples.count {
-                weight = min(samples[i + 1].startDate.timeIntervalSince(sample.startDate), 15)
-            } else {
-                weight = 5
-            }
-            let ratio = bpm / hrMax
-            let zone = ratio < 0.6 ? 0 : ratio < 0.7 ? 1 : ratio < 0.8 ? 2 : ratio < 0.9 ? 3 : 4
-            seconds[zone] += max(weight, 0)
-        }
-        let total = seconds.reduce(0, +)
-        guard total > 0 else { return [0, 0, 0, 0, 0] }
-        return seconds.map { $0 / total }
-    }
-
-    /// 누적 거리 샘플 → km 스플릿. km 경계는 샘플 사이를 선형 보간한다.
-    /// index는 실제 km 번호 — 데이터 오류로 건너뛴 구간이 있어도 눈금이 밀리지 않는다.
-    static func splits(from samples: [HKQuantitySample]) -> [WorkoutDetail.Split] {
-        var result: [WorkoutDetail.Split] = []
-        var cumulative: Double = 0        // m
-        var boundaryTime: Date? = samples.first?.startDate
-        var nextBoundary: Double = 1000
-
-        for sample in samples {
-            let meters = sample.quantity.doubleValue(for: .meter())
-            let before = cumulative
-            cumulative += meters
-            while cumulative >= nextBoundary, meters > 0 {
-                let fraction = (nextBoundary - before) / meters
-                let duration = sample.endDate.timeIntervalSince(sample.startDate)
-                let crossing = sample.startDate.addingTimeInterval(duration * fraction)
-                if let start = boundaryTime {
-                    let sec = crossing.timeIntervalSince(start)
-                    if sec > 60 {  // 60초/km 미만은 데이터 오류로 본다
-                        result.append(WorkoutDetail.Split(index: Int(nextBoundary / 1000),
-                                                          paceSecPerKm: sec))
-                    }
+    /// 워크아웃 이벤트 → 정지 구간. 사용자 정지와 모션(오토포즈) 정지를 모두 읽는다.
+    /// 이벤트가 없는 기록은 벽시계와 활동 시간이 30초 넘게 어긋날 때만 거리 샘플 공백으로
+    /// 추정한다 — 정지 없는 세션의 GPS 공백까지 빼지 않기 위해서 (감사 리포트 M6)
+    private static func pauses(of workout: HKWorkout,
+                               distanceSamples: [(start: Date, end: Date, meters: Double)]) -> [DateInterval] {
+        let markers: [(date: Date, kind: ActiveTimeline.Marker)] = (workout.workoutEvents ?? [])
+            .compactMap { event in
+                switch event.type {
+                case .pause: (date: event.dateInterval.start, kind: .pause)
+                case .resume: (date: event.dateInterval.start, kind: .resume)
+                case .motionPaused: (date: event.dateInterval.start, kind: .motionPause)
+                case .motionResumed: (date: event.dateInterval.start, kind: .motionResume)
+                default: nil
                 }
-                boundaryTime = crossing
-                nextBoundary += 1000
             }
+        if !markers.isEmpty {
+            return ActiveTimeline.pauses(markers: markers, start: workout.startDate, end: workout.endDate)
         }
-        return result
+        let unaccounted = workout.endDate.timeIntervalSince(workout.startDate) - workout.duration
+        guard unaccounted > 30 else { return [] }
+        return ActiveTimeline.gapPauses(distanceSamples)
     }
 
-    // MARK: - 데모 모드: 합성 데이터 (run.id 시드 — 같은 세션은 항상 같은 모양)
+    // MARK: - 데모 모드: 합성 데이터 (syntheticSeed — 같은 세션은 항상 같은 모양)
 
-    static func synthetic(for run: RunSummary) -> WorkoutDetail {
-        var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)))
+    /// 합성 시드 — run.id.hashValue는 프로세스마다 달라져(Hasher 무작위 시드) 쓰지 않는다.
+    /// uuid 16바이트 + 시작 시각 비트 패턴을 FNV-1a(64비트)로 섞는다 (이슈 #102)
+    nonisolated static func syntheticSeed(for run: RunSummary) -> UInt64 {
+        let idBytes = withUnsafeBytes(of: run.id.uuid) { Array($0) }
+        let startBytes = withUnsafeBytes(of: run.start.timeIntervalSince1970.bitPattern.littleEndian) { Array($0) }
+        var hash: UInt64 = 0xCBF2_9CE4_8422_2325          // FNV-1a 64비트 오프셋 basis
+        for byte in idBytes + startBytes {
+            hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01B3  // FNV 64비트 소수
+        }
+        return hash
+    }
+
+    static func synthetic(for run: RunSummary, heartRate: HeartRateProfile) -> WorkoutDetail {
+        var rng = SplitMix64(seed: syntheticSeed(for: run))
         var detail = WorkoutDetail()
 
         let km = run.distanceKm ?? 8
@@ -335,8 +407,7 @@ final class WorkoutDetailStore: ObservableObject {
         var zones = [0.08, 0.22, 0.44, 0.20, 0.06].map { $0 + (rng.unit() - 0.5) * 0.04 }
         let sum = zones.reduce(0, +)
         zones = zones.map { max($0, 0.01) / sum }
-        detail.zones = zones
-        detail.hrMaxEstimated = true
+        detail.zones = zones   // 합성 비율은 존 방식과 무관하다 (데모 한계 — Karvonen 계산은 엔진 테스트가 맡는다)
 
         let dynamics = syntheticDynamics(for: run)
         detail.cadenceSpm = dynamics.cadenceSpm
@@ -349,8 +420,13 @@ final class WorkoutDetailStore: ObservableObject {
         }
 
         // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다
-        detail.hrMaxBpm = 190  // 합성은 생년월일이 없어 폴백 HRmax와 맞춘다
-        detail.maxHeartRateBpm = min((run.avgHeartRate ?? 150) + 22 + rng.unit() * 12, 188)
+        // 실기기와 같은 경로로 심박 기준을 주입받는다 (이슈 #48·#56). 세션 최고 심박은 HRmax 관찰 표본과
+        // 같은 run.maxHeartRate를 쓰고 HRmax로 캡한다 — 데모에서 "HRmax의 104%"가 나오지 않게.
+        // jitter는 maxHeartRate가 없을 때만 쓰지만 rng 호출 순서 유지를 위해 항상 뽑는다
+        detail.heartRate = heartRate
+        let jitter = rng.unit()
+        let peak = run.maxHeartRate ?? (run.avgHeartRate ?? 150) + 22 + jitter * 12
+        detail.maxHeartRateBpm = min(peak, heartRate.hrMax)
         if run.durationSec >= 1_800 {
             // 후반 처짐 스플릿과 결이 맞는 완만한 양수 디커플링 (2~8%)
             let decoupling = 2 + rng.unit() * 6
@@ -360,6 +436,22 @@ final class WorkoutDetailStore: ObservableObject {
                                               secondHalfEF: firstEF / (1 + decoupling / 100),
                                               tone: decoupling < 5 ? .steady : .caution)
         }
+
+        // 신호 대기 시나리오 세션은 합성 샘플을 실제 엔진에 통과시켜 위 난수 값을 덮어쓴다 —
+        // 정지 구간 제외가 화면에서 보이게 하는 검증용 (이슈 #47)
+        if let scenario = DemoData.pauseScenario(for: run) {
+            detail.splits = ActiveTimeline.splits(distanceSamples: scenario.distance, pauses: scenario.pauses)
+                .map { WorkoutDetail.Split(index: $0.index, paceSecPerKm: $0.paceSecPerKm) }
+            detail.drift = DriftEngine.compute(hrSamples: scenario.hr,
+                                               distanceSamples: scenario.distance,
+                                               start: run.start,
+                                               durationSec: run.durationSec,
+                                               pauses: scenario.pauses,
+                                               end: scenario.end)
+        }
+
+        // 노력도 합성 — 4~8 정수(Apple 추정). 맨 끝에서 뽑아 위 값들의 재현성을 깨지 않는다 (이슈 #178)
+        detail.effort = EffortScore(score: Double(4 + Int(rng.unit() * 5)), isEstimated: true)
         return detail
     }
 
@@ -368,7 +460,7 @@ final class WorkoutDetailStore: ObservableObject {
     static func syntheticDynamics(for run: RunSummary)
         -> (cadenceSpm: Double, oscillationCm: Double?, contactMs: Double?,
             strideM: Double?, powerW: Double?) {
-        var rng = SplitMix64(seed: UInt64(bitPattern: Int64(run.id.hashValue)) &+ 0x51DE)
+        var rng = SplitMix64(seed: syntheticSeed(for: run) &+ 0x51DE)
         let cadence = 163 + rng.unit() * 14
         guard !run.isIndoor else {
             return (cadenceSpm: cadence, oscillationCm: nil, contactMs: nil,
@@ -383,10 +475,10 @@ final class WorkoutDetailStore: ObservableObject {
     }
 
     /// 기준선 스냅샷 합성 — 필터 기준은 실기기 fetchFormSnapshots와 동일
-    static func syntheticSnapshots(others: [RunSummary], excluding id: UUID) -> [FormSnapshot] {
-        let cutoff = Date().addingTimeInterval(-FormEngine.windowDays * 86_400)
+    static func syntheticSnapshots(others: [RunSummary], excluding run: RunSummary) -> [FormSnapshot] {
+        let cutoff = run.start.addingTimeInterval(-FormEngine.windowDays * 86_400)
         return others
-            .filter { !$0.isIndoor && $0.id != id && $0.start >= cutoff }
+            .filter { !$0.isIndoor && $0.id != run.id && $0.start >= cutoff && $0.start < run.start }
             .map { other in
                 let dynamics = syntheticDynamics(for: other)
                 return FormSnapshot(id: other.id, start: other.start,
@@ -419,7 +511,8 @@ final class WorkoutDetailStore: ObservableObject {
     }
 }
 
-private extension NSPredicate {
+/// HealthStore의 베스트 에포트 백필도 같은 규칙을 쓴다 (이슈 #166)
+extension NSPredicate {
     /// 이 워크아웃에 연결된 샘플만
     static func linked(to workout: HKWorkout) -> NSPredicate {
         HKQuery.predicateForObjects(from: workout)

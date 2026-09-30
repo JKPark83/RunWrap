@@ -17,6 +17,8 @@ struct WeeklyBarsChart: View {
     var valueText: (Double) -> String = { Format.km($0) + " km" }
     /// 막대 위 상시 표시용 짧은 수치 — 단위 없이 숫자만 (슬롯 폭이 좁다)
     var barValueText: (Double) -> String = { Format.km($0) }
+    /// false면 막대 위 값과 콜아웃 수치를 감춘다 — 런린이 주간 거리 "문장만" (§4, 이슈 #119)
+    var showsValues = true
 
     @State private var selected: Int? = nil   // WeekBar.index
 
@@ -62,7 +64,7 @@ struct WeeklyBarsChart: View {
                 HStack(alignment: .bottom, spacing: 0) {
                     ForEach(weeks) { week in
                         VStack(spacing: 3) {
-                            if week.km > 0 {
+                            if showsValues, week.km > 0 {
                                 Text(barValueText(week.km))
                                     .font(.system(size: 8.5,
                                                   weight: week.isCurrent ? .semibold : .regular,
@@ -70,6 +72,7 @@ struct WeeklyBarsChart: View {
                                     .foregroundStyle(week.isCurrent ? currentColor : RR.text3)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.7)
+                                    .accessibilityHidden(true)   // 막대 요소의 값으로 읽는다
                             }
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(week.isCurrent ? currentColor : RR.barFill)
@@ -81,6 +84,10 @@ struct WeeklyBarsChart: View {
                         .onTapGesture {
                             selected = selected == week.index ? nil : week.index
                         }
+                        // VoiceOver: 막대 하나 = 요소 하나, 콜아웃과 같은 주·수치 문자열 (이슈 #160)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(week.label)
+                        .accessibilityValue(showsValues ? valueText(week.km) : "")
                     }
                 }
 
@@ -100,7 +107,7 @@ struct WeeklyBarsChart: View {
                 }
 
                 if let selected, let week = weeks.first(where: { $0.index == selected }) {
-                    ChartCallout(text: "\(week.label) · \(valueText(week.km))")
+                    ChartCallout(text: showsValues ? "\(week.label) · \(valueText(week.km))" : week.label)
                         .position(x: calloutX(slot: slot, width: width, index: selected), y: 13)
                 }
             }
@@ -118,6 +125,7 @@ struct WeeklyBarsChart: View {
                 }
             }
             .padding(.top, 8)
+            .accessibilityHidden(true)   // 주 라벨은 막대 요소의 라벨로 읽는다 (이슈 #160)
         }
         .frame(width: width)
     }
@@ -164,6 +172,9 @@ struct ChartCallout: View {
 struct AcwrGauge: View {
     let ratio: Double
 
+    /// 안전 구간 표기 — 게이지 라벨과 VoiceOver 값이 같이 쓴다
+    private static let safeZoneText = "0.8–1.3 안전"
+
     // 시안 좌표계 320×152 기준: 중심 (160,124), 반지름 100
     private let designSize = CGSize(width: 320, height: 152)
 
@@ -190,7 +201,7 @@ struct AcwrGauge: View {
                     .font(.system(size: 10 * s, design: .monospaced))
                     .foregroundStyle(RR.text3)
                     .position(x: 60 * s, y: 138 * s)
-                Text("0.8–1.3 안전")
+                Text(Self.safeZoneText)
                     .font(.system(size: 10 * s, design: .monospaced))
                     .foregroundStyle(RR.pos)
                     .position(x: 138 * s, y: 54 * s)  // 초록 호와 겹치지 않는 오목면 안쪽
@@ -201,6 +212,10 @@ struct AcwrGauge: View {
             }
         }
         .aspectRatio(designSize.width / designSize.height, contentMode: .fit)
+        // VoiceOver: 게이지 전체를 한 요소로 — 현재 값 + 안전 구간 (이슈 #160)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("ACWR")
+        .accessibilityValue(String(format: "%.2f", ratio) + ", " + Self.safeZoneText)
     }
 
     /// 값 → 각도: 0.5가 왼쪽(180°), 2.0이 오른쪽(360°)
@@ -308,6 +323,25 @@ struct TrendLineChart: View {
                 .foregroundStyle(RR.text3)
             }
         }
+        // VoiceOver: 차트 전체를 한 요소로 — 첫 점 → 마지막 점 요약 (이슈 #160)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("추세")
+        .accessibilityValue(Self.accessibilitySummary(points: points, labels: pointLabels,
+                                                      valueText: valueText))
+    }
+
+    /// VoiceOver 요약 — "8월 1째주 12.3에서 8월 4째주 14.1". 점 하나면 그 점만, 없으면 빈 문자열.
+    /// 시기·수치 문자열은 탭 콜아웃과 같은 `pointLabels`·`valueText`를 쓴다.
+    static func accessibilitySummary(points: [Double], labels: [String]?,
+                                     valueText: (Double) -> String) -> String {
+        func describe(_ index: Int) -> String {
+            let value = valueText(points[index])
+            guard let labels, labels.indices.contains(index) else { return value }
+            return "\(labels[index]) \(value)"
+        }
+        guard let last = points.indices.last else { return "" }
+        guard last > 0 else { return describe(0) }
+        return "\(describe(0))에서 \(describe(last))"
     }
 
     /// 선택 표식 — 세로 가이드선 + 링 도트 + 콜아웃
@@ -445,6 +479,10 @@ struct SplitBarsChart: View {
                         .onTapGesture {
                             selected = selected == split.index ? nil : split.index
                         }
+                        // VoiceOver: 막대 하나 = 요소 하나, 콜아웃과 같은 구간·페이스 문자열 (이슈 #160)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(split.index)km")
+                        .accessibilityValue(Format.pace(split.paceSecPerKm))
                 }
             }
 
@@ -484,6 +522,7 @@ struct SplitBarsChart: View {
                     }
             }
         }
+        .accessibilityHidden(true)   // km 눈금은 막대 요소의 라벨로 읽는다 (이슈 #160)
     }
 
     /// 라벨이 서로 붙지 않는 최소 간격 (30pt 확보)
@@ -497,7 +536,8 @@ struct ZoneBarView: View {
     /// Z1~Z5 비율 (합 1.0)
     let fractions: [Double]
 
-    private let colors: [Color] = [RR.barFill, RR.pos.opacity(0.55), RR.pos, RR.warn, RR.dang]
+    /// Z1~Z5 색 — 주별 누적 막대(ZoneStackedBarsChart)와 공용
+    static let colors: [Color] = [RR.barFill, RR.pos.opacity(0.55), RR.pos, RR.warn, RR.dang]
 
     var body: some View {
         VStack(spacing: 12) {
@@ -506,7 +546,7 @@ struct ZoneBarView: View {
                 HStack(spacing: 2) {
                     ForEach(Array(fractions.enumerated()), id: \.offset) { i, f in
                         Rectangle()
-                            .fill(colors[min(i, colors.count - 1)])
+                            .fill(Self.colors[min(i, Self.colors.count - 1)])
                             .frame(width: max(0, (geo.size.width - gaps) * CGFloat(f)))
                     }
                 }
@@ -528,6 +568,120 @@ struct ZoneBarView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - 주별 심박존 누적 막대
+
+/// 주별 Z1~Z5 누적 시간 스택 막대 (이슈 #165) — 아래부터 Z1…Z5, 색은 ZoneBarView와 같다.
+/// 4주뿐이라 슬롯이 넓어 막대 위에 그 주 총 시간을 상시 표시하고(작업 지침 차트 규칙),
+/// 막대를 탭하면 주·총 시간·이지 비율 콜아웃을 띄운다.
+struct ZoneStackedBarsChart: View {
+    /// 오래된 → 최신 — 마지막이 이번 주
+    let weeks: [ZoneDistribution.WeekBar]
+    var chartHeight: CGFloat = 84
+
+    @State private var selected: Int? = nil   // weeks 인덱스
+
+    private let labelHeight: CGFloat = 22
+    /// 막대 위 값 텍스트가 차지하는 높이 — 막대 스케일은 이만큼 뺀 높이를 쓴다
+    private let valueReserve: CGFloat = 13
+
+    private var scaleMax: Double {
+        let peak = weeks.map { $0.zoneSeconds.reduce(0, +) }.max() ?? 0
+        return peak > 0 ? peak * 1.08 : 1
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let slot = geo.size.width / CGFloat(max(weeks.count, 1))
+            VStack(spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        ForEach(Array(weeks.enumerated()), id: \.offset) { index, week in
+                            bar(week, index: index, slot: slot)
+                        }
+                    }
+
+                    if let selected, weeks.indices.contains(selected) {
+                        ChartCallout(text: "\(weeks[selected].label) · \(Self.valueText(weeks[selected]))")
+                            .position(x: calloutX(slot: slot, width: geo.size.width, index: selected), y: 13)
+                    }
+                }
+                .frame(height: chartHeight)
+
+                HStack(spacing: 0) {
+                    ForEach(Array(weeks.enumerated()), id: \.offset) { index, week in
+                        let isCurrent = index == weeks.count - 1
+                        Text(week.label)
+                            .font(.system(size: 9.5, weight: isCurrent ? .bold : .regular,
+                                          design: .monospaced))
+                            .foregroundStyle(isCurrent ? RR.text : RR.text3)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .frame(width: slot)
+                    }
+                }
+                .padding(.top, 8)
+                .accessibilityHidden(true)   // 주 라벨은 막대 요소의 라벨로 읽는다 (이슈 #160)
+            }
+        }
+        .frame(height: chartHeight + labelHeight)
+    }
+
+    private func bar(_ week: ZoneDistribution.WeekBar, index: Int, slot: CGFloat) -> some View {
+        let total = week.zoneSeconds.reduce(0, +)
+        let height = (chartHeight - valueReserve) * CGFloat(total / scaleMax)
+        let width = max(6, min(slot - 16, 40))
+        return VStack(spacing: 3) {
+            if total > 0 {
+                Text(Format.duration(total))
+                    .font(.system(size: 8.5, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .accessibilityHidden(true)   // 막대 요소의 값으로 읽는다
+                VStack(spacing: 0) {
+                    ForEach((0..<5).reversed(), id: \.self) { zone in
+                        Rectangle()
+                            .fill(ZoneBarView.colors[zone])
+                            .frame(height: height * CGFloat(week.zoneSeconds[zone] / total))
+                    }
+                }
+                .frame(width: width)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            } else {
+                // 달리지 않은 주 — 0이어도 흔적은 보이게
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(RR.line)
+                    .frame(width: width, height: 4)
+            }
+        }
+        .opacity(selected == nil || selected == index ? 1 : 0.45)
+        .frame(width: slot, height: chartHeight, alignment: .bottom)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selected = selected == index ? nil : index
+        }
+        // VoiceOver: 막대 하나 = 요소 하나, 콜아웃과 같은 주·수치 문자열 (이슈 #160)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(week.label)
+        .accessibilityValue(Self.valueText(week))
+    }
+
+    /// 콜아웃·VoiceOver 수치 — "1:23:40 · 이지 72%", 달리지 않은 주는 "기록 없음"
+    static func valueText(_ week: ZoneDistribution.WeekBar) -> String {
+        let total = week.zoneSeconds.reduce(0, +)
+        guard total > 0 else { return "기록 없음" }
+        let easy = Int(((week.zoneSeconds[0] + week.zoneSeconds[1]) / total * 100).rounded())
+        return "\(Format.duration(total)) · 이지 \(easy)%"
+    }
+
+    /// 콜아웃이 차트 밖으로 잘리지 않게 중심 x를 안쪽으로 조인다
+    private func calloutX(slot: CGFloat, width: CGFloat, index: Int) -> CGFloat {
+        let margin: CGFloat = 70
+        let x = slot * (CGFloat(index) + 0.5)
+        return min(max(x, margin), max(width - margin, margin))
     }
 }
 

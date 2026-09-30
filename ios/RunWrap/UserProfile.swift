@@ -104,6 +104,9 @@ enum ProfileKey {
     static let purposes = "profile.purposes"
     /// 주간 러닝 목표 횟수 — 성장 XP의 주간 보너스 분모이자 홈 목표 칩의 기준
     static let weeklyGoal = "profile.weeklyGoal"
+    /// 주간 목표 변경 이력 (`[WeeklyGoalChange]` JSON Data) — 없으면 변경 없음.
+    /// 바뀐 목표는 다음 주부터 보너스 판정에 적용한다 (이슈 #108, #116). 읽기·쓰기는 `WeeklyGoalChangeLog`로만 한다
+    static let weeklyGoalChanges = "profile.weeklyGoalChanges"
     /// 온보딩 완료 시각 (timeIntervalSince1970)
     static let onboardedAt = "profile.onboardedAt"
     /// 승급 제안을 거절한 시각 — 4주간 다시 묻지 않는다 (§3)
@@ -116,6 +119,52 @@ enum ProfileKey {
     /// 대회 날짜 (timeIntervalSince1970) — 0이면 미설정. 있으면 훈련 가이드가
     /// D-day 주기화(기초→강화→피크→테이퍼)로 주간 처방을 조절한다
     static let raceDate = "profile.raceDate"
+    /// 최대 심박 수동 입력(bpm) — 0이면 미설정 → TrainingGuideEngine 추정(관찰 최대·Tanaka·190) 사용 (이슈 #56)
+    static let hrMaxManual = "profile.hrMaxManual"
+    /// 안정 심박 수동 입력(bpm) — 0이면 미설정 → HealthKit 최근값 사용 (이슈 #56)
+    static let restingHRManual = "profile.restingHRManual"
+    /// 심박 존 방식 (HeartRateZoneMethod rawValue) — 빈 문자열이면 %HRmax (이슈 #56)
+    static let hrZoneMethod = "profile.hrZoneMethod"
+}
+
+/// 주간 목표 변경 이력 읽기·쓰기 — 저장 형식과 옛 키 이관을 한곳에 둔다 (이슈 #116).
+///
+/// #108은 (시각, 이전 목표) 1건을 두 키에 따로 저장했다. 첫 읽기 때 그 두 키를 1건짜리 이력으로
+/// 옮기고 지운다 — 홈·설정·재진단·백업 중 어디서 먼저 읽어도 같은 결과가 되도록 `load`가 처리한다.
+enum WeeklyGoalChangeLog {
+    /// #108의 옛 키 — 마지막 변경 시각(timeIntervalSince1970, 0이면 없음)과 변경 직전 목표. 이관용으로만 읽는다
+    static let legacyChangedAtKey = "profile.weeklyGoalChangedAt"
+    static let legacyBeforeKey = "profile.weeklyGoalBefore"
+
+    /// 저장된 이력(시각 오름차순). 새 키가 없고 옛 두 키가 있으면 1건짜리 이력으로 이관해 돌려준다
+    static func load(defaults: UserDefaults) -> [WeeklyGoalChange] {
+        if let data = defaults.data(forKey: ProfileKey.weeklyGoalChanges) {
+            return decode(data)
+        }
+        let legacyAt = defaults.double(forKey: legacyChangedAtKey)
+        guard legacyAt > 0 else { return [] }
+        let history = [WeeklyGoalChange(at: Date(timeIntervalSince1970: legacyAt),
+                                        before: defaults.integer(forKey: legacyBeforeKey))]
+        save(history, defaults: defaults)
+        return history
+    }
+
+    /// 이력을 저장한다 — 비어 있으면 키를 지운다. 옛 키는 항상 지워 이관이 되살아나지 않게 한다
+    static func save(_ history: [WeeklyGoalChange], defaults: UserDefaults) {
+        if history.isEmpty {
+            defaults.removeObject(forKey: ProfileKey.weeklyGoalChanges)
+        } else {
+            defaults.set(try? JSONEncoder().encode(history), forKey: ProfileKey.weeklyGoalChanges)
+        }
+        defaults.removeObject(forKey: legacyChangedAtKey)
+        defaults.removeObject(forKey: legacyBeforeKey)
+    }
+
+    /// 저장 Data → 이력. 깨진 값은 변경 없음으로 읽는다
+    static func decode(_ data: Data?) -> [WeeklyGoalChange] {
+        guard let data else { return [] }
+        return (try? JSONDecoder().decode([WeeklyGoalChange].self, from: data)) ?? []
+    }
 }
 
 /// 성장 시스템 저장 키 (기획서 §5).
@@ -130,4 +179,51 @@ enum GrowthKey {
     /// 사이클 식별자 (UUID 문자열) — CloudKit 스냅샷 병합에서 같은 사이클인지 판정한다 (이슈 #29).
     /// 온보딩·사이클 전환 때 새로 발급하고, 없으면 백업 시점에 최초 1회 만든다
     static let cycleID = "growth.cycleID"
+    /// 이번 사이클의 목표 종목 (RaceDistance rawValue, 빈 문자열 = 목표 없음) — 사이클 시작 때 고정해
+    /// 세러모니의 새 종류 판정에 쓴다 (기획서 v0.7 §5 "새 종류는 그 사이클의 목표 수준이 정한다", 이슈 #110).
+    /// 설정·재진단으로 바뀌는 `ProfileKey.raceGoal`과 분리해, 성조 직전 목표 변경으로 종을 바꾸지 못하게 한다.
+    /// 키가 없으면(도입 전 사용자) 홈이 현재 raceGoal을 한 번 복사해 저장한다
+    static let cycleGoal = "growth.cycleGoal"
+    /// 이번 사이클의 목표 기록 (초) — `cycleGoal`과 함께 고정한다. 0이면 기록 미입력
+    static let cycleGoalSec = "growth.cycleGoalSec"
+    /// 백업 대상 값이 로컬에서 마지막으로 바뀐 시각 (timeIntervalSince1970) — 스냅샷 `updatedAt`의 원천 (이슈 #130).
+    /// 업로드 시각을 쓰면 오래된 백업을 복원한 기기가 뒤늦게 올릴 때 서버의 더 새 진행도를 이긴다.
+    /// 쓰기는 `ProgressSnapshot.markLocalChanged`로만 한다. 서버 본을 적용할 때는 그 본의 `updatedAt`을 기록한다
+    static let localChangedAt = "progress.localChangedAt"
+}
+
+/// 결산 리캡 홈 카드 닫힘 기록 (이슈 #167) — 열어 보거나 X를 누른 기간을 남겨 다시 띄우지 않는다.
+/// 기기 로컬 표시 상태라 백업(ProgressSnapshot) 대상이 아니다
+enum RecapKey {
+    /// 마지막으로 닫은 월간 결산 ("yyyy-MM", RecapEngine.dismissKey) — 빈 문자열이면 없음
+    static let dismissedMonth = "recap.dismissedMonth"
+    /// 마지막으로 닫은 연간 결산 ("yyyy") — 빈 문자열이면 없음
+    static let dismissedYear = "recap.dismissedYear"
+}
+
+/// 대회 탭 즐겨찾기·목표 대회 (이슈 #172) — 기기 로컬 표시 상태라 백업(ProgressSnapshot) 대상이 아니다
+enum RaceKey {
+    /// 즐겨찾기한 대회 번호 (`[Int]` JSON 문자열) — 읽기·쓰기는 `RaceFavorites`로만 한다
+    static let favorites = "race.favorites"
+    /// 목표 대회 번호 (Race.id) — 0이면 미지정. 홈 목표 대회 카드의 기준
+    static let targetID = "race.targetId"
+}
+
+/// 즐겨찾기 목록 직렬화 (이슈 #172) — @AppStorage에 배열을 둘 수 없어 JSON 문자열로 접는다
+enum RaceFavorites {
+    /// 저장 문자열 → 대회 번호. 비었거나 깨진 값은 즐겨찾기 없음으로 읽는다
+    static func decode(_ s: String) -> [Int] {
+        guard let data = s.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
+    }
+
+    static func encode(_ ids: [Int]) -> String {
+        guard let data = try? JSONEncoder().encode(ids) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// 있으면 빼고 없으면 뒤에 붙인다 — 별 버튼 한 번의 동작
+    static func toggled(_ ids: [Int], _ id: Int) -> [Int] {
+        ids.contains(id) ? ids.filter { $0 != id } : ids + [id]
+    }
 }

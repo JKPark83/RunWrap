@@ -12,6 +12,9 @@ enum RR {
     static let text2 = adaptive(0x54544E, 0xA8A79E)
     static let text3 = adaptive(0x8F8F86, 0x73736C)
     static let brand = adaptive(0xFF4D2E, 0xFF5A3C)
+    /// 브랜드(주황)·톤 채움 위 글자·아이콘 — 지금은 양쪽 흰색이지만,
+    /// 다크에서 브랜드가 밝아져 대비를 바꿔야 할 때 한 곳에서 일괄 조정하려고 토큰으로 둔다 (이슈 #85)
+    static let onBrand = adaptive(0xFFFFFF, 0xFFFFFF)
     static let pos = adaptive(0x0E9146, 0x35E077)
     /// 강수(비·눈) 심볼 전용 청색 — 웜 팔레트의 유일한 한랭 색. 날씨 아이콘 palette 렌더링에만 쓴다
     static let sky = adaptive(0x2E8BD9, 0x5AAEFF)
@@ -27,6 +30,10 @@ enum RR {
     static let line = alpha(black: 0.13, white: 0.11)
     /// 차트 막대 바탕 — light rgba(20,20,16,.09) / dark rgba(255,255,255,.10)
     static let barFill = alpha(black: 0.09, white: 0.10)
+    /// 카드 그림자 — 라이트는 옅은 검정, 다크는 배경이 거의 검정이라 그림자가 보이지 않아 0 (이슈 #85)
+    static let shadow = alpha(black: 0.04, white: 0.0)
+    /// 떠 있는 미리보기(공유 카드 등)용 진한 그림자 — 다크는 같은 이유로 0 (이슈 #85)
+    static let shadowStrong = alpha(black: 0.10, white: 0.0)
 
     static let brandSoft = soft(brand, 0.12, 0.18)
     static let posSoft = soft(pos, 0.12, 0.16)
@@ -89,8 +96,9 @@ private extension UIColor {
     }
 }
 
-/// 카드 상태 톤 4가지 — 시안의 배지/강조색 매핑 (과부하·주의·유지·개선)
-enum RRTone {
+/// 카드 상태 톤 4가지 — 시안의 배지/강조색 매핑 (과부하·주의·유지·개선).
+/// String·Codable은 위젯 스냅샷(App Group JSON)에 톤을 싣기 위해서다 (이슈 #181)
+enum RRTone: String, Codable {
     case overload, caution, steady, improving
 
     var color: Color {
@@ -163,7 +171,7 @@ struct RRCardModifier: ViewModifier {
         content
             .background(RR.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(RR.line))
-            .shadow(color: .black.opacity(0.04), radius: 1, y: 1)
+            .shadow(color: RR.shadow, radius: 1, y: 1)
     }
 }
 
@@ -243,5 +251,32 @@ enum Format {
         let ordinal = (calendar.component(.day, from: thursday) + 6) / 7
         let label = "\(month)월 \(ordinal)째주"
         return withYear ? "\(calendar.component(.year, from: thursday))년 \(label)" : label
+    }
+
+    /// "9월 30일 오후 3:12" — 날짜·시각 한 줄 표기 (설정의 마지막 iCloud 백업 시각, 이슈 #129).
+    /// 기기 로케일과 무관하게 한국어 고정, 시간대는 기기 설정을 따른다
+    static func monthDayTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ko_KR")
+        formatter.timeZone = .current
+        formatter.dateFormat = "M월 d일 a h:mm"
+        return formatter.string(from: date)
+    }
+
+    /// "이번 주" / "지난주" / "3주 전" — 달력 주(ISO 8601, 월요일 시작) 기준 상대 표기.
+    /// 두 날짜 사이의 7일 묶음 수가 아니라 **각자 속한 주의 시작일끼리** 비교한다 —
+    /// 그래야 월요일에 본 지난주 일요일 세션이 "이번 주"가 아니라 "지난주"가 된다.
+    static func relativeWeek(of date: Date, now: Date) -> String {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = .current
+        guard let dateWeek = calendar.dateInterval(of: .weekOfYear, for: date)?.start,
+              let nowWeek = calendar.dateInterval(of: .weekOfYear, for: now)?.start
+        else { return "이번 주" }
+        let weeks = calendar.dateComponents([.weekOfYear], from: dateWeek, to: nowWeek).weekOfYear ?? 0
+        switch weeks {
+        case ..<1: return "이번 주"
+        case 1: return "지난주"
+        default: return "\(weeks)주 전"
+        }
     }
 }

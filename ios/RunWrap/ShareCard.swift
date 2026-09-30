@@ -43,7 +43,7 @@ struct ShareCardView: View {
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .strokeBorder(RR.line))
                 } else {
-                    // 실내 세션(경로 없음)은 지도 대신 수치 강조 블록 (계획서 M5 완료 기준)
+                    // 경로 이미지가 없으면(실내·경로 숨기기·트림 후 잔여 없음) 지도 대신 수치 강조 블록 (계획서 M5 완료 기준, 이슈 #84)
                     indoorBlock
                 }
             }
@@ -101,7 +101,8 @@ struct ShareCardView: View {
 
     private var indoorBlock: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("TREADMILL RUN")
+            // 경로를 숨긴 야외 러닝도 이 블록을 쓴다 — 트레드밀로 오표기하지 않는다 (이슈 #84)
+            Text(run.isIndoor ? "TREADMILL RUN" : "OUTDOOR RUN")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .kerning(1.4)
                 .foregroundStyle(RR.text3)
@@ -118,10 +119,7 @@ struct ShareCardView: View {
     }
 
     private var dateLine: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "yyyy.MM.dd (E) HH:mm"
-        return formatter.string(from: run.start)
+        RoutePrivacy.cardDateLine(run.start)
     }
 }
 
@@ -149,6 +147,7 @@ struct PhotoCardView: View {
             .frame(width: 360, height: 640)
             .clipped()
 
+            // 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (이 카드의 흰 글자·검정 그라데이션 전부)
             // 수치 가독용 어둡기 오버레이 — 위·아래만 진하게, 가운데는 사진 그대로
             LinearGradient(stops: [
                 .init(color: .black.opacity(0.5), location: 0),
@@ -210,10 +209,7 @@ struct PhotoCardView: View {
     }
 
     private var dateLine: String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "ko_KR")
-        formatter.dateFormat = "yyyy.MM.dd (E) HH:mm"
-        return formatter.string(from: run.start)
+        RoutePrivacy.cardDateLine(run.start)
     }
 }
 

@@ -38,6 +38,9 @@ struct BatteryReport: Equatable {
         let detail: String        // "55 ms · 평소 62 ms"
         let points: Int           // 기여 포인트 (충전 +, 소모 −)
         let systemImage: String
+        /// 이 요인의 수치가 묶인 카드 게이트 — nil이면 전 레벨 노출.
+        /// 엔진은 카드 종류만 표기하고, 레벨별 문구 처리는 화면이 `ReportGate`로 정한다 (이슈 #125)
+        var gate: ReportCard? = nil
     }
 
     let level: Int                // 0–100
@@ -125,9 +128,14 @@ enum BatteryEngine {
         }
 
         // 수면 질 — 깊은+렘 비율이 있는 밤이 7개 이상일 때만, 가장 최근 밤 vs 나머지 밤 평균(기저)
+        // 신선도 가드: 가장 최근 밤의 기상일이 오늘 또는 어제일 때만 — 지난밤 워치를 안 찼으면
+        // 며칠 전 밤이 '최근 밤'이 되어 오늘 배터리를 깎는다 (HRR 3일 가드와 같은 취지, 이슈 #99)
+        let calendar = Calendar.current
+        let yesterdayStart = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now))!
         let qualityNights = vitals.sleepNights.filter { $0.deepRemFraction != nil }.sorted { $0.date < $1.date }
         if qualityNights.count >= 7,
-           let latest = qualityNights.last, let todayFraction = latest.deepRemFraction {
+           let latest = qualityNights.last, latest.date >= yesterdayStart,
+           let todayFraction = latest.deepRemFraction {
             let baselineNights = qualityNights.dropLast()
             let baselineFraction = baselineNights.compactMap(\.deepRemFraction).reduce(0, +) / Double(baselineNights.count)
             if baselineFraction > 0, (baselineFraction - todayFraction) / baselineFraction >= 0.20 {
@@ -161,11 +169,15 @@ enum BatteryEngine {
                                  systemImage: "figure.run"))
         }
 
-        if let ratio = acwr(runs, now: now), ratio > 1.3 {
+        // ReportEngine과 같은 ACWR 산식·가드 (기록 4주 이상, 만성 주평균 3km 이상 — 이슈 #49)
+        if let load = ReportEngine.acwrLoad(runs: runs, now: now),
+           load.acute / load.chronic > 1.3 {
+            let ratio = load.acute / load.chronic
             factors.append(.init(name: "훈련 부하",
                                  detail: String(format: "부하 비율 %.2f", ratio),
                                  points: -min(15, Int(((ratio - 1.3) * 25).rounded())),
-                                 systemImage: "speedometer"))
+                                 systemImage: "speedometer",
+                                 gate: .acwr))
         }
 
         let level = max(0, min(100, 50 + factors.map(\.points).reduce(0, +)))
@@ -214,21 +226,5 @@ enum BatteryEngine {
         return runs.filter { $0.start >= dayStart && $0.start <= now }
             .compactMap(\.distanceKm)
             .reduce(0, +)
-    }
-
-    /// ReportEngine과 같은 가드의 ACWR — 3주 미만 기록이거나 주평균 3km 미만이면 nil
-    private static func acwr(_ runs: [RunSummary], now: Date) -> Double? {
-        guard let oldest = runs.map(\.start).min(),
-              oldest <= now.addingTimeInterval(-21 * 86_400) else { return nil }
-        func windowKm(_ days: Double) -> Double {
-            let from = now.addingTimeInterval(-days * 86_400)
-            return runs.filter { $0.start >= from && $0.start <= now }
-                .compactMap(\.distanceKm)
-                .reduce(0, +)
-        }
-        let acute = windowKm(7)
-        let chronic = windowKm(28) / 4
-        guard chronic >= 3 else { return nil }
-        return acute / chronic
     }
 }

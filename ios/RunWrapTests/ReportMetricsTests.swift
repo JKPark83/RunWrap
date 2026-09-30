@@ -20,15 +20,34 @@ struct ReportMetricsTests {
     func distanceCardValues() throws {
         let runs = [run(daysAgo: 1, km: 12.3), run(daysAgo: 3, km: 12.3),
                     run(daysAgo: 8, km: 10), run(daysAgo: 10, km: 10)]
-        let card = try #require(engine.weeklyReport(from: runs).distance)
+        let report = engine.weeklyReport(from: runs)
+        let card = try #require(report.distance)
         #expect(card.tone == .overload)
         #expect(abs(card.recent7Km - 24.6) < 0.01)
         #expect(abs(card.previous7Km - 20) < 0.01)
         #expect(abs(card.capKm - 22) < 0.01)
         #expect(abs(card.changePct - 23) < 0.01)
         #expect(abs(card.overKm - 2.6) < 0.01)
-        #expect(card.weeks.count == 6)
-        #expect(card.weeks.last?.isCurrent == true)
+        #expect(report.weeks.count == 6)
+        #expect(report.weeks.last?.isCurrent == true)
+    }
+
+    @Test("최근 7일 창 — 헤더 날짜(6일 전 자정~지금)와 거리·횟수 창이 일치한다 (이슈 #75)")
+    func recentWindowMatchesHeaderDates() throws {
+        // now = 8.10 18:00 KST → 헤더 "8.4 – 8.10", 창은 8.4 00:00부터.
+        // 7일 전+2시간 = 8.3 20:00 → 롤링 7×86_400 안이지만 헤더 밖(8일째 날) → 이전 7일로
+        let calendar = Calendar.current
+        let windowStart = calendar.startOfDay(for: now.addingTimeInterval(-6 * 86_400))
+        let eighthDay = run(daysAgo: 7 - 2.0 / 24, km: 5)
+        try #require(eighthDay.start < windowStart)  // 전제: 8일째 날 기록은 창 시작 전
+        let firstDay = RunSummary(id: UUID(), start: windowStart.addingTimeInterval(60),
+                                  durationSec: 4 * 360, distanceMeters: 4_000, avgHeartRate: 150)
+        let report = engine.weeklyReport(from: [eighthDay, firstDay])
+        #expect(report.dateRange == "8.4 – 8.10")
+        #expect(report.weekRunCount == 1)                             // 8.4 00:01만
+        let card = try #require(report.distance)
+        #expect(abs(card.recent7Km - 4) < 0.01)                       // 8.4 00:01 기록만
+        #expect(abs(card.previous7Km - 5) < 0.01)                     // 8.3 20:00 기록은 직전 7일
     }
 
     @Test("ACWR 카드 — 급성 20 ÷ 만성 12.5 = 1.6, 과부하 톤")
@@ -36,7 +55,32 @@ struct ReportMetricsTests {
         let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
                     run(daysAgo: 10, km: 10),
                     run(daysAgo: 17, km: 10),
-                    run(daysAgo: 24, km: 10)]
+                    run(daysAgo: 24, km: 10),
+                    // 이슈 #49: 가드 28일 — 최고령 기록을 창 밖(30일)에 둬 chronic 50/4=12.5 유지
+                    run(daysAgo: 30, km: 10)]
+        let card = try #require(engine.weeklyReport(from: runs).acwr)
+        #expect(abs(card.acute - 20) < 0.01)
+        #expect(abs(card.chronic - 12.5) < 0.01)
+        #expect(abs(card.ratio - 1.6) < 0.01)
+        #expect(card.tone == .overload)
+    }
+
+    @Test("ACWR 카드 — 기록이 21~27일치면 카드를 내지 않는다 (이슈 #49)",
+          arguments: [21.0, 24.0, 27.9])
+    func acwrCardNeedsFourWeeks(oldestDaysAgo: Double) {
+        // 옛 21일 가드였다면 분모 50/4=12.5로 1.6(과부하)이 나왔을 이력 — 실제 주평균은 더 크다
+        let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
+                    run(daysAgo: 10, km: 10), run(daysAgo: 17, km: 10),
+                    run(daysAgo: oldestDaysAgo, km: 10)]
+        #expect(engine.weeklyReport(from: runs).acwr == nil)
+    }
+
+    @Test("ACWR 카드 — 기록이 정확히 28일이면 카드를 낸다 (가드 경계, 이슈 #49)")
+    func acwrCardAtExactlyFourWeeks() throws {
+        // 최고령 now-28일 정각: 가드(<=)·창 시작(>=) 모두 포함 → acute 20, chronic 50/4=12.5
+        let runs = [run(daysAgo: 2, km: 10), run(daysAgo: 4, km: 10),
+                    run(daysAgo: 10, km: 10), run(daysAgo: 17, km: 10),
+                    run(daysAgo: 28, km: 10)]
         let card = try #require(engine.weeklyReport(from: runs).acwr)
         #expect(abs(card.acute - 20) < 0.01)
         #expect(abs(card.chronic - 12.5) < 0.01)
@@ -77,17 +121,64 @@ struct ReportMetricsTests {
         #expect(Format.weekLabel(weekStart: dec28) == "12월 5째주")
     }
 
+    @Test("상대 주 표기 — 7일 묶음이 아니라 달력 주(월요일 시작) 차이로 '이번 주/지난주/N주 전'")
+    func relativeWeekLabel() {
+        let calendar = Calendar.current
+        // now = 2026-08-17(월) 09:00
+        let now = calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 9))!
+        // 어제(8.16 일)는 지난 달력 주 → 1주 차이
+        let sunday = calendar.date(from: DateComponents(year: 2026, month: 8, day: 16, hour: 7))!
+        #expect(Format.relativeWeek(of: sunday, now: now) == "지난주")
+        // 지난주 화요일(8.11)은 6일 전이라 7일 묶음으로는 0이지만 달력 주로는 지난주
+        let tuesday = calendar.date(from: DateComponents(year: 2026, month: 8, day: 11, hour: 7))!
+        #expect(Format.relativeWeek(of: tuesday, now: now) == "지난주")
+        // 같은 날 이른 시각은 이번 주
+        let earlier = calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 6))!
+        #expect(Format.relativeWeek(of: earlier, now: now) == "이번 주")
+        // 7.27(월) 주 → 3주 차이
+        let threeAgo = calendar.date(from: DateComponents(year: 2026, month: 8, day: 2, hour: 7))!
+        #expect(Format.relativeWeek(of: threeAgo, now: now) == "3주 전")
+    }
+
+    @Test("날짜·시각 표기 — 기기 로케일과 무관하게 '9월 30일 오후 3:12', 오전·자정도 12시간제")
+    func monthDayTimeFormat() {
+        let calendar = Calendar.current
+        // 2026-09-30 15:12 → 오후 3:12 (시 앞자리 0 없음)
+        let afternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 15, minute: 12))!
+        #expect(Format.monthDayTime(afternoon) == "9월 30일 오후 3:12")
+        // 2026-01-05 00:07 → 자정은 오전 12:07
+        let midnight = calendar.date(from: DateComponents(year: 2026, month: 1, day: 5, hour: 0, minute: 7))!
+        #expect(Format.monthDayTime(midnight) == "1월 5일 오전 12:07")
+    }
+
     @Test("거리 카드 차트 — 가장 오래된 기록의 주까지 전체 주를 그린다 (스크롤용)")
     func distanceCardFullSpanWeeks() throws {
         // now = 8.10(월). 56일 전 = 6.15(월) 주 → 6.15…8.10 주가 9개
         let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 10),
                     run(daysAgo: 56, km: 5)]
-        let card = try #require(engine.weeklyReport(from: runs).distance)
-        #expect(card.weeks.count == 9)
-        #expect(card.weeks.first?.label == "6월 3째주")   // 6.15 주 — 목요일 6.18
-        #expect(card.weeks.last?.label == "8월 2째주")    // 이번 주 — 목요일 8.13
-        #expect(card.weeks.last?.isCurrent == true)
-        #expect(abs((card.weeks.first?.km ?? 0) - 5) < 0.01)  // 가장 오래된 주의 합계
+        let weeks = engine.weeklyReport(from: runs).weeks
+        #expect(weeks.count == 9)
+        #expect(weeks.first?.label == "6월 3째주")   // 6.15 주 — 목요일 6.18
+        #expect(weeks.last?.label == "8월 2째주")    // 이번 주 — 목요일 8.13
+        #expect(weeks.last?.isCurrent == true)
+        #expect(abs((weeks.first?.km ?? 0) - 5) < 0.01)  // 가장 오래된 주의 합계
+    }
+
+    @Test("주간 차트 독립 — 기준 7일 3km 미만이라 거리 카드가 nil이어도 주 막대는 채운다 (이슈 #91)")
+    func weeksSurviveDistanceGuard() {
+        // now = 8.10(월) 18:00 KST. 이전 7일(7.28~8.3)은 8일 전 2km뿐 → 증가율 가드로 distance nil.
+        // 차트는 달력 주 합계 — 8일 전 = 8.2(일) → 7.27 주 막대 2km,
+        // 1일 전 = 8.9(일) → 8.3 주 막대 10km. 이번 주(8.10 주)는 기록 없음 0km. 3주뿐이라 최소 6주로 채운다.
+        let report = engine.weeklyReport(from: [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 2)])
+        #expect(report.distance == nil)
+        #expect(report.weeks.count == 6)
+        #expect(report.weeks.last?.isCurrent == true)
+        #expect(abs(report.weeks.map(\.km).reduce(0, +) - 12) < 0.01)  // 10 + 2 — 가드와 무관하게 전부 합산
+    }
+
+    @Test("주간 차트 — 기록이 하나도 없으면 빈 배열")
+    func weeksEmptyWithoutRuns() {
+        #expect(engine.weeklyReport(from: []).weeks.isEmpty)
     }
 
     @Test("표본 부족 가드 — 기준 주 3km 미만·3주 미만 기록이면 카드가 없다")
@@ -96,7 +187,50 @@ struct ReportMetricsTests {
         #expect(report.distance == nil)   // 기준 주 3km 미만
         #expect(report.acwr == nil)       // 기록 3주 미만
         #expect(report.efficiency == nil) // 표본 3개 미만
-        #expect(report.isEmpty)
+        #expect(report.visibleCards(level: .advanced).isEmpty)
+    }
+
+    /// 문장 게이트 픽스처 — 거리·ACWR만 있는 리포트 (EF 없음)
+    private func sentenceReport(distanceTone: RRTone, recent: Double,
+                                acwr: WeeklyReport.AcwrCard?) -> WeeklyReport {
+        let distance = WeeklyReport.DistanceCard(tone: distanceTone, recent7Km: recent, previous7Km: 20,
+                                                 capKm: 22, changePct: (recent - 20) / 20 * 100)
+        return WeeklyReport(dateRange: "8.4 – 8.10", weeks: [], distance: distance, acwr: acwr,
+                            efficiency: nil, streakWeeks: 3, ranThisWeek: true, weekRunCount: 3)
+    }
+
+    @Test("첫 문장 게이트 — 런린이는 숨긴 ACWR 과부하 톤으로 문장을 고르지 않는다 (이슈 #124)")
+    func headlineIgnoresHiddenCards() {
+        // 거리 +0% steady, ACWR 20 ÷ 12.5 = 1.6 overload
+        let acwr = WeeklyReport.AcwrCard(tone: .overload, acute: 20, chronic: 12.5, ratio: 1.6)
+        let report = sentenceReport(distanceTone: .steady, recent: 20, acwr: acwr)
+        #expect(report.headline(level: .beginner) == "안정적으로 리듬을 지킨 한 주였습니다.")
+        #expect(report.headline(level: .intermediate) == "몸보다 훈련량이 앞서 나간 한 주였습니다.")
+    }
+
+    @Test("다음 주 제안 게이트 — 런린이는 km 수치 없이 문장만, ACWR 근거도 쓰지 않는다 (이슈 #124)")
+    func beginnerSuggestionHasNoNumbers() throws {
+        // 거리 +23% overload → 런린이는 감량 문장만
+        let overload = sentenceReport(distanceTone: .overload, recent: 24.6, acwr: nil)
+        let text = try #require(overload.suggestion(level: .beginner))
+        #expect(!text.contains("km"))
+        #expect(text == "이번 주보다 조금 덜 달려도 괜찮아요. 롱런 하나를 가볍게 바꿔 보세요.")
+
+        // 거리 steady + ACWR 1.6 — ACWR 카드가 숨겨진 런린이는 과부하 근거로 쓰지 않는다
+        let acwr = WeeklyReport.AcwrCard(tone: .overload, acute: 20, chronic: 12.5, ratio: 1.6)
+        let hiddenAcwr = sentenceReport(distanceTone: .steady, recent: 20, acwr: acwr)
+        #expect(hiddenAcwr.suggestion(level: .beginner)
+                == "지금 리듬 그대로 이어가면 됩니다. 다음 주에도 증가 폭 10% 이내를 지켜보세요.")
+        // 런잘알은 ACWR 근거로 감량 — 상한 min(22, 12.5 × 1.3 = 16.25) → 16, 하한 16.25 × 0.93 ≈ 15.1 → 15
+        #expect(hiddenAcwr.suggestion(level: .intermediate)
+                == "주간 15–16 km로 줄이면 안전 구간으로 돌아옵니다. 롱런 하나를 회복 주행으로 바꾸면 충분해요.")
+    }
+
+    @Test("다음 주 제안 — 런잘알은 기존 수치 문장을 유지한다 (상한 22km, 하한 22 × 0.93 ≈ 20)")
+    func intermediateSuggestionKeepsNumbers() {
+        let report = sentenceReport(distanceTone: .overload, recent: 24.6, acwr: nil)
+        #expect(report.suggestion(level: .intermediate)
+                == "주간 20–22 km로 줄이면 안전 구간으로 돌아옵니다. 롱런 하나를 회복 주행으로 바꾸면 충분해요.")
     }
 
     @Test("월간 통계 — 8월 집계와 지난달 같은 날짜까지 비교")
@@ -115,6 +249,21 @@ struct ReportMetricsTests {
         #expect(stats.paceDeltaSec != nil && stats.paceDeltaSec! < 0)       // 빨라짐
         #expect(stats.runs.first!.start > stats.runs.last!.start)  // 최신순 정렬
         #expect(stats.deltaCaption == "지난달 1–10일 대비")
+    }
+
+    @Test("월간 통계 — 0초·비현실 페이스 기록은 평균 페이스의 분자·분모 모두에서 뺀다 (이슈 #78)")
+    func monthlyAvgPaceSkipsInvalidPace() throws {
+        // 8.9 10km 60분(360초/km) + 8.5 0초 5.2km 임포트.
+        // 가드가 없으면 3_600 ÷ 15.2km ≈ 237초/km로 과하게 빨라졌다 → 가드 후 3_600 ÷ 10km = 360
+        let zeroDuration = RunSummary(id: UUID(), start: now.addingTimeInterval(-5 * 86_400),
+                                      durationSec: 0, distanceMeters: 5_200, avgHeartRate: nil)
+        let runs = [run(daysAgo: 1, km: 10), zeroDuration]
+        let month = Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 1))!
+        let stats = MonthlyStats.compute(runs: runs, month: month, now: now)
+        let pace = try #require(stats.avgPaceSec)
+        #expect(abs(pace - 360) < 0.01)
+        #expect(stats.count == 2)                       // 횟수·거리 집계는 그대로
+        #expect(abs(stats.totalKm - 15.2) < 0.01)
     }
 
     @Test("월간 통계 — 진행 중인 달은 지난달 후반 기록을 비교에서 뺀다")
@@ -140,6 +289,77 @@ struct ReportMetricsTests {
         #expect(stats.comparisonDays == nil)
         #expect(stats.deltaCaption == "지난달 대비")
         #expect(stats.deltaPct != nil && abs(stats.deltaPct! - 25) < 0.01)  // 16→20km
+    }
+
+    @Test("월간 통계 — 진행 중인 달이 7일 미만 경과면 '주 N회'를 내지 않는다 (이슈 #75·#86)")
+    func currentMonthPerWeekUsesElapsedDays() {
+        // now = 9.3 09:00(로컬), 9.1·9.3 기록 2회 → 경과 3일(오늘 포함) < 7 → nil.
+        // #75에서는 2 ÷ (3/7) ≈ 4.67로 외삽했지만 표본 부족이라 미노출로 결정했다 (#86).
+        // 로컬 달력으로 만들어 시간대와 무관하게 9월 안에 둔다
+        let calendar = Calendar.current
+        let september3 = calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 9))!
+        let runs = [calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 9))!,
+                    calendar.date(from: DateComponents(year: 2026, month: 9, day: 3, hour: 7))!]
+            .map { RunSummary(id: UUID(), start: $0, durationSec: 1_800,
+                              distanceMeters: 5_000, avgHeartRate: 150) }
+        let month = calendar.dateInterval(of: .month, for: september3)!.start
+        let stats = MonthlyStats.compute(runs: runs, month: month, now: september3)
+        #expect(stats.count == 2)
+        #expect(stats.perWeek == nil)
+    }
+
+    @Test("월간 통계 — 진행 중인 달이 7일째면 '주 N회'를 경과 일수로 계산한다 (이슈 #86)")
+    func currentMonthPerWeekFromSeventhDay() throws {
+        // now = 9.7 09:00(로컬), 9.1·9.7 기록 2회 → 경과 7일(오늘 포함) → 2 ÷ (7/7) = 2.0
+        let calendar = Calendar.current
+        let september7 = calendar.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 9))!
+        let runs = [calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 9))!,
+                    calendar.date(from: DateComponents(year: 2026, month: 9, day: 7, hour: 7))!]
+            .map { RunSummary(id: UUID(), start: $0, durationSec: 1_800,
+                              distanceMeters: 5_000, avgHeartRate: 150) }
+        let month = calendar.dateInterval(of: .month, for: september7)!.start
+        let stats = MonthlyStats.compute(runs: runs, month: month, now: september7)
+        let perWeek = try #require(stats.perWeek)
+        #expect(abs(perWeek - 2.0) < 0.05)
+    }
+
+    @Test("월간 통계 — 끝난 달의 '주 N회'는 월 전체 일수로 나눈다 (기존 동작 유지)")
+    func pastMonthPerWeekUsesWholeMonth() throws {
+        // now = 8.10에 6월(30일)을 본다 — 8회 ÷ (30/7) ≈ 1.87
+        let june = Calendar.current.date(from: DateComponents(year: 2026, month: 6, day: 1))!
+        let runs = (0..<8).map { index in
+            RunSummary(id: UUID(), start: june.addingTimeInterval(Double(index) * 3 * 86_400 + 7 * 3_600),
+                       durationSec: 1_800, distanceMeters: 5_000, avgHeartRate: 150)
+        }
+        let stats = MonthlyStats.compute(runs: runs, month: june, now: now)
+        #expect(stats.count == 8)
+        let perWeek = try #require(stats.perWeek)
+        #expect(abs(perWeek - 8 / (30.0 / 7)) < 0.05)
+    }
+
+    @Test("월 목록 — 모든 기록이 다음 달이어도 이번 달 하나는 돌려준다 (이슈 #68)")
+    func availableMonthsAllFutureRuns() {
+        // now = 8.10. 9.9·9.14 기록뿐 → 가장 오래된 달(9월)이 이번 달보다 뒤라 예전엔 빈 배열
+        let runs = [run(daysAgo: -30, km: 5), run(daysAgo: -35, km: 5)]
+        let august = Calendar.current.dateInterval(of: .month, for: now)!.start
+        #expect(MonthlyStats.availableMonths(in: runs, now: now) == [august])
+    }
+
+    @Test("월 목록 — 3개월에 걸친 기록이면 이번 달부터 3개, 최신 먼저")
+    func availableMonthsSpansThreeMonths() {
+        // now = 8.10. 8.9·7.8·6.16 → [8월, 7월, 6월]
+        let runs = [run(daysAgo: 1, km: 5), run(daysAgo: 33, km: 5), run(daysAgo: 55, km: 5)]
+        let calendar = Calendar.current
+        let august = calendar.dateInterval(of: .month, for: now)!.start
+        let july = calendar.date(byAdding: .month, value: -1, to: august)!
+        let june = calendar.date(byAdding: .month, value: -2, to: august)!
+        #expect(MonthlyStats.availableMonths(in: runs, now: now) == [august, july, june])
+    }
+
+    @Test("월 목록 — 기록이 없으면 이번 달 하나만 돌려준다 (기존 동작 유지)")
+    func availableMonthsNoRuns() {
+        let august = Calendar.current.dateInterval(of: .month, for: now)!.start
+        #expect(MonthlyStats.availableMonths(in: [], now: now) == [august])
     }
 
     // MARK: - streak · 추이 지표
@@ -172,6 +392,16 @@ struct ReportMetricsTests {
     @Test("streak — 기록이 없으면 0")
     func streakEmpty() {
         #expect(ReportEngine.streakWeeks(runs: [], now: now) == 0)
+    }
+
+    @Test("이번 주 러닝 여부 — 이번 주 월요일 러닝이면 true, 지난주만이면 false (이슈 #195)")
+    func ranThisWeek() {
+        // now = 8.10(월) 18:00 KST — daysAgo 0.2는 같은 날 새벽, 3은 지난주 8.7
+        #expect(ReportEngine.ranThisWeek(runs: [run(daysAgo: 0.2, km: 5), run(daysAgo: 3, km: 5)],
+                                         now: now))
+        #expect(!ReportEngine.ranThisWeek(runs: [run(daysAgo: 3, km: 5), run(daysAgo: 9, km: 5)],
+                                          now: now))
+        #expect(!ReportEngine.ranThisWeek(runs: [], now: now))
     }
 
     @Test("VO₂max 추이 — 주 평균 45.2, 4주 전 44.0 대비 +1.2 개선 톤")

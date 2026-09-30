@@ -57,12 +57,67 @@ struct BatteryEngineTests {
         let runs = [run(daysAgo: 0.1, km: 10),
                     run(daysAgo: 8, km: 5),
                     run(daysAgo: 15, km: 5),
-                    run(daysAgo: 22, km: 5)]
+                    run(daysAgo: 22, km: 5),
+                    // 이슈 #49: 가드 28일 — 창 밖 앵커라 chronic 25/4=6.25, ACWR 1.6(−8) 유지
+                    run(daysAgo: 30, km: 5)]
         let report = try #require(BatteryEngine.compute(vitals: vitals, runs: runs, now: now))
         #expect(report.level == 0)
         #expect(report.tone == .overload)
         #expect(report.factors.contains { $0.name == "오늘 훈련" && $0.points == -20 })
         #expect(report.factors.contains { $0.name == "훈련 부하" && $0.points == -8 })
+    }
+
+    @Test("ACWR 표본 가드 — 기록이 4주 미만이면 훈련 부하 감점이 없다 (이슈 #49)")
+    func acwrNeedsFourWeeksOfHistory() throws {
+        // 중립 활력징후(각 0점). 1일 전 기록은 어제라 '오늘 훈련' 감점도 없다.
+        // 옛 21일 가드였다면 10 ÷ (25/4=6.25) = 1.6 → −8이었지만, 이력이 22일뿐이라 nil
+        let vitals = VitalsSnapshot(hrvMs: reading(60, 60), restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 5),
+                    run(daysAgo: 15, km: 5), run(daysAgo: 22, km: 5)]
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: runs, now: now))
+        #expect(report.factors.contains { $0.name == "훈련 부하" } == false)
+        #expect(report.level == 50)
+    }
+
+    @Test("ACWR 표본 가드 — 4주 이상이면 부하 비율 1.6에 −8 감점")
+    func acwrPenaltyWithFourWeeksOfHistory() throws {
+        // 위와 같은 기록 + 창 밖(30일) 앵커 → acute 10, chronic 25/4=6.25, 1.6
+        // 감점 −min(15, round((1.6−1.3)×25=7.5)) = −8 → 50−8 = 42
+        let vitals = VitalsSnapshot(hrvMs: reading(60, 60), restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 5),
+                    run(daysAgo: 15, km: 5), run(daysAgo: 22, km: 5),
+                    run(daysAgo: 30, km: 5)]
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: runs, now: now))
+        #expect(report.factors.contains { $0.name == "훈련 부하" && $0.points == -8 })
+        #expect(report.level == 42)
+    }
+
+    @Test("카드 게이트 — 훈련 부하 팩터만 ACWR 카드에 묶이고 나머지는 nil (이슈 #125)")
+    func onlyTrainingLoadFactorIsGatedByACWR() throws {
+        // 위 −8 케이스와 같은 기록에 오늘 3km를 더해 '오늘 훈련'(−6)도 함께 나오게 한다
+        let vitals = VitalsSnapshot(hrvMs: reading(60, 60), restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        let runs = [run(daysAgo: 0.1, km: 3), run(daysAgo: 1, km: 10), run(daysAgo: 8, km: 5),
+                    run(daysAgo: 15, km: 5), run(daysAgo: 22, km: 5),
+                    run(daysAgo: 30, km: 5)]
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: runs, now: now))
+        let load = try #require(report.factors.first { $0.name == "훈련 부하" })
+        #expect(load.gate == .acwr)
+        #expect(report.factors.contains { $0.name == "오늘 훈련" })
+        #expect(report.factors.filter { $0.name != "훈련 부하" }.allSatisfy { $0.gate == nil })
+    }
+
+    @Test("ACWR 표본 가드 — 만성 주평균 3km 미만이면 감점 없음")
+    func acwrNeedsThreeKmChronic() throws {
+        // 4주 이력은 있지만 창 안 거리 10km → chronic 10/4=2.5 < 3 → nil
+        let vitals = VitalsSnapshot(hrvMs: reading(60, 60), restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        let runs = [run(daysAgo: 1, km: 10), run(daysAgo: 30, km: 1)]
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: runs, now: now))
+        #expect(report.factors.contains { $0.name == "훈련 부하" } == false)
+        #expect(report.level == 50)
     }
 
     @Test func requiresTwoCoreSignals() {
@@ -161,6 +216,32 @@ struct BatteryEngineTests {
         let report = try #require(BatteryEngine.compute(vitals: vitals, runs: [], now: now))
         #expect(report.level == 50)
         #expect(!report.factors.contains { $0.name == "수면 질" })
+    }
+
+    @Test("수면 질 신선도 — 단계 데이터가 있는 최근 밤이 3일 전이면 팩터 없음 (이슈 #99)")
+    func staleSleepQualityNightStaysSilent() throws {
+        // 하락 폭은 위와 같이 26.7%지만, 최근 밤(3일 전 = 8/7)이 어제(8/9) 이전이라 신선도 가드에 걸린다
+        var vitals = VitalsSnapshot(hrvMs: reading(60, 60),
+                                    restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        vitals.sleepNights = [night(daysAgo: 3, fraction: 0.22)] +
+            (4...9).map { night(daysAgo: Double($0), fraction: 0.30) }
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: [], now: now))
+        #expect(report.level == 50)
+        #expect(!report.factors.contains { $0.name == "수면 질" })
+    }
+
+    @Test("수면 질 신선도 — 최근 밤이 어제면 감점 유지")
+    func yesterdaySleepQualityNightPenalizes() throws {
+        // 최근 밤(1일 전 = 8/9)은 어제라 가드 통과, 22% vs 30% → 26.7% 하락 → −8, 50 − 8 = 42
+        var vitals = VitalsSnapshot(hrvMs: reading(60, 60),
+                                    restingHR: reading(52, 52),
+                                    sleepHours: 7)
+        vitals.sleepNights = [night(daysAgo: 1, fraction: 0.22)] +
+            (2...7).map { night(daysAgo: Double($0), fraction: 0.30) }
+        let report = try #require(BatteryEngine.compute(vitals: vitals, runs: [], now: now))
+        #expect(report.level == 42)
+        #expect(report.factors.contains { $0.name == "수면 질" && $0.points == -8 })
     }
 
     @Test("수면 질·리듬 — 단계/취침 데이터가 있는 밤이 6개뿐이면 둘 다 팩터 없음") func fewerThanSevenNightsStayBothSilent() throws {
