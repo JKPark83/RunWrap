@@ -54,35 +54,32 @@ struct MonthlySeries {
     }
 }
 
-/// 거리별 최고 기록 — 5K/10K/하프/풀 (기획서 §4.7).
-/// PR 판정 (가정 — 계획서 M3): 완주 거리 ∈ [D×0.995, D×1.10]인 세션 중 (페이스 × D)의 최소값.
-/// 워치 GPS는 공인 거리보다 조금 길게 찍히는 게 보통이라 10% 상단 여유를 둔다.
-/// 하단 0.5%는 워치 표시 반올림 여유 — 5.00으로 보인 4.996km가 빠지지 않게 (약 25m@5K, 이슈 #91).
+/// 거리별 최고 기록 — 1K/5K/10K/하프/풀 (기획서 §4.7, 이슈 #166).
+/// PR = 세션마다 거리 샘플에서 잰 베스트 에포트(목표 거리를 가장 빨리 지난 연속 구간의
+/// 벽시계 시간, BestEffortEngine)의 최소값. 10km 세션 안의 빠른 5km도 5K 기록이 된다.
+/// 아직 계산되지 않은(백필 대기) 세션은 후보에서 빠진다.
 /// 해당 거리 기록이 없으면 항목 자체를 내지 않는다.
 struct PersonalRecords {
     struct Entry {
-        let label: String        // "5K" · "10K" · "하프" · "풀"
+        let label: String        // "1K" · "5K" · "10K" · "하프" · "풀"
         let distanceKm: Double   // 공인 거리
-        let timeSec: Double      // 공인 거리 환산 기록 (페이스 × D)
+        let timeSec: Double      // 베스트 에포트 — 공인 거리 구간의 소요 시간
         let run: RunSummary      // 기록을 세운 세션 — 목록에서 탭하면 이 세션 상세로 간다
         /// 달성일 — 세션 시작 시각과 같다
         var date: Date { run.start }
     }
 
-    /// 공인 거리 4종 (km)
-    static let targets: [(label: String, km: Double)] = [
-        ("5K", 5.0), ("10K", 10.0), ("하프", 21.0975), ("풀", 42.195),
-    ]
+    /// 공인 거리 5종 (m) — 베스트 에포트 목표 거리와 같다
+    static let targets = BestEffortEngine.targets
 
-    static func compute(runs: [RunSummary]) -> [Entry] {
+    static func compute(runs: [RunSummary], efforts: BestEffortTable) -> [Entry] {
         targets.compactMap { target in
             let candidates = runs.compactMap { run -> (time: Double, run: RunSummary)? in
-                guard let km = run.distanceKm, let pace = run.paceSecPerKm,
-                      km >= target.km * 0.995, km <= target.km * 1.10 else { return nil }
-                return (time: pace * target.km, run: run)
+                guard let time = efforts[run.id]?[target.meters] else { return nil }
+                return (time: time, run: run)
             }
             guard let best = candidates.min(by: { $0.time < $1.time }) else { return nil }
-            return Entry(label: target.label, distanceKm: target.km,
+            return Entry(label: target.label, distanceKm: target.meters / 1_000,
                          timeSec: best.time, run: best.run)
         }
     }

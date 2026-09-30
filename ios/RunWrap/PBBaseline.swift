@@ -5,12 +5,33 @@ import Foundation
 ///
 /// PersonalRecords는 매번 전체 기록에서 재계산되고 어디에도 저장되지 않으므로,
 /// "지난번보다 좋아졌는가"를 알려면 마지막 확인 시점의 기록을 남겨 둬야 한다.
+///
+/// version (이슈 #166): PR 산식이 평균 페이스 × 거리에서 베스트 에포트로 바뀌어 옛 기록과는
+/// 비교할 수 없다 — 그대로 비교하면 같은 세션도 "새 PB"로 축하된다. 그래서 옛 버전 베이스라인은
+/// 없는 것(nil)으로 읽어 조용히 재시드한다. 버전 필드가 없는 옛 파일은 1로 본다.
 struct PBBaseline: Codable, Equatable {
-    /// 종목 라벨("5K"·"10K"·"하프"·"풀") → 공인 거리 환산 기록(초)
+    /// 현재 산식 버전 — 1: 평균 페이스 × 공인 거리, 2: 베스트 에포트 (이슈 #166)
+    static let currentVersion = 2
+
+    /// 종목 라벨("1K"·"5K"·"10K"·"하프"·"풀") → 기록(초)
     let times: [String: Double]
+    /// 기록을 만든 산식 버전
+    let version: Int
+
+    init(times: [String: Double], version: Int = PBBaseline.currentVersion) {
+        self.times = times
+        self.version = version
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        times = try container.decode([String: Double].self, forKey: .times)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+    }
 
     static func make(from records: [PersonalRecords.Entry]) -> PBBaseline {
-        PBBaseline(times: Dictionary(uniqueKeysWithValues: records.map { ($0.label, $0.timeSec) }))
+        PBBaseline(times: Dictionary(uniqueKeysWithValues: records.map { ($0.label, $0.timeSec) }),
+                   version: currentVersion)
     }
 }
 
@@ -40,10 +61,13 @@ enum PBBaselineCache {
         excludeFromBackup(url)
     }
 
+    /// 옛 산식 버전(< currentVersion)은 nil — 첫 실행처럼 조용히 재시드된다 (이슈 #166)
     static func load(from directory: URL? = nil) -> PBBaseline? {
         guard let url = fileURL(in: directory),
-              let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(PBBaseline.self, from: data)
+              let data = try? Data(contentsOf: url),
+              let baseline = try? JSONDecoder().decode(PBBaseline.self, from: data),
+              baseline.version >= PBBaseline.currentVersion else { return nil }
+        return baseline
     }
 
     /// iCloud·아이튠즈 백업에서 제외 — 심사 지침 5.1.3(ii)는 건강 정보를 iCloud에

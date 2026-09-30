@@ -48,4 +48,25 @@ struct PBEngineTests {
         PBBaselineCache.save(baseline, in: dir)
         #expect(PBBaselineCache.load(from: dir) == baseline)
     }
+
+    @Test("산식 버전 — version < 2(평균 페이스 산식) 베이스라인은 nil로 읽어 조용히 재시드한다 (이슈 #166)")
+    func oldVersionBaselineLoadsAsNil() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("runwrap-pb-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // 버전 필드가 없는 옛 파일 → version 1로 디코딩 → nil
+        try Data(#"{"times":{"5K":1320}}"#.utf8)
+            .write(to: dir.appendingPathComponent(PBBaselineCache.filename))
+        #expect(PBBaselineCache.load(from: dir) == nil)
+
+        // 명시적 version 1도 nil, 새로 만든 베이스라인은 현재 버전(2)이라 그대로 읽힌다
+        PBBaselineCache.save(PBBaseline(times: ["5K": 1_320], version: 1), in: dir)
+        #expect(PBBaselineCache.load(from: dir) == nil)
+        let fresh = PBBaseline.make(from: [entry("5K", km: 5, timeSec: 1_320)])
+        #expect(fresh.version == PBBaseline.currentVersion)
+        PBBaselineCache.save(fresh, in: dir)
+        #expect(PBBaselineCache.load(from: dir) == fresh)
+    }
 }

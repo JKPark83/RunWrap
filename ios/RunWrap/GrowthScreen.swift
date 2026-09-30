@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// StatsScreen("발전상" 섹션)에 있던 추이·PB를 세그먼트 화면으로 분리했다.
 /// 지표 전환 세그먼트 대신 카드 3장으로 펼쳐 한 화면에서 흐름을 훑게 한다.
-/// PB에는 종목별 메달(풀=금·하프=은·10K=동·5K=브랜드색)을 단다.
+/// PB에는 종목별 메달(풀=금·하프=은·10K=동·5K·1K=브랜드색)을 단다.
 struct GrowthScreen: View {
     /// [내 상태 | 이번달 | 나의 성장기] 세그먼트 — 리포트 탭이 넘긴다
     var segment: AnyView? = nil
@@ -37,7 +37,7 @@ struct GrowthScreen: View {
         Group {
             if case .loaded(let runs) = health.state {
                 let series = MonthlySeries.compute(runs: runs, now: Date())
-                let records = PersonalRecords.compute(runs: runs)
+                let records = PersonalRecords.compute(runs: runs, efforts: health.bestEfforts)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -66,7 +66,12 @@ struct GrowthScreen: View {
                                 .rrCard()
                         }
 
-                        if !records.isEmpty { recordsCard(records) }
+                        if !records.isEmpty {
+                            recordsCard(records)
+                        } else if health.bestEffortPending > 0 {
+                            pendingCaption(health.bestEffortPending)
+                                .padding(.horizontal, 16)
+                        }
                     }
                     .padding(.horizontal, 18)
                     .padding(.top, 8)
@@ -158,8 +163,20 @@ struct GrowthScreen: View {
                     Divider().overlay(RR.line).padding(.leading, 66)
                 }
             }
+            if health.bestEffortPending > 0 {
+                pendingCaption(health.bestEffortPending)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
         }
         .rrCard()
+    }
+
+    /// 베스트 에포트 백필이 남았을 때의 안내 — 기동마다 조금씩 계산돼 목록이 채워진다 (이슈 #166)
+    private func pendingCaption(_ count: Int) -> some View {
+        Text("기록 분석 중 · 남은 세션 \(count)개")
+            .font(.system(size: 11.5))
+            .foregroundStyle(RR.text3)
     }
 
     /// PB 한 줄 — 종목 메달 + 라벨 + 기록 + 날짜 + 셰브런 (이슈 #21에서 메달 추가)
