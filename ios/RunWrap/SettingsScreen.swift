@@ -42,6 +42,9 @@ struct SettingsScreen: View {
     @Environment(\.openURL) private var openURL
     // 데모 모드 — 워치 기록이 없는 기기(심사자 포함)에서 합성 데이터로 화면을 보여준다 (DemoMode)
     @AppStorage(DemoMode.key) private var demoMode = false
+    /// 정보 섹션 (이슈 #185) — 메일 앱이 없어 주소를 복사했을 때의 안내, 초기화 확인
+    @State private var showsMailCopied = false
+    @State private var confirmsProfileReset = false
 
     /// 앱 내 개인정보 처리방침 — 심사 지침 5.1.1(i)이 요구하는 앱 내 접근 경로.
     /// 원본은 저장소의 docs/privacy.html이고, 같은 내용을 Vercel 정적 배포로 서비스한다
@@ -290,6 +293,24 @@ struct SettingsScreen: View {
                             url: Self.privacyPolicyURL)
                 }
 
+                // 정보 (이슈 #185) — 버전·피드백 메일·프로필 설정 초기화. 데모 모드와 무관하게 보인다
+                section(title: "정보") {
+                    infoRow(label: "버전", caption: "런미새 \(Self.appVersion) (\(Self.buildNumber))")
+                    feedbackRow
+                    profileResetRow
+                }
+                .alert("메일 주소를 복사했어요", isPresented: $showsMailCopied) {
+                    Button("확인", role: .cancel) {}
+                } message: {
+                    Text("메일 앱에 \(FeedbackMail.address)로 보내 주세요")
+                }
+                .alert("프로필 설정을 초기화할까요?", isPresented: $confirmsProfileReset) {
+                    Button("초기화", role: .destructive) { resetProfile() }
+                    Button("취소", role: .cancel) {}
+                } message: {
+                    Text("대회 목표·주간 목표·심박 기준·알림 설정이 처음 값으로 돌아가요. 레벨·새·도감·대회 기록·러닝화는 그대로예요.")
+                }
+
                 Text("리포트 카드의 구성과 문장 톤이 프로필에 맞춰 바뀝니다. 러닝 기록 자체는 그대로예요.")
                     .font(.system(size: 11.5))
                     .lineSpacing(3)
@@ -406,6 +427,97 @@ struct SettingsScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// 앱 버전 — Info.plist의 마케팅 버전·빌드 번호 (CI가 주입한 값 그대로)
+    private static let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
+    private static let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "-"
+
+    /// 표시 전용 행 — optionRow와 같은 레이아웃, 우측 아이콘 없이 누를 수 없다
+    private func infoRow(label: String, caption: String) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(caption)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(RR.text2)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    /// 피드백 메일 — 메일 앱을 못 열면(미설치·계정 없음) 주소를 복사하고 알린다
+    private var feedbackRow: some View {
+        Button {
+            let url = FeedbackMail.url(appVersion: Self.appVersion, build: Self.buildNumber,
+                                       systemVersion: FeedbackMail.systemVersion(ProcessInfo.processInfo.operatingSystemVersion),
+                                       deviceModel: FeedbackMail.deviceModel)
+            guard let url else { return copyMailAddress() }
+            openURL(url) { accepted in
+                if !accepted { copyMailAddress() }
+            }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("피드백 보내기")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                    Text("메일로 의견·버그를 알려주세요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "envelope")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 메일 주소 복사 — SwiftUI에 클립보드 쓰기 API가 없어 UIPasteboard(UIKit)를 여기서만 쓴다
+    private func copyMailAddress() {
+        UIPasteboard.general.string = FeedbackMail.address
+        showsMailCopied = true
+    }
+
+    /// 프로필 설정 초기화 — 확인 알림을 거친다
+    private var profileResetRow: some View {
+        Button { confirmsProfileReset = true } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("프로필 설정 초기화")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.dang)
+                    Text("목표·심박·알림 설정만 되돌립니다")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 키를 지우면 @AppStorage가 기본값으로 갱신되고, 값 변화 onChange가 병합 시각·주간 목표 이력을 남긴다.
+    /// 알림은 onChange에 기대지 않고 여기서 직접 다시 예약해 꺼진 설정의 예약분을 거둔다
+    private func resetProfile() {
+        ProfileReset.reset()
+        Task {
+            await NotificationScheduler.rescheduleWeekly()
+            await NotificationScheduler.rescheduleHydration(forecastMaxC: nil)
+            await raceStore.rescheduleRaceAlarms()
+        }
     }
 
     /// 알림 토글 행 — optionRow와 같은 레이아웃, 우측만 스위치
