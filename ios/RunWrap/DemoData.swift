@@ -293,19 +293,6 @@ enum DemoData {
             }
             return (run.id, Dictionary(uniqueKeysWithValues: efforts))
         })
-
-    /// 합성 크로스 트레이닝 — 이번 주 자전거 90분 + 근력 45분 (계 2시간 15분).
-    /// 걷기 25분 세션은 CrossTrainingEngine의 30분 미만 걷기 가드에 걸러지는 걸 확인하는 재료.
-    static var crossTrainings: [CrossTraining] {
-        [
-            CrossTraining(start: Date().addingTimeInterval(-2 * 86_400),
-                          durationSec: 90 * 60, kind: .cycling, kcal: 520),
-            CrossTraining(start: Date().addingTimeInterval(-4 * 86_400),
-                          durationSec: 45 * 60, kind: .strength, kcal: 210),
-            CrossTraining(start: Date().addingTimeInterval(-5 * 86_400),
-                          durationSec: 25 * 60, kind: .walking, kcal: 90),
-        ]
-    }
 }
 
 /// 재현 가능한 경량 난수 — WorkoutDetailStore.synthetic의 것과 같은 구현.

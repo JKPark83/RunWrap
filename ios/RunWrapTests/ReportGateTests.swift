@@ -37,9 +37,9 @@ struct ReportGateTests {
         }
     }
 
-    @Test("런린이도 거리·체력 배터리·크로스 트레이닝·훈련 가이드는 본다")
+    @Test("런린이도 거리·체력 배터리·훈련 가이드는 본다")
     func beginnerKeepsBasicCards() {
-        for card in [ReportCard.distance, .battery, .crossTraining, .trainingGuide] {
+        for card in [ReportCard.distance, .battery, .trainingGuide] {
             #expect(ReportGate.shows(card, level: .beginner))
         }
     }

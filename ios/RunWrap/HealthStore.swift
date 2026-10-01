@@ -20,8 +20,6 @@ final class HealthStore: ObservableObject {
     @Published private(set) var vitals: VitalsSnapshot?
     /// 심폐 체력 카드용 최근 12주 VO₂max 표본 (ml/kg/min) — 주 단위 평균은 엔진이 계산한다
     @Published private(set) var vo2Max: [(date: Date, value: Double)] = []
-    /// 최근 2주 비러닝 운동 — 주간 리포트 보조 문장 재료. ACWR에는 절대 섞지 않는다 (제안 문서 A3)
-    @Published private(set) var crossTrainings: [CrossTraining] = []
     /// 심폐 체력 카드 보조 지표용 최근 12주 심박 회복(HRR) 표본 (bpm)
     @Published private(set) var hrrTrend: [(date: Date, value: Double)] = []
     /// 최대 심박(bpm) 추정과 출처 — 관찰 최대(최근 12주 세션 최고 심박 2번째 값)와
@@ -60,7 +58,6 @@ final class HealthStore: ObservableObject {
         state = .loaded(DemoData.runs)
         vitals = DemoData.vitals
         vo2Max = DemoData.vo2Max
-        crossTrainings = DemoData.crossTrainings
         hrrTrend = DemoData.hrrTrend
         hrMaxEstimate = TrainingGuideEngine.hrMaxEstimate(runs: DemoData.runs, now: Date(), birthYear: nil)
         // 시뮬레이터에서도 Karvonen 존을 고를 수 있게 합성 활력징후의 안정 심박을 그대로 쓴다
@@ -140,7 +137,6 @@ final class HealthStore: ObservableObject {
             bestEffortPending = workouts.filter { bestEfforts[$0.uuid] == nil }.count
             vitals = await fetchVitals()
             vo2Max = await fetchVo2Max()
-            crossTrainings = await fetchCrossTrainings()
             hrrTrend = await fetchHrrTrend()
             await backfillZoneHistograms(workouts: workouts)
             backfillBestEfforts(workouts: workouts)
@@ -514,55 +510,6 @@ final class HealthStore: ObservableObject {
                                                   to: now)) ?? []
         return samples.map { (date: $0.startDate,
                               value: $0.quantity.doubleValue(for: bpm)) }
-    }
-
-    // MARK: - 크로스 트레이닝 (비러닝 운동)
-
-    /// 최근 2주 비러닝 워크아웃 — 주간 리포트 보조 문장(CrossTrainingEngine) 재료 (제안 문서 A3).
-    /// 러닝만 빼고 전부 가져와 종류 매핑은 앱에서 한다 — 종류별 쿼리 N번보다 싸다.
-    private func fetchCrossTrainings(now: Date = .now) async -> [CrossTraining] {
-        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
-            HKQuery.predicateForSamples(withStart: now.addingTimeInterval(-14 * 86_400), end: now),
-            NSCompoundPredicate(notPredicateWithSubpredicate:
-                HKQuery.predicateForWorkouts(with: .running)),
-        ])
-        let byRecent = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
-        let workouts: [HKWorkout] = (try? await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(sampleType: .workoutType(),
-                                      predicate: predicate,
-                                      limit: 200,
-                                      sortDescriptors: [byRecent]) { _, samples, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: (samples as? [HKWorkout]) ?? [])
-                }
-            }
-            store.execute(query)
-        }) ?? []
-        return workouts.map { workout in
-            CrossTraining(start: workout.startDate,
-                          durationSec: workout.duration,
-                          kind: Self.crossKind(of: workout.workoutActivityType),
-                          kcal: workout.statistics(for: HKQuantityType(.activeEnergyBurned))?
-                              .sumQuantity()?
-                              .doubleValue(for: .kilocalorie()))
-        }
-    }
-
-    /// HealthKit 운동 종류 → 크로스 트레이닝 종류 — 러너가 실제로 병행하는 종목 위주로 추리고
-    /// 나머지는 other로 뭉친다 (종류별 문장을 다 만들 수는 없다)
-    private static func crossKind(of type: HKWorkoutActivityType) -> CrossTraining.Kind {
-        switch type {
-        case .cycling: .cycling
-        case .traditionalStrengthTraining, .functionalStrengthTraining, .coreTraining: .strength
-        case .swimming: .swimming
-        case .hiking: .hiking
-        case .walking: .walking
-        case .yoga, .pilates: .yoga
-        case .highIntensityIntervalTraining: .hiit
-        default: .other
-        }
     }
 
     /// 최근 12주 VO₂max 표본 — 심폐 체력 추이 카드의 재료.
