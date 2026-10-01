@@ -57,8 +57,8 @@ open RunWrap.xcodeproj
 - [x] 14단계 — 코스 보급 가이드: 현재 위치 반경 1km 또는 GPX 업로드 → 급수·화장실·편의점
 - [x] 15단계 — 대회 캘린더: 크롤 배치 → 목록·상세·접수 상태, 키워드 검색·필터
 
-로드맵 외 추가: 세션 분석 엔진 4종 — 열 보정 페이스(`HeatEngine`)·심박 드리프트(`DriftEngine`)·
-크로스 트레이닝 요약(`CrossTrainingEngine`)·날씨 조언(`WeatherAdviceRules`).
+로드맵 외 추가: 세션 분석 엔진 3종 — 열 보정 페이스(`HeatEngine`)·심박 드리프트(`DriftEngine`)·
+날씨 조언(`WeatherAdviceRules`).
 
 전체적으로 **실기기 자가 검증(유용성·카드 퀄리티 판단)이 남은 관문**이다.
 

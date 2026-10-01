@@ -180,7 +180,7 @@ private struct WeekRow: View {
         return parts.isEmpty ? "퀄리티 없이 가볍게" : parts.joined(separator: " · ")
     }
 
-    /// "30.0~33.0" / 상·하한이 같으면 "65.0" 하나만 (ReportDetailScreen과 같은 표기)
+    /// "30.0~33.0" / 상·하한이 같으면 "65.0" 하나만
     private func kmRangeText(_ low: Double, _ high: Double) -> String {
         high - low < 0.05 ? Format.km(low) : "\(Format.km(low))~\(Format.km(high))"
     }

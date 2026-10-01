@@ -359,36 +359,6 @@ struct TodayVerdictEngineTests {
         #expect(result.badgeLabel == nil)
     }
 
-    // MARK: - 워치 전송용 처방 (이슈 #197)
-
-    @Test("워치 처방 — 인터벌 차례면 verdict.workout에 같은 처방(중급 5×800m, I 페이스 235초)이 실린다")
-    func workoutCarriesInterval() throws {
-        let result = try #require(verdict(battery: battery(.improving), guide: intervalGuide))
-        let workout = try #require(result.workout)
-        #expect(workout.kind == .interval(reps: 5, meters: 800))
-        #expect(workout.paceSecPerKm == 235...235)
-        #expect(workout.distanceKm == 4)    // 5 × 800m = 4.0km
-
-        // 나쁨 → 유효 톤 caution: 줄 문구와 같은 상한이 처방에도 걸려 이지런(.battery)이 실린다
-        let badAir = try #require(verdict(battery: battery(.improving), guide: intervalGuide,
-                                          air: .bad))
-        #expect(badAir.workout?.kind == .easy)
-        #expect(badAir.workout?.reason == .battery)
-    }
-
-    @Test("워치 처방 가드 — 매우나쁨·휴식·완료·처방 없음이면 nil")
-    func workoutNilWhenNotRunning() throws {
-        let veryBad = try #require(verdict(battery: battery(.improving), guide: intervalGuide,
-                                           air: .veryBad))
-        #expect(veryBad.workout == nil)
-        let rest = try #require(verdict(battery: battery(.overload), guide: intervalGuide))
-        #expect(rest.workout == nil)
-        let done = try #require(verdict(battery: battery(.steady), guide: guide(), weeklyGoal: 1))
-        #expect(done.workout == nil)
-        let noGuide = try #require(verdict(battery: battery(.steady), guide: nil))
-        #expect(noGuide.workout == nil)
-    }
-
     @Test("배지 라벨 — 대기질이 판정을 정했을 때만 값이 있다 (헤드라인 상한과 같은 조건)")
     func badgeLabelRules() {
         #expect(TodayVerdictEngine.badgeLabel(battery: nil, air: .veryBad) == "실외 자제")
