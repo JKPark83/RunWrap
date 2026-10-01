@@ -52,8 +52,7 @@ HEALTH DATA (Guideline 5.1.3)
 - HealthKit access is READ-ONLY. requestAuthorization is always called with
   toShare: [] — the app never writes to Health.
 - All read types are requested together at the first Health connection
-  (onboarding): running workouts (plus non-running workouts from the last
-  14 days for a cross-training note), route, heart rate and running-form metrics,
+  (onboarding): running workouts, route, heart rate and running-form metrics,
   workout effort score (iOS 18+, shown on the session detail screen only),
   together with recovery signals such as sleep, HRV, resting heart rate,
   heart rate recovery, respiratory rate and wrist temperature; date of birth
@@ -62,11 +61,6 @@ HEALTH DATA (Guideline 5.1.3)
   reads a derived snapshot (battery level, today's verdict sentence, weekly
   distance) that the app writes to the App Group container. Nothing leaves
   the device.
-- WorkoutKit (send today's suggested run to Apple Watch): tapping "오늘 권장"
-  on the "홈" tab and then "Apple Watch로 보내기" opens Apple's system workout
-  preview sheet. The workout is saved to the Watch only if the user taps
-  "Add to Watch" in that sheet; the app cannot see the result. No permission
-  is requested, and this feature neither reads nor writes any health data.
 - All health data is processed on device. It is NEVER transmitted off the
   device. The app talks to the following hosts only; none of them receives
   health data:
@@ -158,10 +152,9 @@ real reports.
 심사 중 앱이 미완성으로 보이지 않게 하려고 만들었습니다.
 
 **건강 데이터** — 읽기 전용(`toShare: []`), 전부 온디바이스 처리, 외부 전송 없음.
-읽기 권한은 첫 연결(온보딩)에 한 번에 요청하며(러닝 기록, 크로스 트레이닝 문장용 최근 2주 비러닝 운동 포함)
+읽기 권한은 첫 연결(온보딩)에 한 번에 요청하며(러닝 기록 포함)
 체중은 요청하지 않습니다.
 홈·잠금화면 위젯(RunWrapWidget)은 HealthKit 권한이 없고, 앱이 App Group 컨테이너에 써 둔 파생 요약(배터리 수치, 오늘 판정 문장, 주간 거리)만 읽습니다. 기기 밖으로 나가는 것은 없습니다.
-워치 전송(WorkoutKit) — 홈의 "오늘 권장" → "Apple Watch로 보내기"를 누르면 애플 시스템 운동 미리보기 시트가 뜹니다. 사용자가 그 시트에서 "Add to Watch"를 눌러야만 워치에 저장되고, 앱은 결과를 알 수 없습니다. 권한을 요청하지 않으며 건강 데이터를 읽거나 쓰지 않습니다.
 외부 통신은 날씨(api.open-meteo.com, 약 1km 좌표 — 같은 요청으로 24시간 시간대별 예보까지), 대기질(apis.data.go.kr, 측정소 이름만),
 대회 목록(raw.githubusercontent.com), 대회 이미지(대회 JSON의 외부 이미지 URL — 주최측·언론사·포털 CDN), iCloud 진행도
 백업(CloudKit 개인 DB, 건강 데이터 없음), Apple 지도 타일이 전부이고, 어느 것도 건강 데이터를

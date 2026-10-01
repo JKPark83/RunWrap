@@ -63,16 +63,12 @@ struct ReportHomeScreen: View {
                                                                            now: Date()),
                                           hrr: ReportEngine.hrrTrend(samples: health.hrrTrend,
                                                                      now: Date()),
-                                          cross: CrossTrainingEngine.weekly(cross: health.crossTrainings,
-                                                                            runs: runs, now: Date()),
                                           form: FormTrend.compute(runs: runs, now: Date()),
                                           zoneDistribution: ZoneDistributionEngine.compute(
                                               histograms: health.zoneHistograms, runs: runs,
                                               profile: heartRate, now: Date()),
                                           trainingLoad: TrainingLoadEngine.compute(
                                               runs: runs, profile: heartRate, now: Date()),
-                                          guide: trainingGuide(runs: runs, level: level,
-                                                               batteryTone: battery?.tone),
                                           walkRun: WalkRunEngine.plan(
                                               cycleStartedAt: cycleStartedAt,
                                               weeklyGoal: weeklyGoal,
@@ -124,18 +120,6 @@ struct ReportHomeScreen: View {
         return nil
     }
 
-    /// 훈련 가이드 — 목표 레이스를 설정했을 때만 계산한다 (계획서 M7).
-    /// v0.7에서 "훈련 모드" 조건이 사라졌다 — 목적과 무관하게 목표가 있으면 가이드를 낸다
-    private func trainingGuide(runs: [RunSummary], level: RunnerLevel,
-                               batteryTone: RRTone?) -> TrainingGuide? {
-        guard let race = RaceDistance(rawValue: raceGoalRaw) else { return nil }
-        return TrainingGuideEngine(now: Date(), level: level)
-            .guide(runs: runs, race: race,
-                   goalSec: raceGoalSec > 0 ? Double(raceGoalSec) : nil,
-                   raceDate: raceDateRaw > 0 ? Date(timeIntervalSince1970: raceDateRaw) : nil,
-                   batteryTone: batteryTone)
-    }
-
     /// 주차별 훈련 계획 (이슈 #189) — 목표 종목·대회 날짜가 모두 있을 때만 계산한다.
     /// 표본·지평 가드는 엔진이 nil로 처리한다
     private func trainingPlan(runs: [RunSummary], level: RunnerLevel) -> TrainingPlan? {
@@ -158,16 +142,12 @@ struct ReportHomeContent: View {
     var vo2Max: Vo2MaxTrend? = nil
     /// 심박 회복(HRR) 추이 — 심폐 체력 카드의 보조 라인 (제안 문서 B1, 표본 부족이면 nil)
     var hrr: HrrTrend? = nil
-    /// 크로스 트레이닝 주간 요약 — 비러닝 운동 보조 카드 (제안 문서 A3, 20분 미만이면 nil)
-    var cross: CrossTrainingEngine.Summary? = nil
     /// 주간 케이던스 추이 — 최근 28일 케이던스 표본이 부족하면 엔진이 nil을 준다 (계획서 M4)
     var form: FormTrend? = nil
     /// 최근 28일 심박존 분포·80/20 강도 배분 — 심박 기록 세션 8회 미만이면 엔진이 nil을 준다 (이슈 #165)
     var zoneDistribution: ZoneDistribution? = nil
     /// TRIMP 기반 체력·피로·폼 — 심박 세션 이력 42일 미만이거나 8회 미만이면 엔진이 nil (이슈 #177)
     var trainingLoad: TrainingLoad? = nil
-    /// 훈련 가이드 — 상세 화면 전달용. 홈 카드는 지금은 숨긴다 (이슈 #21)
-    var guide: TrainingGuide? = nil
     /// 걷뛰 처방 — 런린이 전용 (§4). 사이클 시작 시각이 없으면 엔진이 nil을 준다
     var walkRun: WalkRunEngine.Plan? = nil
     /// 대회 목표 상태 — 배터리 카드 아래 독립 카드 재료 (이슈 #21·#119). 샘플 시트에서는 nil
@@ -229,42 +209,14 @@ struct ReportHomeContent: View {
                     efficiencyCard(efficiency)
                 }
 
-                if let cross, ReportGate.shows(.crossTraining, level: level) {
-                    crossTrainingCard(cross)
-                }
-
                 if let vo2Max, ReportGate.shows(.vo2Max, level: level) { vo2MaxCard(vo2Max) }
 
                 if let form, ReportGate.shows(.form, level: level) { formTrendCard(form) }
 
-                // 훈련 가이드 카드는 지금은 숨긴다 (이슈 #21) — 상세 화면의 가이드 섹션은 유지
-
                 // 레벨 게이트까지 거친 판정 카드 기준 — 런린이가 숨겨진 ACWR·EF 때문에
-                // 안내 없이 빈 상세로 가지 않게 한다 (이슈 #119)
+                // 안내도 판정 카드도 없는 빈 화면이 되지 않게 한다 (이슈 #119)
                 let visibleCards = report.visibleCards(level: level)
                 if visibleCards.isEmpty { insufficientCard }
-
-                if !isSample && !visibleCards.isEmpty {
-                    NavigationLink {
-                        ReportDetailScreen(report: report, level: level, guide: guide)
-                    } label: {
-                        HStack(spacing: 7) {
-                            Text("리포트 자세히 보기")
-                                .font(.system(size: 15.5, weight: .bold))
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .bold))
-                        }
-                        .foregroundStyle(RR.onBrand)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            LinearGradient(colors: [RR.brand, RR.brand.opacity(0.82)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .shadow(color: RR.brand.opacity(0.28), radius: 10, y: 4)
-                    }
-                    .padding(.top, 2)
-                }
             }
             .padding(.horizontal, 18)
             .padding(.top, 8)
@@ -364,47 +316,6 @@ struct ReportHomeContent: View {
         default:
             base + " · \(hrr.spanWeeks)주 전과 비슷하게 유지 중"
         }
-    }
-
-    // MARK: 크로스 트레이닝 카드 — 비러닝 운동 보조 정보 (제안 문서 A3)
-
-    /// 보조 카드 — 시간·세션 수만 보여준다. 거리 부하(ACWR)·주간 거리 집계에는 절대 섞지 않는다
-    private func crossTrainingCard(_ cross: CrossTrainingEngine.Summary) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "figure.cross.training", title: "크로스 트레이닝", code: "CROSS",
-                       tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.cross)
-
-            Text(cross.headline)
-                .font(.system(size: 21, weight: .bold))
-                .foregroundStyle(RR.text)
-                .lineSpacing(4)
-                .padding(.top, 13)
-
-            HStack(spacing: 8) {
-                metric(label: "이번 주", value: "\(cross.sessionCount)", unit: "회", color: RR.text)
-                metric(label: "총 시간", value: crossTimeLabel(cross.totalMinutes), unit: "",
-                       color: RR.text)
-                if let top = cross.breakdown.first {
-                    metric(label: "가장 많이", value: top.label, unit: "", color: RR.text2)
-                }
-            }
-            .padding(.top, 13)
-
-            Text(cross.detail)
-                .font(.system(size: 12))
-                .lineSpacing(3)
-                .foregroundStyle(RR.text3)
-                .padding(.top, 11)
-        }
-        .padding(EdgeInsets(top: 20, leading: 18, bottom: 18, trailing: 18))
-        .rrCard()
-    }
-
-    /// "1시간 30분"·"45분" — metric 셀에 들어가는 총 시간 라벨
-    private func crossTimeLabel(_ minutes: Int) -> String {
-        guard minutes >= 60 else { return "\(minutes)분" }
-        let remainder = minutes % 60
-        return remainder == 0 ? "\(minutes / 60)시간" : "\(minutes / 60)시간 \(remainder)분"
     }
 
     /// 카드 공통 헤더 — 아이콘 타일 + 제목 + 영문 코드. 판정 카드는 톤 배지를 오른쪽에 단다.
@@ -1141,7 +1052,7 @@ struct ReportHomeContent: View {
 // MARK: - 지표 설명 팝오버
 
 /// 카드 제목 옆 ⓘ 버튼 — 이 지표가 무엇이고 어떤 값이 좋은지 짧게 설명한다.
-/// 자세한 산식은 주간 요약 상세(ReportDetailScreen)에 있으니 여기서는 두세 문장으로 끝낸다.
+/// 두세 문장으로 끝낸다.
 private struct CardInfoButton: View {
     let title: String
     let text: String
@@ -1181,7 +1092,6 @@ private enum CardInfoText {
     static let zoneBalance = "최근 28일 러닝의 심박 시간을 존(Z1~Z5)별로 모았어요. 엘리트 지구력 선수는 훈련 시간의 약 80%를 대화가 되는 낮은 강도(Z1~Z2)에서 보낸다는 연구(Seiler, 2006)가 기준 — 80% 이상 유지, 70~80% 주의, 70% 밑은 쉬운 날까지 세게 달리는 상태예요. 존 경계는 설정의 심박 기준(최대 심박·Karvonen)을 따라요."
     static let efficiency = "같은 심박으로 얼마나 빨리 달리는지 — 속도를 심박으로 나눈 값이에요. 최근 2주를 그 전 2주와 비교해요. 절대값보다 방향이 중요해서, 오르고 있으면 같은 힘으로 더 멀리 가는 몸이 되고 있다는 뜻이에요."
     static let vo2Max = "운동 중 몸이 쓸 수 있는 산소의 최대치(mL/kg·분)로, 워치가 야외 러닝에서 추정해요. 지구력의 대표 지표라 높을수록 좋지만 나이·성별에 따라 기준이 달라서, 절대값보다 추세가 오르는지를 봐요. 함께 나오는 심박 회복은 러닝 직후 1분간 심박이 내려간 폭 — 클수록 회복 엔진이 좋은 거예요."
-    static let cross = "최근 7일의 러닝 외 운동(자전거·근력 등)을 모아 보여드려요. 러닝 거리 부하(ACWR)에는 넣지 않는 보조 정보지만, 몸의 피로는 같이 쌓이니 회복을 챙길 때는 함께 계산해 주세요."
     static let cadence = "1분에 발이 땅에 닿는 횟수(spm)예요. 최근 2주를 그 전 2주와 비교해요. 보통 170~180 언저리가 접지 충격이 적고 효율적이라고 알려져 있지만 키·보폭에 따라 달라서, 조금씩 오르는 추세면 충분해요."
     static let calories = "이번 주 러닝으로 태운 활동 칼로리의 합계예요. 지난주와 비교해 리듬이 유지되는지 봐요 — 한 번에 몰아서 태우는 것보다 매주 비슷하게 태우는 쪽이 오래갑니다."
     static let weight = "건강 앱의 몸무게 기록을 주 평균으로 묶어 4주 전과 비교해요. 하루 단위 출렁임은 대부분 수분이라 주 평균으로 봐야 진짜 방향이 보여요. 주 0.5kg 안팎의 완만한 감량이 오래가는 페이스예요."
