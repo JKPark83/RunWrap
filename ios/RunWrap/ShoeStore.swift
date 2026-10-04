@@ -51,12 +51,29 @@ final class ShoeStore: ObservableObject {
     /// 삭제 — 이 신발에 배정된 세션은 "없음"으로 남긴다. 키를 지우면 다음 자동 배정이
     /// 기본 신발로 다시 채워, 다른 신발 거리로 잘못 넘어간다
     func remove(_ shoe: Shoe) {
+        if let file = shoe.imageFile { ShoeImageStore.remove(file) }   // 사진도 지운다 (이슈 #206)
         shoes.removeAll { $0.id == shoe.id }
         if defaultShoeID == shoe.id { defaultShoeID = nil }
         for (runID, shoeID) in assignments where shoeID == shoe.id {
             assignments[runID] = ShoeEngine.noShoeID
         }
         save()
+    }
+
+    /// 편집 시트 저장 (이슈 #206) — 추가/수정 + 기본 지정·해제 + 자동 배정 재계산.
+    /// 설정·홈·팝업 세 곳에서 같은 시트를 쓰므로 SettingsScreen.saveShoe에 있던 로직을 여기로 모았다
+    func save(_ shoe: Shoe, isDefault: Bool, runs: [RunSummary]) {
+        if shoes.contains(where: { $0.id == shoe.id }) {
+            update(shoe)
+        } else {
+            add(shoe)
+        }
+        if isDefault {
+            setDefault(shoe.id)
+        } else if defaultShoeID == shoe.id {
+            setDefault(nil)
+        }
+        syncAssignments(runs: runs)
     }
 
     func setDefault(_ id: UUID?) {
@@ -73,6 +90,10 @@ final class ShoeStore: ObservableObject {
 
     /// 러닝 목록이 로드될 때 1회 — 배정 없는 세션을 기본 신발(등록 이후 세션만)로 채우고, 바뀌었을 때만 저장
     func syncAssignments(runs: [RunSummary]) {
+        // 실기기 데모 모드의 합성 러닝 ID를 실제 shoes.json에 쌓지 않는다 (시뮬레이터는 예외)
+        #if !targetEnvironment(simulator)
+        if DemoMode.isEnabled { return }
+        #endif
         let since = shoes.first { $0.id == defaultShoeID }?.createdAt
         let updated = ShoeEngine.autoAssign(runs: runs, defaultShoeID: defaultShoeID,
                                             assignments: assignments, since: since)
