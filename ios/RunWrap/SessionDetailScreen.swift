@@ -7,6 +7,9 @@ struct SessionDetailScreen: View {
     let run: RunSummary
     /// 이번 주가 과부하일 때만 전달 — 이 세션의 기여도를 배지로 보여준다
     var weeklyContext: WeeklyReport.DistanceCard? = nil
+    /// 러닝 후 러닝화 묻기 팝업의 한 장으로 쓸 때만 전달 (이슈 #206) — 러닝화 행 대신 고르는 목록을 펼치고
+    /// 뒤로가기를 숨긴다(닫기는 팝업의 확인 버튼). 값은 '다시 보지 않기' 동작
+    var onShoePromptOptOut: (() -> Void)? = nil
 
     @EnvironmentObject private var health: HealthStore
     @StateObject private var store = WorkoutDetailStore()
@@ -15,6 +18,7 @@ struct SessionDetailScreen: View {
     /// 러닝화 (이슈 #171) — 이 세션에 신은 신발을 바꾼다. 등록한 신발이 없으면 행을 숨긴다
     @EnvironmentObject private var shoes: ShoeStore
     @State private var showsShoePicker = false
+    @State private var showsShoeEditor = false
     // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
     @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
     @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
@@ -62,9 +66,7 @@ struct SessionDetailScreen: View {
                     }
                     .padding(.horizontal, 18)
                     .rrCard()
-                    if !shoes.shoes.isEmpty {
-                        shoeRow
-                    }
+                    if onShoePromptOptOut != nil { shoePrompt } else { shoeRow }
                     if let heat = heatAdjustment {
                         heatCard(heat)
                     }
@@ -95,12 +97,12 @@ struct SessionDetailScreen: View {
                 .padding(.horizontal, 18)
             }
             .padding(.top, run.isIndoor ? 44 : 0)  // 지도 헤더가 없으면 뒤로가기 버튼 자리 확보
-            .padding(.bottom, 26)
+            .padding(.bottom, onShoePromptOptOut == nil ? 26 : 56)   // 팝업에서는 페이지 점 자리
         }
         .ignoresSafeArea(edges: run.isIndoor ? [] : .top)
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .topLeading) { backButton }
+        .overlay(alignment: .topLeading) { if onShoePromptOptOut == nil { backButton } }
         .task { await load() }
         .onChange(of: health.state) { _, state in
             // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
@@ -112,6 +114,17 @@ struct SessionDetailScreen: View {
                            zones: store.detail?.zones,
                            route: store.detail?.route ?? [],
                            weeklySummary: weeklySummaryLine)
+        }
+        // 새 신발 등록 — 러닝화 행과 팝업 목록이 같이 쓴다. 등록 시각이 러닝보다 늦어
+        // 자동 배정 대상이 아니므로 명시적으로 배정한다 (이슈 #206)
+        .sheet(isPresented: $showsShoeEditor) {
+            ShoeEditSheet(shoe: Shoe(name: "", createdAt: Date()), isNew: true,
+                          isDefault: shoes.defaultShoeID == nil,
+                          onSave: { saved, isDefault in
+                              shoes.save(saved, isDefault: isDefault, runs: loadedRuns)
+                              shoes.assign(runID: run.id, shoeID: saved.id)
+                          },
+                          onDelete: {})
         }
     }
 
@@ -281,16 +294,24 @@ struct SessionDetailScreen: View {
 
     // MARK: 러닝화 (이슈 #171)
 
-    /// "러닝화 · 페가수스 41" — 탭하면 은퇴하지 않은 신발 + "없음" 중에서 고른다
+    /// 고를 신발이 있으면(현역 신발 또는 이미 지정된 신발) 피커, 없으면 등록 시트 (이슈 #206)
+    private var canPickShoe: Bool {
+        shoes.shoes.contains { !$0.isRetired } || shoes.shoe(forRun: run.id) != nil
+    }
+
+    /// "러닝화 · 페가수스 41" — 탭하면 은퇴하지 않은 신발 + "없음" 중에서 고른다.
+    /// 신발이 없으면 "러닝화 · 등록하기"로 항상 노출해 등록 후 이 러닝에 바로 지정한다 (이슈 #206)
     private var shoeRow: some View {
-        Button { showsShoePicker = true } label: {
+        Button {
+            if canPickShoe { showsShoePicker = true } else { showsShoeEditor = true }
+        } label: {
             HStack(spacing: 8) {
                 Text("러닝화")
                     .font(.system(size: 13.5))
                     .foregroundStyle(RR.text3)
                 Text("·")
                     .foregroundStyle(RR.text3)
-                Text(shoes.shoe(forRun: run.id)?.name ?? "없음")
+                Text(canPickShoe ? (shoes.shoe(forRun: run.id)?.name ?? "없음") : "등록하기")
                     .font(.system(size: 14.5, weight: .semibold))
                     .foregroundStyle(RR.text)
                     .lineLimit(1)
@@ -312,6 +333,132 @@ struct SessionDetailScreen: View {
             Button("없음") { shoes.assign(runID: run.id, shoeID: nil) }
             Button("취소", role: .cancel) {}
         }
+    }
+
+    // MARK: 러닝화 묻기 (이슈 #206) — 팝업에서 러닝화 행 자리에 들어간다
+
+    /// 현역 신발이 있으면 이미지 목록에서 탭해 바로 배정, 없으면 등록 권유 + '다시 보지 않기'
+    @ViewBuilder
+    private var shoePrompt: some View {
+        let activeShoes = shoes.shoes.filter { !$0.isRetired }
+        if activeShoes.isEmpty {
+            noShoeBody
+        } else {
+            Text("어떤 러닝화를 신었나요?")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(RR.text)
+                .padding(.top, 6)
+            shoeList(activeShoes)
+        }
+    }
+
+    private func shoeList(_ activeShoes: [Shoe]) -> some View {
+        let selectedID = shoes.shoe(forRun: run.id)?.id
+        return VStack(spacing: 0) {
+            ForEach(activeShoes) { shoe in
+                choiceRow(isSelected: selectedID == shoe.id,
+                          action: { shoes.assign(runID: run.id, shoeID: shoe.id) }) {
+                    ShoeImage(shoe: shoe)
+                        .frame(width: 40, height: 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(shoe.name)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(RR.text)
+                            .lineLimit(1)
+                        Text("누적 \(Int(shoes.mileage(of: shoe, runs: loadedRuns).rounded())) km")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(RR.text2)
+                    }
+                }
+                Divider().overlay(RR.line).padding(.leading, 68)
+            }
+            choiceRow(isSelected: selectedID == nil,
+                      action: { shoes.assign(runID: run.id, shoeID: nil) }) {
+                Image(systemName: "nosign")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+                    .frame(width: 40, height: 40)
+                Text("없음")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(RR.text)
+            }
+            Divider().overlay(RR.line)
+            Button {
+                showsShoeEditor = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("러닝화 추가")
+                        .font(.system(size: 14, weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(RR.brand)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .rrCard()
+    }
+
+    private func choiceRow(isSelected: Bool, action: @escaping () -> Void,
+                           @ViewBuilder content: () -> some View) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                content()
+                Spacer(minLength: 8)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(RR.brand)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 신발이 없을 때 — 등록 권유 + 등록 + 다시 보지 않기
+    private var noShoeBody: some View {
+        VStack(spacing: 12) {
+            ShoeView()
+                .frame(width: 96, height: 96)
+            Text("러닝화를 등록하면 누적 거리로 교체 시점을 알려드려요")
+                .font(.system(size: 14.5))
+                .foregroundStyle(RR.text2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                showsShoeEditor = true
+            } label: {
+                Text("러닝화 등록")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.brand)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .background(RR.brandSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            Button("다시 보지 않기") {
+                onShoePromptOptOut?()
+                dismiss()
+            }
+            .font(.system(size: 13))
+            .foregroundStyle(RR.text3)
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .rrCard()
+    }
+
+    /// 러닝화 자동 지정의 재료 — SettingsScreen.loadedRuns와 같은 방식 (이슈 #206)
+    private var loadedRuns: [RunSummary] {
+        if case .loaded(let runs) = health.state { runs } else { [] }
     }
 
     // MARK: 열 보정 페이스 (제안 문서 A1)

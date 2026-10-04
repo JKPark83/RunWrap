@@ -2,7 +2,7 @@ import SwiftUI
 
 // 일러스트 고정 팔레트 — 시안 §10. 크림 배경(#F2F0EA)과 다크 배경(#0A0A09) 양쪽에서
 // 자체 윤곽선으로 대비를 확보하는 게 설계 의도라, 여기서만 RR 토큰 대신 고정색을 쓴다.
-private enum BirdPalette {
+enum BirdPalette {
     static let outline = Color(red: 0x20 / 255, green: 0x1F / 255, blue: 0x1B / 255)    // #201F1B
     static let cream = Color(red: 0xFF / 255, green: 0xF3 / 255, blue: 0xE4 / 255)      // #FFF3E4
     static let brand = Color(red: 0xFF / 255, green: 0x4D / 255, blue: 0x2E / 255)      // #FF4D2E
