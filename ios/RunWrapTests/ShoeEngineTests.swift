@@ -104,6 +104,15 @@ struct ShoeEngineTests {
         #expect(ShoeEngine.tone(progress: 0.89) == .steady)
     }
 
+    @Test("기준 초과분 — 630/600은 30/630, 기준 이하·기준 0이면 0")
+    func overshoot() {
+        // 누적 630 중 기준을 넘긴 30km의 몫 → 막대 끝 약 4.8%
+        #expect(ShoeEngine.overshoot(mileageKm: 630, replaceKm: 600) == 30.0 / 630.0)
+        #expect(ShoeEngine.overshoot(mileageKm: 600, replaceKm: 600) == 0)
+        #expect(ShoeEngine.overshoot(mileageKm: 300, replaceKm: 600) == 0)
+        #expect(ShoeEngine.overshoot(mileageKm: 100, replaceKm: 0) == 0)
+    }
+
     // MARK: - 러닝화 묻기 대상 (이슈 #206)
 
     @Test("기준 시각이 없으면(첫 실행) 빈 배열 — 지난 기록을 묻지 않는다")

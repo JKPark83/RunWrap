@@ -224,6 +224,7 @@ struct RaceDetailScreen: View {
                 .foregroundStyle(isFavorite ? RR.warn : RR.text3)
                 .frame(width: 36, height: 36)
                 .contentShape(Rectangle())
+                .rrTapTarget()
         }
         .buttonStyle(.plain)
         .accessibilityLabel("즐겨찾기")

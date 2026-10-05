@@ -186,6 +186,9 @@ enum GrowthKey {
     static let cycleGoal = "growth.cycleGoal"
     /// 이번 사이클의 목표 기록 (초) — `cycleGoal`과 함께 고정한다. 0이면 기록 미입력
     static let cycleGoalSec = "growth.cycleGoalSec"
+    /// 성조 세러모니에서 "조금 더 키우기"로 수집을 미룬 종 (BirdSpecies rawValue, 빈 문자열 = 미룬 적 없음).
+    /// 미룬 뒤 기록으로 종이 오르면 값이 달라져 세러모니가 다시 뜬다. 기기별 값이라 백업하지 않는다
+    static let deferredSpecies = "growth.deferredSpecies"
     /// 백업 대상 값이 로컬에서 마지막으로 바뀐 시각 (timeIntervalSince1970) — 스냅샷 `updatedAt`의 원천 (이슈 #130).
     /// 업로드 시각을 쓰면 오래된 백업을 복원한 기기가 뒤늦게 올릴 때 서버의 더 새 진행도를 이긴다.
     /// 쓰기는 `ProgressSnapshot.markLocalChanged`로만 한다. 서버 본을 적용할 때는 그 본의 `updatedAt`을 기록한다

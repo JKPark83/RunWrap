@@ -24,7 +24,7 @@ struct StatsScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 7) {
-                            Eyebrow(text: "Monthly & history")
+                            Eyebrow(text: "월별 기록")
                             Text("런미새 리포트")
                                 .font(RR.display(33))
                                 .foregroundStyle(RR.text)
@@ -279,7 +279,7 @@ struct StatsScreen: View {
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(RR.text)
                 Spacer()
-                Text("\(stats.count) sessions")
+                Text("\(stats.count)회")
                     .font(.system(size: 11.5, design: .monospaced))
                     .foregroundStyle(RR.text3)
             }

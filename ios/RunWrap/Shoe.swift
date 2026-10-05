@@ -95,6 +95,13 @@ enum ShoeEngine {
         return min(max(mileageKm / replaceKm, 0), 1)
     }
 
+    /// 기준 초과분 — 누적 거리 중 기준을 넘긴 몫의 비율(막대 끝에 덧칠할 길이). 넘지 않았거나 기준이 0 이하면 0.
+    /// 예: 630 / 600 km → 30 / 630 ≈ 0.048
+    static func overshoot(mileageKm: Double, replaceKm: Double) -> Double {
+        guard replaceKm > 0, mileageKm > replaceKm else { return 0 }
+        return (mileageKm - replaceKm) / mileageKm
+    }
+
     /// 진행 바 톤 — 기준의 90% 이상이면 주의, 아니면 유지
     static func tone(progress: Double) -> RRTone {
         progress >= cautionRatio ? .caution : .steady

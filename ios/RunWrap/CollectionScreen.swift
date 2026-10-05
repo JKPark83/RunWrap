@@ -44,7 +44,7 @@ struct CollectionScreen: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Eyebrow(text: "collection")
+            Eyebrow(text: "도감")
             Text("\(collection.birds.count)마리를 키워 냈어요")
                 .font(RR.display(22))
                 .foregroundStyle(RR.text)
@@ -68,20 +68,11 @@ struct CollectionScreen: View {
         let latest = collected.max { $0.collectedAt < $1.collectedAt }
 
         VStack(spacing: 10) {
-            ZStack {
-                if latest != nil {
-                    BirdView(stage: .flying)
-                } else {
-                    // 미수집 — 같은 실루엣을 회색 한 겹으로 눌러 둔다.
-                    // 실루엣도 새 모양이라 "무엇을 모으는 중인지"는 보인다
-                    BirdView(stage: .flying)
-                        .opacity(0.13)
-                        .grayscale(1)
-                }
-            }
-            // BirdView는 240×240 정사각형을 **폭 기준**으로 확대한다 — 칸 폭을 그대로
-            // 주면 높이를 넘어 아래 글자를 덮는다. 폭도 92로 묶어 정사각형을 유지한다
-            .frame(width: 92, height: 92)
+            // 미수집도 종의 모양·색은 보여준다 — 무엇을 모으는지 보여야 모으고 싶어진다.
+            // 흐리게 눌러 두었다가 수집하면 제 색이 된다
+            SpeciesBirdView(species: species)
+                .opacity(latest != nil ? 1 : 0.55)
+                .frame(width: 104, height: 104)
 
             VStack(spacing: 3) {
                 HStack(spacing: 4) {
@@ -134,12 +125,12 @@ struct CollectionScreen: View {
                                      count: Int) -> String {
         guard let latest else { return "\(species.label), 미수집. \(species.goalHint)" }
         let repeated = count > 1 ? " \(count)마리." : ""
-        return "\(species.label), 수집함.\(repeated) 목표 \(latest.goalLabel), "
+        return "\(species.label), 수집함.\(repeated) \(latest.goalLabel), "
              + "\(Self.collectedFormatter.string(from: latest.collectedAt)) 수집"
     }
 
     private var footnote: some View {
-        Text("새 종류는 그 사이클의 목표 수준이 정해요. 큰 목표일수록 큰 새가 됩니다.")
+        Text("새 종류는 키우는 동안 실제로 달린 기록이 정해요. 더 멀리, 더 빨리 달릴수록 큰 새가 됩니다.")
             .font(.system(size: 11.5))
             .foregroundStyle(RR.text2)
             .frame(maxWidth: .infinity, alignment: .leading)

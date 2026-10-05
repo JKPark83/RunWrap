@@ -15,6 +15,8 @@ struct SessionDetailScreen: View {
     @StateObject private var store = WorkoutDetailStore()
     @Environment(\.dismiss) private var dismiss
     @State private var showShare = false
+    /// 상단 스크림 표시 — 쉴 때는 지도 헤더를 가리지 않는다 (이슈 #211)
+    @State private var scrolled = false
     /// 러닝화 (이슈 #171) — 이 세션에 신은 신발을 바꾼다. 등록한 신발이 없으면 행을 숨긴다
     @EnvironmentObject private var shoes: ShoeStore
     @State private var showsShoePicker = false
@@ -97,13 +99,19 @@ struct SessionDetailScreen: View {
                 .padding(.horizontal, 18)
             }
             .padding(.top, run.isIndoor ? 44 : 0)  // 지도 헤더가 없으면 뒤로가기 버튼 자리 확보
+            .rrTracksScroll($scrolled)
             .padding(.bottom, onShoePromptOptOut == nil ? 26 : 56)   // 팝업에서는 페이지 점 자리
         }
         .ignoresSafeArea(edges: run.isIndoor ? [] : .top)
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        // 뒤로가기 버튼 줄(위 8 + 34pt)까지 덮어 스크롤한 카드 글자가 버튼 밑에서 겹쳐 보이지 않게 한다 (이슈 #211)
+        .rrStatusBarScrim(belowTop: onShoePromptOptOut == nil ? 46 : 0, visible: scrolled)
         .overlay(alignment: .topLeading) { if onShoePromptOptOut == nil { backButton } }
-        .task { await load() }
+        .overlay(alignment: .topTrailing) { if onShoePromptOptOut == nil { headerShareButton } }
+        .task {
+            await load()
+        }
         .onChange(of: health.state) { _, state in
             // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
             guard case .loaded(let all) = state else { return }
@@ -211,8 +219,31 @@ struct SessionDetailScreen: View {
                 .foregroundStyle(.white)
                 .frame(width: 34, height: 34)
                 .background(.black.opacity(0.42), in: Circle())
+                .rrTapTarget()
         }
+        .buttonStyle(.plain)  // 기본 스타일은 라벨 밖으로 넓힌 탭 영역을 받지 않는다 (이슈 #212)
+        .accessibilityLabel("뒤로")
         .padding(.leading, 14)
+        .padding(.top, 8)
+    }
+
+    /// 뒤로가기 맞은편 공유 — 맨 아래 공유 카드와 같은 시트를 연다 (이슈 #210)
+    private var headerShareButton: some View {
+        Button {
+            showShare = true
+        } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(.black.opacity(0.42), in: Circle())
+                .rrTapTarget()
+        }
+        .buttonStyle(.plain)
+        // 경로 로딩 중에 열면 카드에 경로가 빠진다 — 공유 카드와 같이 막는다 (이슈 #84)
+        .disabled(store.isLoading)
+        .accessibilityLabel("스토리 카드로 공유")
+        .padding(.trailing, 14)
         .padding(.top, 8)
     }
 
@@ -282,6 +313,7 @@ struct SessionDetailScreen: View {
                 Image(systemName: "flame")
                     .font(.system(size: 12))
                     .foregroundStyle(RR.text3)
+                    .accessibilityHidden(true)
                 Text("노력도 \(Int(effort.score.rounded()))/10 · \(effort.label) · \(effort.sourceLabel)")
                     .font(.system(size: 13))
                     .foregroundStyle(RR.text2)
@@ -299,40 +331,65 @@ struct SessionDetailScreen: View {
         shoes.shoes.contains { !$0.isRetired } || shoes.shoe(forRun: run.id) != nil
     }
 
-    /// "러닝화 · 페가수스 41" — 탭하면 은퇴하지 않은 신발 + "없음" 중에서 고른다.
-    /// 신발이 없으면 "러닝화 · 등록하기"로 항상 노출해 등록 후 이 러닝에 바로 지정한다 (이슈 #206)
+    /// 사진 + "러닝화 / 페가수스 41" + 누적 거리 — 탭하면 은퇴하지 않은 신발 + "없음" 중에서 고른다.
+    /// 신발이 없으면 "등록하기"로 항상 노출해 등록 후 이 러닝에 바로 지정한다 (이슈 #206)
     private var shoeRow: some View {
-        Button {
+        let assigned = shoes.shoe(forRun: run.id)
+        return Button {
             if canPickShoe { showsShoePicker = true } else { showsShoeEditor = true }
         } label: {
-            HStack(spacing: 8) {
-                Text("러닝화")
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(RR.text3)
-                Text("·")
-                    .foregroundStyle(RR.text3)
-                Text(canPickShoe ? (shoes.shoe(forRun: run.id)?.name ?? "없음") : "등록하기")
-                    .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundStyle(RR.text)
-                    .lineLimit(1)
+            HStack(spacing: 14) {
+                Group {
+                    if let assigned { ShoeImage(shoe: assigned) } else { ShoeView() }
+                }
+                .frame(width: 44, height: 44)
+                .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("러닝화")
+                        .font(.system(size: 12))
+                        .foregroundStyle(RR.text3)
+                    Text(canPickShoe ? (assigned?.name ?? "없음") : "등록하기")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 8)
+                if let assigned {
+                    Text("누적 \(Int(shoes.mileage(of: assigned, runs: loadedRuns).rounded())) km")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text2)
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(RR.text3)
+                    .accessibilityHidden(true)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .rrCard()
-        .confirmationDialog("이 러닝에 신은 러닝화", isPresented: $showsShoePicker, titleVisibility: .visible) {
-            ForEach(shoes.shoes.filter { !$0.isRetired }) { shoe in
-                Button(shoe.name) { shoes.assign(runID: run.id, shoeID: shoe.id) }
+        .sheet(isPresented: $showsShoePicker) { shoePickerSheet }
+    }
+
+    /// 러닝화 고르기 시트 — 러닝 후 팝업과 같은 사진 목록(shoeList)을 쓴다. 고르면 바로 닫힌다
+    private var shoePickerSheet: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("이 러닝에 신은 러닝화")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(RR.text)
+                shoeList(shoes.shoes.filter { !$0.isRetired }, showsAdd: false)
             }
-            Button("없음") { shoes.assign(runID: run.id, shoeID: nil) }
-            Button("취소", role: .cancel) {}
+            .padding(.horizontal, 18)
+            .padding(.top, 26)
+            .padding(.bottom, 18)
         }
+        .background(RR.bg)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .onChange(of: shoes.shoe(forRun: run.id)?.id) { showsShoePicker = false }
     }
 
     // MARK: 러닝화 묻기 (이슈 #206) — 팝업에서 러닝화 행 자리에 들어간다
@@ -352,7 +409,8 @@ struct SessionDetailScreen: View {
         }
     }
 
-    private func shoeList(_ activeShoes: [Shoe]) -> some View {
+    /// showsAdd: 고르기 시트에서는 끈다 — 시트 위에 등록 시트를 또 띄우지 않으려고
+    private func shoeList(_ activeShoes: [Shoe], showsAdd: Bool = true) -> some View {
         let selectedID = shoes.shoe(forRun: run.id)?.id
         return VStack(spacing: 0) {
             ForEach(activeShoes) { shoe in
@@ -382,23 +440,25 @@ struct SessionDetailScreen: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(RR.text)
             }
-            Divider().overlay(RR.line)
-            Button {
-                showsShoeEditor = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("러닝화 추가")
-                        .font(.system(size: 14, weight: .semibold))
-                    Spacer(minLength: 0)
+            if showsAdd {
+                Divider().overlay(RR.line)
+                Button {
+                    showsShoeEditor = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("러닝화 추가")
+                            .font(.system(size: 14, weight: .semibold))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(RR.brand)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
                 }
-                .foregroundStyle(RR.brand)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .rrCard()
     }
@@ -477,10 +537,6 @@ struct SessionDetailScreen: View {
                 Text("열 보정 페이스")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("heat adjusted")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -526,10 +582,6 @@ struct SessionDetailScreen: View {
                 Text("심박 드리프트")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("hr decoupling")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -581,10 +633,6 @@ struct SessionDetailScreen: View {
                 Text("구간별 페이스")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("km splits")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             splitsSentence(drift: drift, count: lastQuarter.count)
@@ -678,10 +726,6 @@ struct SessionDetailScreen: View {
                 Text("주법")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("running dynamics")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             dynamicsGrid(detail)
