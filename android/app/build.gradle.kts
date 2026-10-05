@@ -55,6 +55,43 @@ kotlin {
     }
 }
 
+// iOS 번들 JSON을 APK assets로 — 번들 JSON은 iOS와 공유한다(대회정보는 CI가 매일 덮어쓴다).
+// ios/RunWrap 폴더를 통째로 srcDir로 잡으면 Swift 파일까지 들어가므로 이 넷만 복사한다.
+// AirQualityKey.json은 gitignore된 비밀값 파일이라 없을 수 있다 — 없으면 건너뛰고 대기질만 빈 상태가 된다.
+abstract class CopyIosAssets : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NAME_ONLY)
+    abstract val sources: ConfigurableFileCollection
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        sources.filter { it.exists() }.forEach { it.copyTo(out.resolve(it.name)) }
+    }
+}
+
+val copyIosAssets = tasks.register<CopyIosAssets>("copyIosAssets") {
+    sources.from(
+        listOf("Races", "AirStations", "CoursePOI", "AirQualityKey")
+            .map { rootProject.file("../ios/RunWrap/$it.json") },
+    )
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(copyIosAssets, CopyIosAssets::outputDir)
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+}
+
 dependencies {
     implementation(project(":engine"))
 
@@ -72,4 +109,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.maps.compose)
     implementation(libs.mlkit.text.recognition.korean)
+
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.kotlin.test.junit5)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }

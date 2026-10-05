@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 108dp 레이어 중 가운데 72dp(가시 영역)에 아이콘 전체를 둔다 — 그림 최대 반경이 원형 마스크(36dp) 안에 든다 -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_art"
+    android:inset="18dp" />
