@@ -106,14 +106,13 @@ struct RecapEngineTests {
             july.id: [1_000: 300, 5_000: 1_500],       // 5K PR은 7월 — 8월 결산에서 빠진다
             runs[0].id: [1_000: 330, 5_000: 1_600],    // 8/3 5K 1,600 > 7월 1,500 → PR 아님
             runs[1].id: [10_000: 3_500],               // 8/10 10K — 유일한 후보라 PR
-            runs[3].id: [1_000: 280],                  // 8/25 1K 280 < 7월 300 → PR
+            runs[3].id: [1_000: 280],                  // 8/25 1K — PB 종목이 아니라 기록에 안 잡힌다
             september.id: [1_000: 250],                // 9월 — 8월 끝 이후라 비교 대상이 아니다
         ]
         let recap = try #require(compute(august, runs: runs, efforts: efforts))
-        // PersonalRecords.targets 순서 (1K → 5K → 10K)
-        #expect(recap.records.map(\.label) == ["1K", "10K"])
-        #expect(recap.records.first?.run.id == runs[3].id)
-        #expect(recap.records.first?.timeSec == 280)
+        #expect(recap.records.map(\.label) == ["10K"])
+        #expect(recap.records.first?.run.id == runs[1].id)
+        #expect(recap.records.first?.timeSec == 3_500)
     }
 
     // MARK: (d) 런린이

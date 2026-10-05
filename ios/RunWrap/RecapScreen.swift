@@ -18,6 +18,7 @@ struct RecapScreen: View {
     /// 공유 이미지가 화면과 같은 모드로 그려지도록 명시적으로 주입한다 (ShareSheetView와 같다)
     @Environment(\.colorScheme) private var colorScheme
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     @State private var saveMessage: String?
 
@@ -72,7 +73,7 @@ struct RecapScreen: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 7) {
-                Eyebrow(text: isMonth ? "Monthly recap" : "Yearly recap")
+                Eyebrow(text: isMonth ? "월간 결산" : "연간 결산")
                 Text(recap?.title ?? RecapEngine.periodLabel(period) + " 결산")
                     .font(RR.display(30))
                     .foregroundStyle(RR.text)
@@ -87,7 +88,9 @@ struct RecapScreen: View {
                     .frame(width: 34, height: 34)
                     .background(RR.surface, in: Circle())
                     .overlay(Circle().strokeBorder(RR.line))
+                    .rrTapTarget()
             }
+            .buttonStyle(.plain)  // 기본 스타일은 라벨 밖으로 넓힌 탭 영역을 받지 않는다 (이슈 #212)
             .accessibilityLabel("닫기")
         }
         .padding(.bottom, 6)
@@ -97,20 +100,22 @@ struct RecapScreen: View {
 
     @ViewBuilder
     private func content(_ recap: Recap) -> some View {
-        totalsCard(recap).reveal(0, appeared)
+        // 모션 줄이기면 순차 등장 없이 처음부터 보인다 (이슈 #212)
+        let shown = appeared || reduceMotion
+        totalsCard(recap).reveal(0, shown)
         if let highlights = recap.highlights {
-            highlightsCard(highlights).reveal(1, appeared)
+            highlightsCard(highlights).reveal(1, shown)
         }
         if !recap.records.isEmpty {
-            recordsCard(recap.records).reveal(2, appeared)
+            recordsCard(recap.records).reveal(2, shown)
         }
         if let intensity = recap.intensity {
-            intensityCard(intensity).reveal(3, appeared)
+            intensityCard(intensity).reveal(3, shown)
         }
-        closingCard(recap.closingLine).reveal(4, appeared)
+        closingCard(recap.closingLine).reveal(4, shown)
         saveButton(recap)
             .padding(.top, 8)
-            .reveal(5, appeared)
+            .reveal(5, shown)
     }
 
     private func cardLabel(_ text: String) -> some View {
@@ -198,6 +203,7 @@ struct RecapScreen: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(RR.brand)
                 .frame(width: 24)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
@@ -222,6 +228,7 @@ struct RecapScreen: View {
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(RR.medalColor(forPB: entry.label))
                         .frame(width: 24)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.label)
                             .font(.system(size: 13, weight: .bold, design: .monospaced))

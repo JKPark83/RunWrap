@@ -31,11 +31,8 @@ struct ProgressStatsTests {
         ]
         let entries = PersonalRecords.compute(runs: [slower, bestFiveK, long, uncomputed],
                                               efforts: efforts)
-        #expect(entries.map(\.label) == ["1K", "5K", "10K"])  // 하프·풀 기록 없음 → 항목 자체 미포함
-
-        let oneK = try #require(entries.first { $0.label == "1K" })
-        #expect(oneK.timeSec == 290)                // min(320, 290, 330)
-        #expect(oneK.distanceKm == 1)
+        // 하프·풀 기록 없음 → 항목 자체 미포함. 1K는 에포트가 있어도 PB 종목이 아니다
+        #expect(entries.map(\.label) == ["5K", "10K"])
 
         let fiveK = try #require(entries.first { $0.label == "5K" })
         #expect(fiveK.timeSec == 1_500)             // min(1650, 1500, 1700)
@@ -62,9 +59,6 @@ struct ProgressStatsTests {
         let fiveK = try #require(entries.first { $0.label == "5K" })
         #expect(fiveK.timeSec == 1_400)
         #expect(fiveK.run.id == long.id)
-        let oneK = try #require(entries.first { $0.label == "1K" })
-        #expect(oneK.timeSec == 270)                // min(270, 285)
-
         // 4.97km 세션만 있으면 5K 항목이 없다
         #expect(PersonalRecords.compute(runs: [short], efforts: efforts)
             .contains { $0.label == "5K" } == false)

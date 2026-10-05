@@ -16,7 +16,7 @@ enum RR {
     /// 다크에서 브랜드가 밝아져 대비를 바꿔야 할 때 한 곳에서 일괄 조정하려고 토큰으로 둔다 (이슈 #85)
     static let onBrand = adaptive(0xFFFFFF, 0xFFFFFF)
     static let pos = adaptive(0x0E9146, 0x35E077)
-    /// 강수(비·눈) 심볼 전용 청색 — 웜 팔레트의 유일한 한랭 색. 날씨 아이콘 palette 렌더링에만 쓴다
+    /// 웜 팔레트의 유일한 한랭 색 — 날씨 아이콘의 강수(비·눈) 심볼과, 코스 탭 화장실(위험 신호가 아닌 중립 표시)에만 쓴다
     static let sky = adaptive(0x2E8BD9, 0x5AAEFF)
     static let warn = adaptive(0xC77700, 0xFFAE00)
     static let dang = adaptive(0xD91F00, 0xFF3B30)
@@ -39,6 +39,7 @@ enum RR {
     static let posSoft = soft(pos, 0.12, 0.16)
     static let warnSoft = soft(warn, 0.13, 0.16)
     static let dangSoft = soft(dang, 0.11, 0.16)
+    static let skySoft = soft(sky, 0.12, 0.16)
 
     /// PB 메달 색 (이슈 #21) — 종목 격에 맞춰 풀=금·하프=은·10K=동, 5K는 브랜드색
     static let medalGold = adaptive(0xC9A227, 0xE3C34E)
@@ -127,24 +128,17 @@ enum RRTone: String, Codable {
         case .improving: "좋아지는 중"
         }
     }
-
-    var code: String {
-        switch self {
-        case .overload: "OVERLOAD"
-        case .caution: "CAUTION"
-        case .steady: "STEADY"
-        case .improving: "IMPROVING"
-        }
-    }
 }
 
-/// 시안 v0.4의 상태 배지: 굵은 16×4 막대 + 한글 라벨 + 영문 코드.
+/// 시안 v0.4의 상태 배지: 굵은 16×4 막대 + 한글 라벨 (+ 선택적 보조 코드).
+/// 한글 라벨과 뜻이 겹치던 영문 톤 코드는 뺐다 (이슈 #213).
 /// v0.3까지의 soft 배경 알약에서 배경 없는 플랫 형태로 바뀌었다 — 카드 상단에서
 /// 색 면적을 줄이고 헤드라인이 주인공이 되게 하려는 의도.
 struct ToneBadge: View {
     let tone: RRTone
-    /// 톤 라벨을 문맥에 맞게 덮어쓴다 (예: 칼로리 카드의 "BURNING", 꾸준함 카드의 "STREAK")
+    /// 톤 라벨을 문맥에 맞게 덮어쓴다
     var label: String?
+    /// 라벨 옆 보조 표기 (예: 대기질 출처 "에어코리아"). nil이면 그리지 않는다
     var code: String?
 
     var body: some View {
@@ -154,10 +148,12 @@ struct ToneBadge: View {
                 .font(.system(size: 11, weight: .heavy))
                 .kerning(0.55)
                 .foregroundStyle(tone.color)
-            Text(code ?? tone.code)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .kerning(1)
-                .foregroundStyle(tone.color.opacity(0.7))
+            if let code {
+                Text(code)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .kerning(1)
+                    .foregroundStyle(tone.color.opacity(0.7))
+            }
         }
     }
 }
@@ -177,6 +173,46 @@ struct RRCardModifier: ViewModifier {
 
 extension View {
     func rrCard(radius: CGFloat = 12) -> some View { modifier(RRCardModifier(radius: radius)) }
+
+    /// 시각 크기는 그대로 두고 탭 영역만 최소 44pt로 넓힌다 (HIG 최소 터치 타깃, 이슈 #212).
+    /// 넓힌 영역은 보이지 않는 배경이 받으므로 레이아웃은 밀리지 않는다 — 버튼 label 안쪽에 단다
+    func rrTapTarget() -> some View {
+        background(Color.clear.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle()))
+    }
+
+    /// 내비게이션 바를 숨긴 화면의 상태바(시계·다이내믹 아일랜드) 영역을 시스템 바 머티리얼로 덮는다 (이슈 #211).
+    /// 설정처럼 바가 있는 화면은 시스템이 해 주지만, 바를 숨기면 스크롤한 본문이 시계와 그대로 겹친다.
+    /// 높이 0 뷰의 배경이 맞닿은 상단 안전 영역까지 번지는 성질을 쓴다 — 레이아웃은 밀리지 않는다.
+    /// `belowTop`은 안전 영역 아래로 더 덮을 높이 (떠 있는 뒤로가기 버튼 줄 등).
+    /// 시스템 바처럼 쉴 때는 투명하고 본문이 밀려 올라갔을 때만 보인다 — `visible`은 `rrTracksScroll`이 채운다
+    func rrStatusBarScrim(belowTop: CGFloat = 0, visible: Bool) -> some View {
+        overlay(alignment: .top) {
+            Color.clear.frame(height: belowTop)
+                .background(.bar)
+                .opacity(visible ? 1 : 0)
+                .animation(.easeOut(duration: 0.15), value: visible)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// 스크롤 본문 맨 위 뷰에 단다 — 처음 자리보다 위로 밀려 올라갔는지를 `scrolled`에 알린다 (이슈 #211).
+    /// 처음 자리를 기준으로 삼아 안전 영역 인셋·위쪽 여백과 무관하게 같은 규칙으로 동작한다
+    func rrTracksScroll(_ scrolled: Binding<Bool>) -> some View {
+        modifier(ScrollEdgeTracker(scrolled: scrolled))
+    }
+}
+
+private struct ScrollEdgeTracker: ViewModifier {
+    @Binding var scrolled: Bool
+    @State private var restY: CGFloat?
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { y in
+            if restY == nil { restY = y }
+            let isScrolled = y < (restY ?? y) - 1
+            if scrolled != isScrolled { scrolled = isScrolled }
+        }
+    }
 }
 
 /// 실내(트레드밀) 세션 표시용 소형 텍스트 배지 — 상태(톤)가 아니라 종류 표시라

@@ -250,14 +250,10 @@ struct TodayScreen: View {
                 Text("지금 공기질")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("air")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             if let grade = AirQualityEngine.representativeGrade(air) {
-                ToneBadge(tone: grade.tone, label: grade.label, code: "AIRKOREA")
+                ToneBadge(tone: grade.tone, label: grade.label, code: "에어코리아")
                     .padding(.top, 12)
             }
 
@@ -325,10 +321,6 @@ struct TodayScreen: View {
                 Text("오늘의 러닝")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("advice")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             HStack(spacing: 13) {
@@ -405,10 +397,6 @@ struct TodayScreen: View {
                 Text("오늘의 러닝 복장")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(RR.text)
-                Spacer()
-                Text("outfit")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(RR.text3)
             }
 
             OutfitGrid(items: items)

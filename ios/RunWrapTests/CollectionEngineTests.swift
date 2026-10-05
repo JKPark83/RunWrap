@@ -9,6 +9,79 @@ import Testing
 @Suite("도감 수집 엔진")
 struct CollectionEngineTests {
 
+    /// 사이클 시작 다음 날의 러닝 한 건
+    private static func run(km: Double, seconds: Double, daysAfter: Double = 1,
+                            since: Date) -> RunSummary {
+        RunSummary(id: UUID(), start: since.addingTimeInterval(daysAfter * 86_400),
+                   durationSec: seconds, distanceMeters: km * 1_000, avgHeartRate: nil)
+    }
+
+    // MARK: - 실제 기록 → 종
+
+    @Test("기록 기준 — 5km 미만만 달렸으면 참새, 5km부터 제비, 하프부터 매")
+    func earnedByDistance() throws {
+        let since = try #require(ISO8601DateFormatter().date(from: "2026-05-01T09:00:00Z"))
+        #expect(CollectionEngine.earned(runs: [], since: since).species == .sparrow)
+        #expect(CollectionEngine.earned(runs: [Self.run(km: 4.99, seconds: 1_800, since: since)],
+                                        since: since).species == .sparrow)
+        let swallow = CollectionEngine.earned(runs: [Self.run(km: 5, seconds: 1_800, since: since),
+                                                     Self.run(km: 12.34, seconds: 4_500, since: since)],
+                                              since: since)
+        #expect(swallow.species == .swallow)
+        // 근거 표기는 가장 긴 러닝 — 12.34km → "12.3"
+        #expect(swallow.label == "최장 12.3km")
+        // 하프 공식 거리(21.0975km)에 못 미치면 아직 제비
+        #expect(CollectionEngine.earned(runs: [Self.run(km: 21.09, seconds: 7_200, since: since)],
+                                        since: since).species == .swallow)
+        let falcon = CollectionEngine.earned(runs: [Self.run(km: 21.0975, seconds: 6_730, since: since)],
+                                             since: since)
+        #expect(falcon.species == .falcon)
+        // 6,730초 = 1:52:10
+        #expect(falcon.label == "하프 1:52:10")
+    }
+
+    @Test("기록 기준 — 풀코스는 환산 기록으로 기러기·두루미·백조를 가른다")
+    func earnedFullByTime() throws {
+        let since = try #require(ISO8601DateFormatter().date(from: "2026-05-01T09:00:00Z"))
+        func species(_ seconds: Double, km: Double = 42.195) -> BirdSpecies {
+            CollectionEngine.earned(runs: [Self.run(km: km, seconds: seconds, since: since)],
+                                    since: since).species
+        }
+        #expect(species(4 * 3_600) == .goose)        // 정확히 4:00:00은 sub-4가 아니다
+        #expect(species(4 * 3_600 - 1) == .crane)
+        #expect(species(3 * 3_600) == .crane)        // 정확히 3:00:00은 서브3가 아니다
+        #expect(species(3 * 3_600 - 1) == .swan)
+        // 43km를 4:02:00(14,520초)에 달렸다 → 42.195km 환산 14,520 × 42.195 / 43 ≈ 14,248초(3:57:28) → 두루미
+        #expect(species(14_520, km: 43) == .crane)
+    }
+
+    @Test("기록 기준 — 사이클 시작 전 기록과 거리 없는 기록은 세지 않는다")
+    func earnedIgnoresOldRuns() throws {
+        let since = try #require(ISO8601DateFormatter().date(from: "2026-05-01T09:00:00Z"))
+        let before = Self.run(km: 42.195, seconds: 10_000, daysAfter: -1, since: since)
+        let noDistance = RunSummary(id: UUID(), start: since.addingTimeInterval(86_400),
+                                    durationSec: 20_000, distanceMeters: nil, avgHeartRate: nil)
+        #expect(CollectionEngine.earned(runs: [before, noDistance], since: since).species == .sparrow)
+    }
+
+    @Test("기록 기준 — 여러 번 달렸으면 가장 좋은 기록이 종을 정한다")
+    func earnedTakesBest() throws {
+        let since = try #require(ISO8601DateFormatter().date(from: "2026-05-01T09:00:00Z"))
+        let runs = [Self.run(km: 42.195, seconds: 4.5 * 3_600, since: since),
+                    Self.run(km: 42.195, seconds: 3.5 * 3_600, daysAfter: 60, since: since),
+                    Self.run(km: 10, seconds: 3_000, daysAfter: 70, since: since)]
+        let earned = CollectionEngine.earned(runs: runs, since: since)
+        #expect(earned.species == .crane)
+        #expect(earned.label == "풀코스 3:30:00")
+    }
+
+    @Test("한 칸 위 종 — 백조 위는 없다")
+    func nextSpecies() {
+        #expect(BirdSpecies.sparrow.next == .swallow)
+        #expect(BirdSpecies.crane.next == .swan)
+        #expect(BirdSpecies.swan.next == nil)
+    }
+
     // MARK: - 종 매핑
 
     @Test("목표가 없으면 참새 — 완주 습관 사이클")
@@ -71,11 +144,12 @@ struct CollectionEngineTests {
 
     // MARK: - 수집
 
-    @Test("수집 — 종·목표 표기·소요 일수를 그 시점 값으로 굳힌다")
+    @Test("수집 — 종·기록 표기·소요 일수를 그 시점 값으로 굳힌다")
     func collectFreezesValues() throws {
         let start = try #require(ISO8601DateFormatter().date(from: "2026-05-01T09:00:00Z"))
         let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
-        let bird = CollectionEngine.collect(distance: .full, goalSeconds: 3 * 3_600 + 30 * 60,
+        // 사이클 안에 풀코스를 3:30:00(12,600초)에 달렸다 → 두루미
+        let bird = CollectionEngine.collect(runs: [Self.run(km: 42.195, seconds: 12_600, since: start)],
                                              cycleStartedAt: start, now: now)
         #expect(bird.species == .crane)
         #expect(bird.goalLabel == "풀코스 3:30:00")
@@ -88,7 +162,7 @@ struct CollectionEngineTests {
     func collectClampsNegativeDays() throws {
         let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
         let future = now.addingTimeInterval(10 * 86_400)
-        let bird = CollectionEngine.collect(distance: nil, goalSeconds: 0,
+        let bird = CollectionEngine.collect(runs: [],
                                              cycleStartedAt: future, now: now)
         #expect(bird.cycleDays == 0)
     }
@@ -226,9 +300,11 @@ struct CollectionCacheTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
-        let birds = [CollectionEngine.collect(distance: .half, goalSeconds: 0,
-                                               cycleStartedAt: now.addingTimeInterval(-30 * 86_400),
-                                               now: now)]
+        let start = now.addingTimeInterval(-30 * 86_400)
+        // 사이클 안의 하프 한 번 → 매
+        let half = RunSummary(id: UUID(), start: start.addingTimeInterval(86_400),
+                              durationSec: 7_200, distanceMeters: 21_100, avgHeartRate: nil)
+        let birds = [CollectionEngine.collect(runs: [half], cycleStartedAt: start, now: now)]
         try CollectionCache.save(birds, in: dir)
 
         let loaded = CollectionCache.load(from: dir)
@@ -250,10 +326,15 @@ struct CollectionCacheTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
-        let first = CollectionEngine.collect(distance: .fiveK, goalSeconds: 0,
+        // 첫 사이클엔 5km, 다음 사이클엔 10km — 둘 다 제비
+        func run(_ meters: Double, daysAgo: Double) -> RunSummary {
+            RunSummary(id: UUID(), start: now.addingTimeInterval(-daysAgo * 86_400),
+                       durationSec: 3_000, distanceMeters: meters, avgHeartRate: nil)
+        }
+        let first = CollectionEngine.collect(runs: [run(5_000, daysAgo: 45)],
                                               cycleStartedAt: now.addingTimeInterval(-60 * 86_400),
                                               now: now.addingTimeInterval(-30 * 86_400))
-        let second = CollectionEngine.collect(distance: .tenK, goalSeconds: 0,
+        let second = CollectionEngine.collect(runs: [run(5_000, daysAgo: 45), run(10_000, daysAgo: 10)],
                                                cycleStartedAt: now.addingTimeInterval(-30 * 86_400),
                                                now: now)
         try CollectionCache.save([first, second], in: dir)
@@ -274,7 +355,7 @@ struct CollectionStoreAddTests {
 
     private func makeBird() throws -> CollectedBird {
         let now = try #require(ISO8601DateFormatter().date(from: "2026-08-13T09:00:00Z"))
-        return CollectionEngine.collect(distance: .half, goalSeconds: 0,
+        return CollectionEngine.collect(runs: [],
                                         cycleStartedAt: now.addingTimeInterval(-30 * 86_400),
                                         now: now)
     }

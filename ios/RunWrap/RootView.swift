@@ -231,6 +231,8 @@ struct RootView: View {
                 isReturningUser = false
                 noticeDismissed = true
             }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("탭하면 안내를 닫아요")
     }
 
     /// v1 프로필을 갖고 있던 기존 사용자인지 판정한다.
@@ -255,7 +257,7 @@ private struct RestoreChoiceSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Eyebrow(text: "iCloud")
+            Eyebrow(text: "iCloud 백업")
 
             Text("이전 기록을 찾았어요")
                 .font(RR.display(26))

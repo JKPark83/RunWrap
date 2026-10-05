@@ -17,6 +17,8 @@ struct ReportHomeScreen: View {
     @AppStorage(GrowthKey.cycleStartedAt) private var cycleStartedAtRaw = 0.0
     @AppStorage(ProfileKey.onboardedAt) private var onboardedAtRaw = 0.0
     @State private var tab: ReportTab = .myState
+    /// 상단 스크림 표시 — 본문이 상태바 밑으로 밀려 올라갔을 때만 (이슈 #211)
+    @State private var scrolled = false
     // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·건강 앱 값. 해석은 엔진 한 곳
     @AppStorage(ProfileKey.hrMaxManual) private var hrMaxManual = 0
     @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
@@ -99,6 +101,7 @@ struct ReportHomeScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .rrStatusBarScrim(visible: scrolled)
     }
 
     /// [내 상태 | 이번달 | 나의 성장기] 세그먼트 — 세 화면이 같은 컨트롤을 공유한다
@@ -107,6 +110,8 @@ struct ReportHomeScreen: View {
             ForEach(ReportTab.allCases, id: \.self) { Text($0.label).tag($0) }
         }
         .pickerStyle(.segmented)
+        // 세 하위 화면 모두 스크롤 본문 위쪽에 이 세그먼트를 둔다 — 스크림 표시 기준으로 쓴다 (이슈 #211)
+        .rrTracksScroll($scrolled)
     }
 
     /// 걷뛰 사이클 시작 시각 — 없으면 nil을 줘서 카드를 아예 내지 않는다.
@@ -228,7 +233,7 @@ struct ReportHomeContent: View {
     /// 날짜 배지는 #21에서 삭제 — 기간은 아이브로에 함께 적는다
     private var header: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Eyebrow(text: "Last 7 days · \(report.dateRange)")
+            Eyebrow(text: "최근 7일 · \(report.dateRange)")
             Text("런미새 리포트")
                 .font(RR.display(33))
                 .foregroundStyle(RR.text)
@@ -262,6 +267,7 @@ struct ReportHomeContent: View {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.clockwise.heart")
                         .font(.system(size: 11, weight: .semibold))
+                        .accessibilityHidden(true)
                         .foregroundStyle(hrr.tone.color)
                     Text(hrrLine(hrr))
                         .font(.system(size: 12))
@@ -318,15 +324,16 @@ struct ReportHomeContent: View {
         }
     }
 
-    /// 카드 공통 헤더 — 아이콘 타일 + 제목 + 영문 코드. 판정 카드는 톤 배지를 오른쪽에 단다.
+    /// 카드 공통 헤더 — 아이콘 타일 + 제목 + 보조 코드(지표 약어 등, 제목과 뜻이 겹치면 nil — 이슈 #213). 판정 카드는 톤 배지를 오른쪽에 단다.
     /// 시안의 점 배지를 아이콘 타일로 확장해 카드마다 시각 정체성을 준다 (확장 요구, 2026-08-11)
     /// info를 주면 제목 옆에 작은 ⓘ가 붙는다 — 누르면 지표 설명 팝오버 (확장 요구, 2026-08-12)
-    private func cardHeader(icon: String, title: String, code: String,
+    private func cardHeader(icon: String, title: String, code: String?,
                             tint: Color, soft: Color, tone: RRTone? = nil,
                             info: String? = nil) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .semibold))
+                .accessibilityHidden(true)
                 .foregroundStyle(tint)
                 .frame(width: 34, height: 34)
                 .background(soft, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -339,10 +346,12 @@ struct ReportHomeContent: View {
                         CardInfoButton(title: title, text: info)
                     }
                 }
-                Text(code)
-                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                    .kerning(1.2)
-                    .foregroundStyle(RR.text3)
+                if let code {
+                    Text(code)
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                        .kerning(1.2)
+                        .foregroundStyle(RR.text3)
+                }
             }
             Spacer(minLength: 8)
             if let tone {
@@ -407,6 +416,7 @@ struct ReportHomeContent: View {
         HStack(spacing: 10) {
             Image(systemName: factor.systemImage)
                 .font(.system(size: 12))
+                .accessibilityHidden(true)
                 .foregroundStyle(RR.text3)
                 .frame(width: 18)
             Text(factor.name)
@@ -442,6 +452,7 @@ struct ReportHomeContent: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "battery.50percent")
                 .font(.system(size: 20, weight: .semibold))
+                .accessibilityHidden(true)
                 .foregroundStyle(RR.text3)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 5) {
@@ -466,6 +477,7 @@ struct ReportHomeContent: View {
         HStack(spacing: 12) {
             Image(systemName: "flame.fill")
                 .font(.system(size: 20, weight: .semibold))
+                .accessibilityHidden(true)
                 .foregroundStyle(streak.tone.color)
             VStack(alignment: .leading, spacing: 4) {
                 Text(streak.headline)
@@ -500,7 +512,7 @@ struct ReportHomeContent: View {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 0) {
-                Eyebrow(text: "race")
+                Eyebrow(text: "목표 대회")
                 raceOutlookSection(status)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -572,6 +584,7 @@ struct ReportHomeContent: View {
                         .font(.system(size: 12.5, weight: .semibold))
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
+                        .accessibilityHidden(true)
                 }
                 .foregroundStyle(RR.brand)
             }
@@ -638,7 +651,7 @@ struct ReportHomeContent: View {
         let cap = overloaded ? card?.capKm : nil
         let showsNumbers = ReportGate.showsNumbers(.distance, level: level)
         return VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "figure.run", title: "주간 거리", code: "DISTANCE",
+            cardHeader(icon: "figure.run", title: "주간 거리", code: nil,
                        tint: card?.tone.color ?? RR.brand, soft: card?.tone.softColor ?? RR.brandSoft,
                        tone: card?.tone, info: CardInfoText.distance)
 
@@ -876,7 +889,7 @@ struct ReportHomeContent: View {
 
     private func efficiencyCard(_ card: WeeklyReport.EfficiencyCard) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "heart.fill", title: "심박 효율", code: "EFFICIENCY",
+            cardHeader(icon: "heart.fill", title: "심박 효율", code: nil,
                        tint: card.tone.color, soft: card.tone.softColor, tone: card.tone,
                        info: CardInfoText.efficiency)
 
@@ -922,7 +935,7 @@ struct ReportHomeContent: View {
 
     private func formTrendCard(_ form: FormTrend) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "shoeprints.fill", title: "주법 리듬", code: "CADENCE",
+            cardHeader(icon: "shoeprints.fill", title: "주법 리듬", code: "케이던스",
                        tint: form.tone.color, soft: form.tone.softColor, tone: form.tone,
                        info: CardInfoText.cadence)
 
@@ -963,7 +976,7 @@ struct ReportHomeContent: View {
     /// 해석해야 하는 지표가 아니라 실행하는 지시라서 숫자가 곧 내용이다.
     private func walkRunCard(_ plan: WalkRunEngine.Plan) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            cardHeader(icon: "figure.walk", title: "걷뛰 프로그램", code: "START",
+            cardHeader(icon: "figure.walk", title: "걷뛰 프로그램", code: nil,
                        tint: RR.brand, soft: RR.brandSoft, info: CardInfoText.walkRun)
 
             Text(plan.headline)
@@ -1063,8 +1076,10 @@ private struct CardInfoButton: View {
             Image(systemName: "info.circle")
                 .font(.system(size: 12.5))
                 .foregroundStyle(RR.text3)
+                .rrTapTarget()
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(title) 설명")
         .popover(isPresented: $isPresented, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 7) {
                 Text(title)
@@ -1110,7 +1125,7 @@ struct EmptyReportScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Eyebrow(text: "Last 7 days")
+                    Eyebrow(text: "최근 7일")
                     Text("런미새 리포트")
                         .font(RR.display(33))
                         .foregroundStyle(RR.text)
@@ -1126,6 +1141,7 @@ struct EmptyReportScreen: View {
                         .overlay {
                             Image(systemName: "figure.run")
                                 .font(.system(size: 22, weight: .semibold))
+                                .accessibilityHidden(true)
                                 .foregroundStyle(RR.text3)
                         }
                     Text("아직 분석할 러닝이 없어요")
@@ -1207,6 +1223,7 @@ private struct SkeletonBlock: View {
     var width: CGFloat? = nil
     let height: CGFloat
     var delay: Double = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dim = false
 
     var body: some View {
@@ -1216,7 +1233,8 @@ private struct SkeletonBlock: View {
             .frame(maxWidth: width == nil ? 240 : nil, alignment: .leading)
             .opacity(dim ? 0.35 : 0.9)
             .animation(.easeInOut(duration: 1.2).repeatForever().delay(delay), value: dim)
-            .onAppear { dim = true }
+            // 모션 줄이기면 펄스 없이 정적으로 둔다 (이슈 #212)
+            .onAppear { if !reduceMotion { dim = true } }
     }
 }
 
@@ -1230,6 +1248,7 @@ private struct SampleReportSheet: View {
                 HStack(spacing: 8) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 12, weight: .semibold))
+                        .accessibilityHidden(true)
                     Text("합성 데이터로 만든 샘플이에요. 내 기록이 쌓이면 이렇게 해석해 드립니다.")
                         .font(.system(size: 12.5, weight: .medium))
                 }

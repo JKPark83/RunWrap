@@ -14,20 +14,33 @@ struct Shoe: Codable, Identifiable, Equatable {
     var replaceKm: Double
     /// 은퇴한 신발 — 목록 끝에 흐리게 남고, 세션 배정·자동 배정 후보에서 빠진다
     var isRetired: Bool
+    /// 사용자가 등록한 사진 파일 이름(경로 아님, `ShoeImageStore`가 위치를 안다) (이슈 #206).
+    /// 옵셔널이라 이 필드가 없는 옛 shoes.json도 그대로 읽힌다(스키마 규칙 #66). nil이면 기본 일러스트
+    var imageFile: String?
     /// 등록 시각 — 자동 배정은 이 시각 이후 세션만 대상으로 한다(이전 거리는 startKm 몫)
     let createdAt: Date
 
     static let defaultReplaceKm: Double = 600
 
     init(id: UUID = UUID(), name: String, startKm: Double = 0,
-         replaceKm: Double = Shoe.defaultReplaceKm, isRetired: Bool = false, createdAt: Date) {
+         replaceKm: Double = Shoe.defaultReplaceKm, isRetired: Bool = false,
+         imageFile: String? = nil, createdAt: Date) {
         self.id = id
         self.name = name
         self.startKm = startKm
         self.replaceKm = replaceKm
         self.isRetired = isRetired
+        self.imageFile = imageFile
         self.createdAt = createdAt
     }
+}
+
+/// 러닝 후 러닝화 묻기 팝업의 @AppStorage 키 (이슈 #206) — shoes.json 스키마는 건드리지 않는다
+enum ShoeKey {
+    /// 마지막으로 물어본 러닝의 시작 시각(timeIntervalSince1970, 0 = 아직 없음)
+    static let promptedThrough = "shoe.promptedThrough"
+    /// '다시 보지 않기' — true면 팝업·홈 등록 권유를 띄우지 않는다
+    static let promptOptOut = "shoe.promptOptOut"
 }
 
 /// shoes.json의 최상위 모양 — 신발 목록 + 기본 신발 + 세션별 배정.
@@ -82,30 +95,33 @@ enum ShoeEngine {
         return min(max(mileageKm / replaceKm, 0), 1)
     }
 
+    /// 기준 초과분 — 누적 거리 중 기준을 넘긴 몫의 비율(막대 끝에 덧칠할 길이). 넘지 않았거나 기준이 0 이하면 0.
+    /// 예: 630 / 600 km → 30 / 630 ≈ 0.048
+    static func overshoot(mileageKm: Double, replaceKm: Double) -> Double {
+        guard replaceKm > 0, mileageKm > replaceKm else { return 0 }
+        return (mileageKm - replaceKm) / mileageKm
+    }
+
     /// 진행 바 톤 — 기준의 90% 이상이면 주의, 아니면 유지
     static func tone(progress: Double) -> RRTone {
         progress >= cautionRatio ? .caution : .steady
     }
 
-    /// 교체 안내 카드의 닫기 상태 키 — 같은 신발·같은 기준이면 다시 띄우지 않는다.
-    /// 기준을 바꾸면 키가 달라져 새 기준에서 다시 안내한다
-    static func alertKey(for shoe: Shoe) -> String {
-        "\(shoe.id.uuidString)@\(Int(shoe.replaceKm))"
-    }
+    /// 팝업으로 물을 기간·개수 상한 (이슈 #206) — 오래 쉬었다 열었을 때 카드 30장을 막는다
+    static let promptWindowDays = 14
+    static let promptMaxCount = 10
 
-    struct ReplacementAlert: Equatable {
-        let shoe: Shoe
-        let mileageKm: Double
-    }
-
-    /// 홈 교체 안내 카드 재료 — 기본 신발(은퇴 제외)이 기준을 넘었고 이번 기준에서 닫은 적이 없을 때만
-    static func replacementAlert(shoes: [Shoe], defaultShoeID: UUID?, runs: [RunSummary],
-                                 assignments: [String: UUID], dismissedKey: String) -> ReplacementAlert? {
-        guard let shoe = shoes.first(where: { $0.id == defaultShoeID }), !shoe.isRetired,
-              alertKey(for: shoe) != dismissedKey else { return nil }
-        let mileage = mileageKm(shoe: shoe, runs: runs, assignments: assignments)
-        guard needsReplacement(shoe: shoe, mileageKm: mileage) else { return nil }
-        return ReplacementAlert(shoe: shoe, mileageKm: mileage)
+    /// 러닝화를 물어볼 새 러닝 (이슈 #206) — promptedThrough보다 늦게 시작했고 최근 14일 이내인 러닝을
+    /// 오래된 순으로, 10개가 넘으면 최근 10개만. 넘친 러닝은 묻지 않고 자동 배정 결과로 둔다.
+    /// promptedThrough가 nil(첫 실행·업데이트 직후)이면 빈 배열 — 지난 기록 전부를 묻지 않고
+    /// 기준만 심는다(PB 베이스라인과 같은 방식, `HomeScreen.checkNewPBs`)
+    static func pendingRuns(runs: [RunSummary], promptedThrough: Date?, now: Date) -> [RunSummary] {
+        guard let promptedThrough else { return [] }
+        let windowStart = now.addingTimeInterval(-Double(promptWindowDays) * 86_400)
+        let pending = runs
+            .filter { $0.start > promptedThrough && $0.start >= windowStart }
+            .sorted { $0.start < $1.start }
+        return Array(pending.suffix(promptMaxCount))
     }
 }
 

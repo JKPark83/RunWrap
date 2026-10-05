@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// StatsScreen("발전상" 섹션)에 있던 추이·PB를 세그먼트 화면으로 분리했다.
 /// 지표 전환 세그먼트 대신 카드 3장으로 펼쳐 한 화면에서 흐름을 훑게 한다.
-/// PB에는 종목별 메달(풀=금·하프=은·10K=동·5K·1K=브랜드색)을 단다.
+/// PB에는 종목별 메달(풀=금·하프=은·10K=동·5K=브랜드색)을 단다.
 struct GrowthScreen: View {
     /// [내 상태 | 이번달 | 나의 성장기] 세그먼트 — 리포트 탭이 넘긴다
     var segment: AnyView? = nil
@@ -42,7 +42,7 @@ struct GrowthScreen: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 7) {
-                            Eyebrow(text: "Growth & records")
+                            Eyebrow(text: "성장과 기록")
                             Text("런미새 리포트")
                                 .font(RR.display(33))
                                 .foregroundStyle(RR.text)

@@ -26,7 +26,7 @@ struct WeeklyBarsChart: View {
     private let minSlot: CGFloat = 56
     private let labelHeight: CGFloat = 22
     /// 막대 위 값 텍스트가 차지하는 높이 — 막대·상한선 스케일은 이만큼 뺀 높이를 쓴다
-    private let valueReserve: CGFloat = 13
+    private let valueReserve: CGFloat = 15
 
     private var scaleMax: Double {
         let peak = max(weeks.map(\.km).max() ?? 1, cap ?? 0)
@@ -66,7 +66,7 @@ struct WeeklyBarsChart: View {
                         VStack(spacing: 3) {
                             if showsValues, week.km > 0 {
                                 Text(barValueText(week.km))
-                                    .font(.system(size: 8.5,
+                                    .font(.system(size: 10,
                                                   weight: week.isCurrent ? .semibold : .regular,
                                                   design: .monospaced))
                                     .foregroundStyle(week.isCurrent ? currentColor : RR.text3)
@@ -116,7 +116,7 @@ struct WeeklyBarsChart: View {
             HStack(spacing: 0) {
                 ForEach(weeks) { week in
                     Text(week.label)
-                        .font(.system(size: 9.5, weight: week.isCurrent ? .bold : .regular,
+                        .font(.system(size: 10, weight: week.isCurrent ? .bold : .regular,
                                       design: .monospaced))
                         .foregroundStyle(week.isCurrent ? currentColor : RR.text3)
                         .lineLimit(1)
@@ -319,7 +319,7 @@ struct TrendLineChart: View {
                     Spacer()
                     Text(right)
                 }
-                .font(.system(size: 9.5, design: .monospaced))
+                .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(RR.text3)
             }
         }
@@ -515,7 +515,7 @@ struct SplitBarsChart: View {
                     .overlay {
                         if split.index == 1 || split.index % step == 0 {
                             Text("\(split.index)")
-                                .font(.system(size: 9, design: .monospaced))
+                                .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(RR.text3)
                                 .fixedSize()
                         }
@@ -585,7 +585,7 @@ struct ZoneStackedBarsChart: View {
 
     private let labelHeight: CGFloat = 22
     /// 막대 위 값 텍스트가 차지하는 높이 — 막대 스케일은 이만큼 뺀 높이를 쓴다
-    private let valueReserve: CGFloat = 13
+    private let valueReserve: CGFloat = 15
 
     private var scaleMax: Double {
         let peak = weeks.map { $0.zoneSeconds.reduce(0, +) }.max() ?? 0
@@ -614,7 +614,7 @@ struct ZoneStackedBarsChart: View {
                     ForEach(Array(weeks.enumerated()), id: \.offset) { index, week in
                         let isCurrent = index == weeks.count - 1
                         Text(week.label)
-                            .font(.system(size: 9.5, weight: isCurrent ? .bold : .regular,
+                            .font(.system(size: 10, weight: isCurrent ? .bold : .regular,
                                           design: .monospaced))
                             .foregroundStyle(isCurrent ? RR.text : RR.text3)
                             .lineLimit(1)
@@ -636,7 +636,7 @@ struct ZoneStackedBarsChart: View {
         return VStack(spacing: 3) {
             if total > 0 {
                 Text(Format.duration(total))
-                    .font(.system(size: 8.5, design: .monospaced))
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(RR.text3)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
