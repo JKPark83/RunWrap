@@ -23,7 +23,7 @@ iOS가 사양 원본이고 Android는 이식본이다. 규칙은 `android/CLAUDE
 6. **검증**
    ```bash
    cd android && export ANDROID_HOME=$HOME/Library/Android/sdk
-   ./gradlew :engine:test :app:assembleDebug && ./gradlew :engine:test -PtestZone=Asia/Seoul
+   ./gradlew :engine:test :app:testDebugUnitTest :app:assembleDebug && ./gradlew :engine:test -PtestZone=Asia/Seoul
    cd .. && python3 tools/ci/parity_check.py
    ```
    UI를 바꿨으면 에뮬레이터(AVD `syd_api36`) 스크린샷을 iOS 시뮬레이터 화면과 대조한다.

@@ -10,6 +10,7 @@
 set -uo pipefail
 
 payload=$(cat)
+command -v jq >/dev/null || exit 0
 [ "$(printf '%s' "$payload" | jq -r '.stop_hook_active // false' 2>/dev/null)" = "true" ] && exit 0
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0

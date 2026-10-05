@@ -58,6 +58,7 @@ object HealthPermissions {
     val effort: Set<String> = emptySet()
 
     /// 첫 연결·load()에서 쓰는 기본 요청 묶음.
-    /// 30일보다 오래된 기록은 HISTORY 권한이 있어야 읽힌다 — 성장 XP 재계산이 전체 기록을 본다 (이슈 #29)
+    /// 30일보다 오래된 기록은 HISTORY 권한이 있어야 읽힌다 — 주간 추세(최소 8주)·완주 예측·최고 기록·월간 회고와
+    /// 성장 XP 재계산(전체 기록, 이슈 #29)이 그 기간을 본다
     val standard: Set<String> = core + recovery + effort + HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY
 }

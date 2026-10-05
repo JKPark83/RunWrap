@@ -142,7 +142,7 @@ import kotlinx.coroutines.launch
 
 /// 앱 내 개인정보 처리방침 — 스토어 심사가 요구하는 앱 내 접근 경로.
 /// (Android: 원본은 docs/privacy-android.html, iOS 방침과 같은 Vercel 프로젝트로 배포한다 — review-considerations §4)
-private const val privacyPolicyURL = "https://runmisae-privacy.vercel.app/privacy-android.html"
+internal const val privacyPolicyURL = "https://runmisae-privacy.vercel.app/privacy-android.html"
 
 /// 날짜 표시·저장 기준 — 한국 사용자 전용 앱이라 KST로 고정한다 (P3 계약: DatePicker는 KST 자정 저장)
 private val kst: ZoneId = ZoneId.of("Asia/Seoul")

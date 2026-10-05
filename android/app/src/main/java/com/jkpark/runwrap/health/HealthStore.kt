@@ -170,7 +170,7 @@ class HealthStore(context: Context, private val settings: KeyValueStore) {
             // 개수 제한 없이 전부 — 최근 N개로 자르면 장기 사용자의 사이클 초반 러닝이
             // 성장 XP 재계산에서 빠진다 (이슈 #29).
             // (Android: HC에는 워크아웃 통계가 없어 거리·심박·칼로리를 기간 단위로 한 번씩 읽어 세션별로 나눈다)
-            val records = if (sessions.isEmpty()) null else readPeriod(sessions, now)
+            val records = if (sessions.isEmpty()) null else readPeriod(sessions, now, granted)
             val summaries = sessions.map { summary(it, records) }
             // HRmax — 관찰 최대 우선, 폴백은 생년 기반 Tanaka (Android: HC에 생년이 없어 관찰 최대·190만)
             _hrMaxEstimate.value = TrainingGuideEngine.hrMaxEstimate(summaries, now, zone, birthYear = null)
@@ -259,14 +259,19 @@ class HealthStore(context: Context, private val settings: KeyValueStore) {
 
     /// 가장 오래된 세션부터 지금까지를 타입마다 한 번씩 읽는다 — 세션을 기록한 앱의 표본만.
     /// 세션마다 집계를 부르면 기록이 수백 건일 때 HC 읽기 호출 한도에 걸린다
+    ///
+    /// 권한이 없는 타입만 nil이다. 읽기 실패(호출 한도·IPC 오류 등)는 그대로 던져 load()가 기존 목록을 지키게 한다 —
+    /// 조용히 nil로 바꾸면 전 세션의 거리·심박이 빈 목록이 Loaded로 굳고 리포트 캐시까지 덮어쓴다
     // ponytail: 전 기간 심박을 한 번에 메모리에 올린다 — 수년 치 기록에서 느리거나 무거우면
     // 월 단위로 끊어 읽고 세션별 평균·최고만 남긴다 (실기기에서 측정 후 결정)
-    private suspend fun readPeriod(sessions: List<ExerciseSessionRecord>, now: Instant): PeriodRecords {
+    private suspend fun readPeriod(sessions: List<ExerciseSessionRecord>, now: Instant, granted: Set<String>): PeriodRecords {
         val origins = sessions.map { it.metadata.dataOrigin }.toSet()
         val range = TimeRangeFilter.between(sessions.minOf { it.startTime }, now)
+        suspend fun <T : Record> read(type: KClass<T>, range: TimeRangeFilter): List<T>? =
+            if (HealthPermission.getReadPermission(type) in granted) client.readAll(type, range, origins) else null
         suspend fun <T : Record> totals(type: KClass<T>, range: TimeRangeFilter,
                                         amount: (T) -> SessionSlices.Amount): Map<String, SessionSlices.Totals>? =
-            quietly { client.readAll(type, range, origins) }
+            read(type, range)
                 ?.groupBy({ it.metadata.dataOrigin.packageName }, amount)
                 ?.mapValues { SessionSlices.Totals(it.value) }
         // 케이던스 백필 — 주법 추이(계획서 M4) 재료. 추이 창인 최근 28일만 채운다
@@ -275,7 +280,7 @@ class HealthStore(context: Context, private val settings: KeyValueStore) {
             distance = totals(DistanceRecord::class, range) {
                 SessionSlices.Amount(it.startTime, it.endTime, it.distance.inMeters)
             },
-            heartRate = quietly { client.readAll(HeartRateRecord::class, range, origins) }
+            heartRate = read(HeartRateRecord::class, range)
                 ?.groupBy({ it.metadata.dataOrigin.packageName }, { it.samples })
                 ?.mapValues { (_, samples) ->
                     samples.flatten().sortedBy { it.time }

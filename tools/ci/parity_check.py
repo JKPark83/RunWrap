@@ -106,16 +106,18 @@ def check_diff(base):
         if p.suffix != ".swift" or p.parent.as_posix() not in IOS_DIRS:
             continue
         counterparts = mapping.get(p.name, [p.stem + ".kt"])
-        if counterparts is None or changed_kt & set(counterparts + [p.stem + ".kt"]) or p.name in parity_added:
+        if counterparts is None or changed_kt & set(counterparts + [p.stem + ".kt"]) or f"`{p.name}`" in parity_added:
             continue
         problems.append(f"iOS만 바뀜: {path} → Android {', '.join(counterparts) or p.stem + '.kt'}에 반영하거나, "
-                        f"반영할 것이 없으면 docs/parity.md에 {p.name}과 이유를 적는다")
+                        f"반영할 것이 없으면 docs/parity.md에 `{p.name}`과 이유를 적는다")
     return problems
 
 
 def main():
     args = sys.argv[1:]
-    problems = check_diff(args[1]) if args[:1] == ["--diff"] and len(args) == 2 else check_all()
+    if args and (args[0] != "--diff" or len(args) != 2 or not args[1]):
+        sys.exit(__doc__)  # 인자가 틀리면 전체 점검으로 조용히 바뀌지 않게 멈춘다
+    problems = check_diff(args[1]) if args else check_all()
     for line in problems:
         print(line)
     if problems:

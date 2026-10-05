@@ -29,7 +29,7 @@ cd android
 export ANDROID_HOME=$HOME/Library/Android/sdk     # 환경변수가 없다 — 매번 필요
 ./gradlew :engine:test                            # 엔진 테스트 (순수 JVM — 빠르다, zone=UTC)
 ./gradlew :engine:test -PtestZone=Asia/Seoul      # 같은 테스트를 KST로 한 번 더
-./gradlew :app:assembleDebug                      # 앱 빌드
+./gradlew :app:testDebugUnitTest :app:assembleDebug   # 앱 유닛 테스트(net·store) + 빌드
 ```
 
 - 에뮬레이터는 AVD `syd_api36`만 부팅된다. 삼성헬스 동기화는 에뮬레이터로 검증할 수 없다 —

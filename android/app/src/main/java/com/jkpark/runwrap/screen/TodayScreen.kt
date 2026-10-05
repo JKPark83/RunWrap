@@ -1,6 +1,7 @@
 package com.jkpark.runwrap.screen
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -575,7 +576,13 @@ private fun Attribution(showsAirQuality: Boolean, context: Context) {
     @Composable
     fun link(text: String, url: String) = Text(
         text,
-        Modifier.clickable { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) },
+        Modifier.clickable {
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            } catch (_: ActivityNotFoundException) {
+                // 열 앱이 없으면 아무 일도 없다 (iOS Link와 같다)
+            }
+        },
         style = TextStyle(fontSize = 10.5.sp, textDecoration = TextDecoration.Underline),
         color = RR.text3,
     )
