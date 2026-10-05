@@ -20,20 +20,26 @@ class ReportGateTests {
     /// 핵심은 두 가지다: ① 매트릭스대로 레벨이 카드를 여닫는가 ②
     /// **미노출 가드(엔진 nil)가 레벨 게이트보다 항상 위인가**. ②는 게이트가 통과해도
     /// 엔진이 nil이면 그릴 게 없다는 뜻이라, 엔진 결과가 nil임을 함께 확인한다.
-    ///
-    /// (Android: 아래 6개는 아직 이식되지 않은 엔진에 기대므로 여기서 옮기지 않았다 — 해당 그룹 이식 때 함께 옮긴다.
-    ///  `ReportEngine.weeklyReport`·`WeeklyReport.visibleCards`(ReportMetrics.swift, W2-B),
-    ///  `FormTrend.compute`(FormEngine.swift, W2-D).
-    ///  - sampleGuardBeatsLevelGateForAcwr — "미노출 가드 우선 — 런잘알이어도 기록이 4주 미만이면 ACWR이 나오지 않는다"
-    ///  - sampleGuardBeatsLevelGateForEfficiency — "미노출 가드 우선 — 런친놈이어도 심박 표본이 부족하면 심박 효율이 나오지 않는다"
-    ///  - sampleGuardBeatsLevelGateForForm — "미노출 가드 우선 — 주법 표본이 부족하면 레벨과 무관하게 nil"
-    ///  - intermediateReceivesMetricsWhenSampleIsEnough — "표본이 충분하면 런잘알은 실제로 ACWR·EF를 받아본다 — 게이트만 막고 있지 않다"
-    ///  - visibleCardsRespectLevelGate — "보이는 카드 — 런린이는 거리 판정 없이 ACWR만 있으면 빈 배열(표본 부족 안내), 런잘알은 ACWR"
-    ///  - visibleCardsWithRichSample — "보이는 카드 — 표본이 충분하면 런린이는 거리만, 런잘알은 거리·ACWR·EF"
-    ///  같은 이유로 그 테스트들만 쓰던 now·run·richRuns 헬퍼도 그때 옮긴다.)
     @Nested
     @DisplayName("리포트 레벨 게이트")
     inner class LevelGateTests {
+        private val now = iso("2026-08-13T09:00:00Z")
+
+        private fun run(daysAgo: Double, km: Double,
+                        minPerKm: Double = 6.0, hr: Double? = 150.0): RunSummary =
+            RunSummary(id = UUID.randomUUID().toString().uppercase(),
+                       start = instantSince1970(now.timeIntervalSince1970 - daysAgo * 86_400),
+                       durationSec = km * minPerKm * 60,
+                       distanceMeters = km * 1000,
+                       avgHeartRate = hr)
+
+        /// 4주 이상 꾸준히 달린 이력 — ACWR·EF 가드를 모두 통과하는 표본
+        private val richRuns: List<RunSummary>
+            // 이슈 #49: ACWR 가드가 28일이라 0..<28(최고령 27일)은 걸린다 — 0...28로 4주를 채운다
+            get() = (0..28).map { day ->
+                run(daysAgo = day.toDouble(), km = 5.0, hr = 150 - day.toDouble() * 0.3)
+            }
+
         // MARK: 매트릭스 — 런린이
 
         @Test
@@ -92,6 +98,72 @@ class ReportGateTests {
             assertTrue(ReportGate.shows(ReportCard.walkRun, level = RunnerLevel.beginner))
             assertEquals(false, ReportGate.shows(ReportCard.walkRun, level = RunnerLevel.intermediate))
             assertEquals(false, ReportGate.shows(ReportCard.walkRun, level = RunnerLevel.advanced))
+        }
+
+        // MARK: 가드 우선순위 — 미노출 가드가 레벨 게이트보다 위
+
+        @Test
+        @DisplayName("미노출 가드 우선 — 런잘알이어도 기록이 4주 미만이면 ACWR이 나오지 않는다")
+        fun sampleGuardBeatsLevelGateForAcwr() {
+            // 게이트는 열려 있다
+            assertTrue(ReportGate.shows(ReportCard.acwr, level = RunnerLevel.intermediate))
+            // 하지만 엔진이 nil을 내면 그릴 게 없다 — 최근 10일치뿐이라 4주 가드에 걸린다
+            val runs = listOf(run(daysAgo = 1.0, km = 10.0), run(daysAgo = 5.0, km = 10.0), run(daysAgo = 9.0, km = 10.0))
+            assertNull(ReportEngine(now = now, level = RunnerLevel.intermediate).weeklyReport(from = runs, zone = testZone).acwr)
+        }
+
+        @Test
+        @DisplayName("미노출 가드 우선 — 런친놈이어도 심박 표본이 부족하면 심박 효율이 나오지 않는다")
+        fun sampleGuardBeatsLevelGateForEfficiency() {
+            assertTrue(ReportGate.shows(ReportCard.efficiency, level = RunnerLevel.advanced))
+            // 각 2주 창에 심박 표본이 3개 미만 (창당 2회)
+            val runs = listOf(run(daysAgo = 1.0, km = 5.0), run(daysAgo = 3.0, km = 5.0),
+                              run(daysAgo = 16.0, km = 5.0), run(daysAgo = 20.0, km = 5.0))
+            assertNull(ReportEngine(now = now, level = RunnerLevel.advanced).weeklyReport(from = runs, zone = testZone).efficiency)
+        }
+
+        @Test
+        @DisplayName("미노출 가드 우선 — 주법 표본이 부족하면 레벨과 무관하게 nil")
+        fun sampleGuardBeatsLevelGateForForm() {
+            assertTrue(ReportGate.shows(ReportCard.form, level = RunnerLevel.advanced))
+            // 케이던스가 하나도 없는 표본 (RunSummary 기본값 nil)
+            assertNull(FormTrend.compute(runs = richRuns, now = now))
+        }
+
+        @Test
+        @DisplayName("표본이 충분하면 런잘알은 실제로 ACWR·EF를 받아본다 — 게이트만 막고 있지 않다")
+        fun intermediateReceivesMetricsWhenSampleIsEnough() {
+            val report = ReportEngine(now = now, level = RunnerLevel.intermediate).weeklyReport(from = richRuns, zone = testZone)
+            assertNotNull(report.acwr)
+            assertNotNull(report.efficiency)
+        }
+
+        // MARK: 보이는 판정 카드 — 표본 부족 안내·상세 링크 판정 (이슈 #119)
+
+        @Test
+        @DisplayName("보이는 카드 — 런린이는 거리 판정 없이 ACWR만 있으면 빈 배열(표본 부족 안내), 런잘알은 ACWR")
+        fun visibleCardsRespectLevelGate() {
+            // 0~6일 전 + 14~28일 전 매일 5km, 심박 없음. 7~13일 전(이전 7일 창)이 비어
+            // 거리 가드(이전 7일 3km)에 걸리고, 기록 28일·만성 주평균 3km 이상이라 ACWR은 나온다.
+            // 심박이 없어 EF 표본도 없다
+            val runs = ((0..6) + (14..28)).map { run(daysAgo = it.toDouble(), km = 5.0, hr = null) }
+            val report = ReportEngine(now = now, level = RunnerLevel.beginner).weeklyReport(from = runs, zone = testZone)
+            assertNull(report.distance)
+            assertNotNull(report.acwr)
+            assertNull(report.efficiency)
+
+            assertTrue(report.visibleCards(level = RunnerLevel.beginner).isEmpty())
+            assertEquals(listOf(ReportCard.acwr), report.visibleCards(level = RunnerLevel.intermediate))
+            assertEquals(listOf(ReportCard.acwr), report.visibleCards(level = RunnerLevel.advanced))
+        }
+
+        @Test
+        @DisplayName("보이는 카드 — 표본이 충분하면 런린이는 거리만, 런잘알은 거리·ACWR·EF")
+        fun visibleCardsWithRichSample() {
+            val report = ReportEngine(now = now, level = RunnerLevel.intermediate).weeklyReport(from = richRuns, zone = testZone)
+            assertEquals(listOf(ReportCard.distance), report.visibleCards(level = RunnerLevel.beginner))
+            assertEquals(listOf(ReportCard.distance, ReportCard.acwr, ReportCard.efficiency),
+                         report.visibleCards(level = RunnerLevel.intermediate))
         }
     }
 
