@@ -7,7 +7,7 @@ import SwiftUI
 
 // MARK: - 러닝화 사진 (이슈 #206)
 
-/// 등록한 사진이 있으면 둥근 사각형으로 채워 보이고, 없거나 못 읽으면 기본 일러스트(ShoeView). 프레임은 호출부가 정한다
+/// 등록한 사진이 있으면 둥근 사각형 안에 통째로 보이고, 없거나 못 읽으면 기본 일러스트(ShoeView). 프레임은 호출부가 정한다
 struct ShoeImage: View {
     let shoe: Shoe
 
@@ -22,13 +22,14 @@ struct ShoeImage: View {
     }
 }
 
-/// 사진을 주어진 프레임에 꽉 채워 자른다 — ShoeImage와 편집 시트의 새로 고른 사진 미리보기가 같이 쓴다
+/// 사진을 주어진 프레임 안에 통째로 맞춘다 — ShoeImage와 편집 시트의 새로 고른 사진 미리보기가 같이 쓴다.
+/// 러닝화 사진은 대개 가로로 길어서, 꽉 채워 자르면 앞코·뒤꿈치가 잘린다. 남는 위아래는 surface로 채운다
 private struct ShoePhoto: View {
     let image: UIImage
 
     var body: some View {
-        Color.clear
-            .overlay { Image(uiImage: image).resizable().scaledToFill() }
+        RR.surface
+            .overlay { Image(uiImage: image).resizable().scaledToFit() }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

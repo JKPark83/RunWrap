@@ -118,10 +118,20 @@ struct RunWindowEngineTests {
         #expect(RunWindowEngine.bestWindow(hourly: hourly, now: at(5)) == nil)
     }
 
-    @Test("미노출 가드 — 21시면 오늘 남은 시작 후보(≤ 19시)가 없어 nil, 내일 칸은 보지 않는다")
-    func bestWindowTooLate() {
-        // 오늘·내일 48칸 모두 만점이어도 now 21시 → 후보 부족
+    @Test("내일로 넘김 — 21시면 오늘 남은 시작 후보(≤ 19시)가 없어 내일 창을 고른다")
+    func bestWindowFallsBackToTomorrow() throws {
+        // 오늘·내일 48칸 모두 만점, now 21시 → 오늘 후보 없음 → 내일 05시 창(동점 중 가장 이른 창),
+        // 07시도 100 ≥ 평균 100이라 확장 → 내일 5~8시
         let hourly = (0..<48).map { slot($0) }
+        let window = try #require(RunWindowEngine.bestWindow(hourly: hourly, now: at(21)))
+        #expect(window.start == at(29))
+        #expect(window.isTomorrow)
+        #expect(RunWindowEngine.rangeLabel(window) == "내일 5~8시")
+    }
+
+    @Test("미노출 가드 — 오늘 후보가 없고 내일 칸도 없으면 nil")
+    func bestWindowTooLateNoTomorrow() {
+        let hourly = (0..<24).map { slot($0) }
         #expect(RunWindowEngine.bestWindow(hourly: hourly, now: at(21)) == nil)
     }
 

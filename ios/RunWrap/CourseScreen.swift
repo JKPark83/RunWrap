@@ -44,6 +44,8 @@ struct CourseScreen: View {
     @State private var isRefreshing = false
     /// 마지막 코스 파일명 — 파일 자체는 Application Support에 캐시해 재진입 시 유지
     @AppStorage("lastCourseName") private var lastCourseName = ""
+    /// 상단 스크림 표시 — 본문이 상태바 밑으로 밀려 올라갔을 때만 (이슈 #211)
+    @State private var scrolled = false
 
     /// 주변 검색 반경 — 뛰어서 몇 분 거리. 1km면 왕복 10분 남짓이라 "들를 만한" 상한이다
     private static let nearbyRadius: Double = 1_000
@@ -88,8 +90,10 @@ struct CourseScreen: View {
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 26)
+            .rrTracksScroll($scrolled)
         }
         .background(RR.bg.ignoresSafeArea())
+        .rrStatusBarScrim(visible: scrolled)
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: [.gpx, .xml]) { pick in
             guard case .success(let url) = pick else { return }
@@ -239,7 +243,7 @@ struct CourseScreen: View {
     }
 
     private func nearbyMapCard(_ nearby: NearbySupplyEngine.Result) -> some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .topLeading) {
             MapReader { proxy in
                 Map(position: $camera, interactionModes: [.pan, .zoom]) {
                     UserAnnotation()
@@ -284,6 +288,7 @@ struct CourseScreen: View {
             }
             .frame(width: 38, height: 38)
             .overlay(Circle().strokeBorder(RR.line))
+            .rrTapTarget()
         }
         .buttonStyle(.plain)
         .disabled(isRefreshing)
@@ -469,7 +474,7 @@ struct CourseScreen: View {
     // MARK: 코스 지도 · 리스트
 
     private func courseMapCard(_ result: CourseSupplyEngine.Result) -> some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .topLeading) {
             MapReader { proxy in
                 Map(position: $camera, interactionModes: [.pan, .zoom]) {
                     ForEach(Array(courseCoordinates.enumerated()), id: \.offset) { _, coordinates in
@@ -567,6 +572,7 @@ struct CourseScreen: View {
                     .padding(.vertical, 9)
                     .background(isOn ? kind.color : kind.softColor,
                                 in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .rrTapTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(kind.label) \(total)개")
@@ -656,6 +662,8 @@ struct CourseScreen: View {
         // 핀 자체에는 제스처를 달지 않는다 — 지도에 붙인 탭이 먼저 먹어서 핀까지 오지 않는다.
         // 대신 지도 탭 한 곳에서 좌표를 되짚어(tapMap) 핀 선택과 해제를 같이 판정한다
         .allowsHitTesting(false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(caption)
     }
 
     /// 지도 탭 한 번으로 선택과 해제를 모두 판정한다.
@@ -711,6 +719,7 @@ struct CourseScreen: View {
         name.count > 12 ? String(name.prefix(12)) + "…" : name
     }
 
+    /// 지도 왼쪽 위에 둔다 — 아래 모서리는 Apple 지도 로고·'법적 고지'가 차지해 겹친다
     private func mapBadge(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
@@ -818,7 +827,7 @@ private extension CoursePOI.Kind {
     var color: Color {
         switch self {
         case .convenience: RR.warn
-        case .toilet: RR.brand
+        case .toilet: RR.sky   // 브랜드 주황은 위험 신호로 읽혀 중립 청색으로 (화장실 표지 관례)
         case .water: RR.pos
         }
     }
@@ -826,7 +835,7 @@ private extension CoursePOI.Kind {
     var softColor: Color {
         switch self {
         case .convenience: RR.warnSoft
-        case .toilet: RR.brandSoft
+        case .toilet: RR.skySoft
         case .water: RR.posSoft
         }
     }

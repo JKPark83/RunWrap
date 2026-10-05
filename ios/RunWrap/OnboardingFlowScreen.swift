@@ -592,6 +592,7 @@ private struct OnboardingProgressBar: View {
                             .font(.system(size: 20, weight: .medium))
                             .foregroundStyle(RR.text3)
                     }
+                    .accessibilityLabel("이전 질문")
                 } else {
                     // 첫 화면은 빈 자리표시 — 점 그룹이 좌우로 흔들리지 않게 한다.
                     // Color는 세로로도 무한 확장이라 높이를 반드시 묶어야 한다 —

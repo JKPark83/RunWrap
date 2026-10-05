@@ -12,12 +12,15 @@ struct CeremonyScreen: View {
     let species: BirdSpecies
     let goalLabel: String
     let cycleStartedAt: Date
-    /// 이번 사이클 목표 — 방금 수집된 새 종류를 정한 기준이라 다음 목표 추천도 여기서 한 칸 올린다 (이슈 #127)
+    /// 이번 사이클 목표 — 다음 목표 추천을 여기서 한 칸 올린다 (이슈 #127)
     let cycleGoal: RaceDistance?
     let cycleGoalSeconds: Int
     /// 설정의 현재 목표 — 사이클 도중 더 높게 바꿔 뒀다면 그 값을 초기 선택으로 우선한다
     let currentGoal: RaceDistance?
     let currentGoalSeconds: Int
+    /// "조금 더 키우기" — 수집을 미룬다. 수집 전까지는 더 긴 거리·빠른 기록이 나오면 종이 오른다
+    /// (풀코스 대회 전에 XP가 먼저 차도 대회를 기다릴 수 있게)
+    let onLater: () -> Void
 
     /// 수집 확정 — 도감 수록과 사이클 초기화를 호출부(홈)가 실행한다.
     /// 전환 부작용을 화면이 직접 저지르지 않게 하려고 클로저로 올린다.
@@ -25,6 +28,7 @@ struct CeremonyScreen: View {
     let onFinish: (_ newGoal: RaceDistance?, _ newGoalSeconds: Int) -> Bool
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// 세러모니 단계 — 축하를 먼저 보여주고, 이어서 다음 목표를 고르게 한다
     private enum Step { case celebrate, chooseGoal }
@@ -53,7 +57,8 @@ struct CeremonyScreen: View {
                                                            currentSeconds: currentGoalSeconds)
             pickedDistance = initial.distance
             pickedSeconds = initial.seconds
-            withAnimation(.spring(response: 0.7, dampingFraction: 0.6)) { appeared = true }
+            // 모션 줄이기면 튀어나오는 spring 없이 바로 보인다 (이슈 #212)
+            withAnimation(reduceMotion ? nil : .spring(response: 0.7, dampingFraction: 0.6)) { appeared = true }
         }
     }
 
@@ -63,7 +68,7 @@ struct CeremonyScreen: View {
         VStack(spacing: 0) {
             Spacer(minLength: 24)
 
-            BirdView(stage: .flying)
+            SpeciesBirdView(species: species)
                 .frame(width: 210, height: 210)
                 .scaleEffect(appeared ? 1 : 0.6)
                 .opacity(appeared ? 1 : 0)
@@ -101,7 +106,30 @@ struct CeremonyScreen: View {
                     .foregroundStyle(RR.onBrand)
             }
             .padding(.horizontal, 20)
-            .padding(.bottom, 24)
+
+            if let next = species.next {
+                Button {
+                    onLater()
+                    dismiss()
+                } label: {
+                    VStack(spacing: 3) {
+                        Text("조금 더 키우기")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(RR.text)
+                        Text("\(next.goalHint) → \(next.label)")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(RR.text2)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+            }
+
+            Spacer().frame(height: 24)
         }
     }
 
@@ -121,14 +149,14 @@ struct CeremonyScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer(minLength: 12)
 
-            Eyebrow(text: "next goal")
+            Eyebrow(text: "다음 목표")
                 .padding(.horizontal, 20)
             Text("다음은 어디까지 가 볼까요?")
                 .font(RR.display(24))
                 .foregroundStyle(RR.text)
                 .padding(.horizontal, 20)
                 .padding(.top, 6)
-            Text("고른 목표가 다음 새의 종류를 정해요.")
+            Text("목표 거리를 실제로 달리면 그 새가 돼요.")
                 .font(.system(size: 13))
                 .foregroundStyle(RR.text2)
                 .padding(.horizontal, 20)
@@ -158,7 +186,7 @@ struct CeremonyScreen: View {
         }
     }
 
-    /// 목표 후보 한 줄 — 고르면 그 목표로 나올 새 종류를 미리 보여준다
+    /// 목표 후보 한 줄 — 그 목표를 달성하면 될 새 종류를 미리 보여준다
     private func goalOption(_ distance: RaceDistance?) -> some View {
         // 기록 목표는 이 화면에서 받지 않는다(설정에서 정한다). 다만 풀코스를
         // 이어 가는 경우엔 추천 기록을 유지해야 종이 달라지므로 그대로 넘긴다
@@ -206,7 +234,8 @@ struct CeremonyScreen: View {
     /// 축하 색종이 — TimelineView로 시간을 받아 Canvas 한 장에 찍는다.
     /// 난수는 인덱스 기반 결정론 함수로 만든다(뷰가 다시 그려져도 같은 자리)
     private var confetti: some View {
-        TimelineView(.animation) { timeline in
+        // 모션 줄이기면 색종이를 멈춘 한 장면으로 둔다 (이슈 #212)
+        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { timeline in
             Canvas { context, size in
                 let t = timeline.date.timeIntervalSinceReferenceDate
                 for i in 0..<Self.confettiCount {

@@ -11,7 +11,7 @@ struct TrainingPlanScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Eyebrow(text: "training plan")
+                    Eyebrow(text: "훈련 계획")
                     Text("훈련 계획")
                         .font(.system(size: 24, weight: .bold))
                         .foregroundStyle(RR.text)
@@ -70,7 +70,7 @@ struct TrainingPlanScreen: View {
         let taperWeeks = plan.weeks.filter { $0.phase == .taper }.count
         let taperText = taperWeeks > 0 ? ", \(taperWeeks)주 테이퍼" : ""
         return VStack(alignment: .leading, spacing: 0) {
-            Eyebrow(text: "phases")
+            Eyebrow(text: "훈련 단계")
             PhaseTimeline(segments: segments)
                 .frame(height: 30)
                 .padding(.top, 14)

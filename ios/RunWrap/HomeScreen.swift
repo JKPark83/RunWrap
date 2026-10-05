@@ -22,6 +22,8 @@ struct HomeScreen: View {
 
     @State private var showsToday = false
     @State private var showsLastRun = false
+    /// 날씨 타일 재시도 중 — refresh()는 .loading을 거치지 않아 타일에 진행을 따로 알리고 연타를 막는다
+    @State private var retryingWeather = false
 
     @AppStorage(ProfileKey.levelV2) private var levelRaw = RunnerLevel.beginner.rawValue
     /// 주간 목표 — 온보딩 Q5에서 항상 먼저 쓰이므로 이 기본값은 사실상 안전망이다.
@@ -39,6 +41,7 @@ struct HomeScreen: View {
     /// 옵셔널인 이유: 키가 없는(도입 전) 사용자를 가려 현재 목표로 한 번 보정하기 위해서다
     @AppStorage(GrowthKey.cycleGoal) private var cycleGoalRaw: String?
     @AppStorage(GrowthKey.cycleGoalSec) private var cycleGoalSecRaw: Int?
+    @AppStorage(GrowthKey.deferredSpecies) private var deferredSpeciesRaw = ""
     @AppStorage(ProfileKey.raceDate) private var raceDateRaw = 0.0
 
     @EnvironmentObject private var collection: CollectionStore
@@ -152,6 +155,9 @@ struct HomeScreen: View {
 
         VStack(spacing: 0) {
             header(showsCollection: !runs.isEmpty)
+                // 고정 헤더 — 아래 스크롤 본문이 헤더·상태바 뒤로 비치지 않게 바탕을 깔고 위에 둔다 (이슈 #211)
+                .background(RR.bg)
+                .zIndex(1)
 
             if runs.isEmpty {
                 firstLaunchBody(growth: growth)
@@ -161,20 +167,20 @@ struct HomeScreen: View {
             }
         }
         .onAppear {
-            syncStage(growth.stage)
+            syncStage(growth.stage, runs: runs)
             checkNewPBs(runs: runs)
             // 세러모니·PB 다음 순서 — 둘 중 하나가 막 떴으면 그쪽이 닫힌 뒤 다시 부른다 (이슈 #206)
             checkNewRunsForShoe(runs: runs)
         }
         // 포그라운드 복귀·당겨서 새로고침으로 새 러닝이 들어오면 홈이 이미 떠 있어 onAppear가 다시 불리지 않는다 (이슈 #206)
         .onChange(of: runs.map(\.id)) { _, _ in
-            syncStage(growth.stage)   // 세러모니가 먼저 — 같은 갱신에서 단계가 올랐으면 팝업이 양보한다
+            syncStage(growth.stage, runs: runs)   // 세러모니가 먼저 — 같은 갱신에서 단계가 올랐으면 팝업이 양보한다
             checkNewRunsForShoe(runs: runs)
         }
         // 포그라운드 복귀·당겨서 새로고침으로 단계가 오르면 홈이 이미 떠 있어 onAppear가 다시 불리지 않는다 —
         // 단계 변화에도 같은 기록·백업·세러모니를 건다 (이슈 #60)
         .onChange(of: growth.stage) { _, newStage in
-            syncStage(newStage)
+            syncStage(newStage, runs: runs)
         }
         // 베스트 에포트 백필이 끝나면(남은 개수 0) 미뤄 둔 PB 감지를 다시 건다 (이슈 #166)
         .onChange(of: health.bestEffortPending) { _, pending in
@@ -188,14 +194,16 @@ struct HomeScreen: View {
             checkNewPBs(runs: runs)
             checkNewRunsForShoe(runs: runs)
         }) {
-            CeremonyScreen(species: pendingSpecies,
-                            goalLabel: pendingGoalLabel,
+            let earned = pendingBird(runs: runs)
+            CeremonyScreen(species: earned.species,
+                            goalLabel: earned.label,
                             cycleStartedAt: cycleStartedAt,
                             cycleGoal: cycleGoal,
                             cycleGoalSeconds: cycleGoalSec,
                             currentGoal: RaceDistance(rawValue: raceGoalRaw),
-                            currentGoalSeconds: raceGoalSec) { newGoal, newSeconds in
-                startNewCycle(goal: newGoal, goalSeconds: newSeconds, now: Date())
+                            currentGoalSeconds: raceGoalSec,
+                            onLater: { deferredSpeciesRaw = earned.species.rawValue }) { newGoal, newSeconds in
+                startNewCycle(runs: runs, goal: newGoal, goalSeconds: newSeconds, now: Date())
             }
             // 세러모니는 저장 실패 시 닫히지 않으므로 알림도 그 위에 건다 — 홈에 걸면 커버에 가려진다
             .alert("도감에 담지 못했어요", isPresented: $showsCollectFailed) {
@@ -221,14 +229,10 @@ struct HomeScreen: View {
         }
     }
 
-    /// 지금 수집될 새 종 — 세러모니 표시와 실제 수집이 같은 값을 쓰도록 한 곳에서 낸다.
-    /// 설정의 현재 목표가 아니라 사이클 시작 때 고정한 목표로 판정한다 (이슈 #110)
-    private var pendingSpecies: BirdSpecies {
-        CollectionEngine.species(for: cycleGoal, goalSeconds: cycleGoalSec)
-    }
-
-    private var pendingGoalLabel: String {
-        CollectionEngine.goalLabel(for: cycleGoal, goalSeconds: cycleGoalSec)
+    /// 지금 수집될 새 종과 근거 기록 — 세러모니 표시와 실제 수집이 같은 판정을 쓴다.
+    /// 목표가 아니라 이번 사이클에 실제로 달린 기록으로 정한다
+    private func pendingBird(runs: [RunSummary]) -> (species: BirdSpecies, label: String) {
+        CollectionEngine.earned(runs: runs, since: cycleStartedAt)
     }
 
     // MARK: - 헤더
@@ -270,7 +274,9 @@ struct HomeScreen: View {
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(RR.line))
                     .contentShape(Rectangle())
+                    .rrTapTarget()
             }
+            .buttonStyle(.plain)  // 기본 스타일은 라벨 밖으로 넓힌 탭 영역을 받지 않는다 (이슈 #212)
             .accessibilityLabel("설정")
         }
         .padding(.horizontal, 20)
@@ -327,8 +333,9 @@ struct HomeScreen: View {
                                                  level: level,
                                                  air: loadedAir.flatMap(AirQualityEngine.representativeGrade),
                                                  now: now)
-        // 승급 카드가 뜨면 새를 216 → 172로 줄여 카드 자리를 만든다 (시안 1h)
-        let birdSize: CGFloat = promotion == nil ? 216 : 172
+        // 시안(1f) 216보다 작게 — 아래 카드가 첫 화면에 더 올라오도록 새·단계 영역을 줄였다.
+        // 승급 카드가 뜨면 한 번 더 줄여 카드 자리를 만든다 (시안 1h)
+        let birdSize: CGFloat = promotion == nil ? 152 : 124
 
         ScrollView {
             VStack(spacing: 0) {
@@ -336,26 +343,30 @@ struct HomeScreen: View {
                     .frame(width: birdSize, height: birdSize)
 
                 stageName(growth: growth)
-                    .padding(.top, 6)
                 XpGauge(progress: growth.progress)
-                    .padding(.top, 14)
-                xpText(growth: growth)
                     .padding(.top, 10)
+                xpText(growth: growth)
+                    .padding(.top, 8)
 
                 if let promotion {
                     PromotionCard(evidence: promotion,
                                   onAccept: { accept(promotion.target) },
                                   onDecline: { decline(now: now) })
-                        .padding(.top, 20)
+                        .padding(.top, 14)
                 }
 
                 if let verdict {
                     VerdictCard(verdict: verdict, battery: battery, weather: weatherInput,
-                                air: loadedAir) { kind in
+                                air: loadedAir, retryingWeather: retryingWeather) { kind in
                         tap(kind, runs: runs)
                     }
-                    .padding(.top, 18)
+                    .padding(.top, 14)
                 }
+
+                // 매일·매주 바뀌는 칩을 러닝화 카드보다 먼저 — 러닝화 카드는 켤레 수만큼 길어져
+                // 아래에 두면 칩이 첫 화면 밖으로 밀린다
+                chipRow(runs: runs, now: now)
+                    .padding(.top, 10)
 
                 // 러닝화 (이슈 #206) — 신발이 없으면 '다시 보지 않기' 전까지만 등록 권유로 보인다
                 if !shoes.shoes.isEmpty || !shoePromptOptOut {
@@ -382,12 +393,8 @@ struct HomeScreen: View {
                                     onDismiss: { dismissRecap(period) })
                         .padding(.top, 10)
                 }
-
-                chipRow(runs: runs, now: now)
-                    .padding(.top, 10)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 10)
             .padding(.bottom, 24)
         }
         .refreshable {
@@ -488,6 +495,18 @@ struct HomeScreen: View {
             // 권한을 거부한 상태에서는 앱 안에서 다시 물을 수 없다 — 설정으로 보낸다
             if case .denied = weather.state {
                 if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+            } else if case .unavailable = weather.state {
+                // 조회 실패 — 열어 봐야 같은 실패 카드라 그 자리에서 다시 불러온다.
+                // 대기질은 새 좌표가 오면 onReceive(weather.$coordinate)가 따라 채운다
+                guard !retryingWeather else { return }
+                retryingWeather = true
+                Task {
+                    await weather.refresh()
+                    retryingWeather = false
+                    if case .unavailable = weather.state {
+                        AccessibilityNotification.Announcement("날씨를 다시 불러오지 못했어요").post()
+                    }
+                }
             } else {
                 showsToday = true
             }
@@ -522,11 +541,29 @@ struct HomeScreen: View {
         }
     }
 
+    @ViewBuilder
     private func xpText(growth: GrowthState) -> some View {
-        Text(growth.xpToNextStage.map { "다음 단계까지 \($0) XP" } ?? "성조 도달 — 세러모니가 기다려요")
-            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-            .kerning(0.46)  // 시안 letter-spacing .04em × 11.5px
-            .foregroundStyle(RR.text2)
+        // 성조면 수집 버튼 — "조금 더 키우기"로 미뤄도 여기서 언제든 다시 연다.
+        // 데모는 수집을 저장하지 않으므로(syncStage와 같은 가드) 문구만 둔다
+        if growth.xpToNextStage == nil && !DemoMode.isActive {
+            Button {
+                showsCeremony = true
+            } label: {
+                Text("도감에 넣기")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(RR.onBrand)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(RR.brand, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .rrTapTarget()
+        } else {
+            Text(growth.xpToNextStage.map { "다음 단계까지 \($0) XP" } ?? "성조 도달 — 세러모니가 기다려요")
+                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .kerning(0.46)  // 시안 letter-spacing .04em × 11.5px
+                .foregroundStyle(RR.text2)
+        }
     }
 
     // MARK: - 칩 2개
@@ -543,6 +580,8 @@ struct HomeScreen: View {
             }
             weeklyGoalChip(runs: runs, now: now)
         }
+        // 기록 줄이 두 줄로 넘어가도 두 칩 높이를 맞춘다
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func lastRunChip(run: RunSummary, now: Date) -> some View {
@@ -554,6 +593,9 @@ struct HomeScreen: View {
                 Text(runValueLine(run: run))
                     .font(.system(size: 14.5, weight: .semibold))
                     .monospacedDigit()
+                    // 반쪽 폭 칩이라 '10.0km · 6′06″/km'가 넘친다 — 줄바꿈 대신 한 줄에 맞춰 살짝 줄인다
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     .foregroundStyle(RR.text)
             }
             Spacer(minLength: 0)
@@ -563,7 +605,7 @@ struct HomeScreen: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 13)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .rrCard()
     }
 
@@ -583,7 +625,7 @@ struct HomeScreen: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 13)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .rrCard()
     }
 
@@ -677,7 +719,7 @@ struct HomeScreen: View {
     }
 
     /// 표시 단계를 최고 단계에 기록하고, 성조면 세러모니를 띄운다 — 홈 진입·단계 변화 두 곳에서 부른다 (이슈 #60)
-    private func syncStage(_ stage: GrowthStage) {
+    private func syncStage(_ stage: GrowthStage, runs: [RunSummary]) {
         // 데모(합성 데이터)는 표시만 한다 — 최고 단계·세러모니·사이클 전환을 저장하면
         // 데모를 꺼도 부풀려진 단계와 가짜 새가 남고 CloudKit까지 올라간다 (이슈 #44).
         // 세러모니가 뜨지 않으면 startNewCycle도 불리지 않는다
@@ -685,8 +727,10 @@ struct HomeScreen: View {
         syncMaxStage(stage)
         // 성조에 도달했는데 아직 수집하지 않았다면 세러모니를 띄운다.
         // 판정은 표시 단계로 한다 — XP가 흔들려도 한 번 성조가 됐으면 성조다.
-        // 이미 떠 있으면 다시 세우지 않는다
-        if !showsCeremony && CollectionEngine.hasReachedAdult(stage: stage) { showsCeremony = true }
+        // 이미 떠 있으면 다시 세우지 않는다. "조금 더 키우기"로 미룬 종 그대로면 조용히 두고,
+        // 그 뒤 기록으로 종이 올랐으면 다시 축하한다
+        if !showsCeremony && CollectionEngine.hasReachedAdult(stage: stage)
+            && deferredSpeciesRaw != pendingBird(runs: runs).species.rawValue { showsCeremony = true }
     }
 
     /// 이번 사이클 최고 단계를 올려 둔다 — 다음 실행에서 표시 단계가 내려가지 않게 하는 하한.
@@ -705,9 +749,8 @@ struct HomeScreen: View {
     /// `cycleStartedAt`을 지금으로 옮기면 XP는 자동으로 0부터 다시 쌓인다
     /// (XP 원장을 저장하지 않는 설계라 리셋할 값이 따로 없다).
     /// - Returns: 도감 저장 성공 여부. 실패하면 사이클을 그대로 두고 알림만 띄운다 (이슈 #67)
-    private func startNewCycle(goal: RaceDistance?, goalSeconds: Int, now: Date) -> Bool {
-        let saved = collection.add(CollectionEngine.collect(distance: cycleGoal,
-                                                             goalSeconds: cycleGoalSec,
+    private func startNewCycle(runs: [RunSummary], goal: RaceDistance?, goalSeconds: Int, now: Date) -> Bool {
+        let saved = collection.add(CollectionEngine.collect(runs: runs,
                                                              cycleStartedAt: cycleStartedAt,
                                                              now: now))
         guard saved else {
@@ -716,11 +759,12 @@ struct HomeScreen: View {
         }
         raceGoalRaw = goal?.rawValue ?? ""
         raceGoalSec = goalSeconds
-        // 새 사이클의 목표를 고정한다 — 다음 새의 종류는 이 값으로 판정한다 (이슈 #110)
+        // 새 사이클의 목표를 고정한다 — 다음 세러모니의 목표 추천 기준이 된다 (이슈 #110)
         cycleGoalRaw = goal?.rawValue ?? ""
         cycleGoalSecRaw = goalSeconds
         cycleStartedAtRaw = now.timeIntervalSince1970
         maxStage = GrowthStage.egg.rawValue
+        deferredSpeciesRaw = ""
         // 새 사이클 = 새 식별자 — CloudKit 스냅샷 병합의 사이클 경계 (이슈 #29)
         UserDefaults.standard.set(UUID().uuidString, forKey: GrowthKey.cycleID)
         ProgressSnapshot.markLocalChanged(defaults: .standard, now: now)
@@ -803,6 +847,7 @@ private struct PBCongratsSheet: View {
                 .font(.system(size: 44, weight: .semibold))
                 .foregroundStyle(RR.medalColor(forPB: entries.first?.label ?? ""))
                 .padding(.top, 34)
+                .accessibilityHidden(true)
             Text("새 기록입니다!")
                 .font(RR.display(26))
                 .foregroundStyle(RR.text)
@@ -819,6 +864,7 @@ private struct PBCongratsSheet: View {
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(RR.medalColor(forPB: entry.label))
                             .frame(width: 24)
+                            .accessibilityHidden(true)
                         Text(entry.label)
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundStyle(RR.text)
@@ -898,6 +944,7 @@ private struct RecapPromptCard: View {
                     .foregroundStyle(RR.text3)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
+                    .rrTapTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("결산 카드 닫기")
@@ -971,6 +1018,12 @@ private struct HomeShoeCard: View {
                             Capsule().fill(RR.barFill)
                             Capsule().fill(ShoeEngine.tone(progress: progress).color)
                                 .frame(width: geo.size.width * progress)
+                        }
+                        // 기준을 넘긴 몫은 막대 끝에 과부하 색으로 덧칠한다 — 꽉 찬 막대만으로는 초과가 안 보인다
+                        .overlay(alignment: .trailing) {
+                            Capsule().fill(RRTone.overload.color)
+                                .frame(width: geo.size.width * ShoeEngine.overshoot(mileageKm: mileage,
+                                                                                    replaceKm: shoe.replaceKm))
                         }
                     }
                     .frame(height: 4)
@@ -1130,6 +1183,8 @@ private struct VerdictCard: View {
     let weather: TodayVerdictEngine.WeatherInput
     /// 날씨 타일에 얹는 미세·초미세 등급 요약 — 상세 수치는 '오늘' 시트 몫
     let air: AirQuality?
+    /// 조회 실패 타일을 눌러 다시 불러오는 중
+    let retryingWeather: Bool
     let onTap: (TodayVerdict.Line.Kind) -> Void
 
     var body: some View {
@@ -1262,7 +1317,13 @@ private struct VerdictCard: View {
         case .denied:
             hintArt(symbol: "location.slash", line: verdict.weather)
         case .unavailable:
-            hintArt(symbol: "icloud.slash", line: verdict.weather)
+            VStack(alignment: .leading, spacing: 4) {
+                hintArt(symbol: "icloud.slash", line: verdict.weather)
+                // 탭이 곧 재시도다 (HomeScreen.tap) — 그 사실을 타일에서 말해 준다
+                Text(retryingWeather ? "다시 불러오는 중…" : "눌러서 다시 불러오기")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+            }
         }
     }
 

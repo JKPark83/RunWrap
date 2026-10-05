@@ -15,6 +15,8 @@ struct RaceListScreen: View {
     @State private var query = ""
     /// 목록 판정 기준 시각 — 자정·포그라운드 복귀 때 갱신해 D-day·접수 상태가 어제에 머물지 않게 한다 (#145)
     @State private var now = Date()
+    /// 상단 스크림 표시 — 본문이 상태바 밑으로 밀려 올라갔을 때만 (이슈 #211)
+    @State private var scrolled = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -31,6 +33,7 @@ struct RaceListScreen: View {
         }
         .background(RR.bg.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
+        .rrStatusBarScrim(visible: scrolled)
         .task { await store.load() }
         // 포그라운드 복귀 — 날짜를 다시 잡고, 원격은 6시간이 지났을 때만 다시 받는다 (#145)
         .onChange(of: scenePhase) { _, phase in
@@ -64,7 +67,7 @@ struct RaceListScreen: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Eyebrow(text: "Race calendar")
+                    Eyebrow(text: "대회 일정")
                     Text("대회")
                         .font(RR.display(33))
                         .foregroundStyle(RR.text)
@@ -96,6 +99,8 @@ struct RaceListScreen: View {
             .padding(.horizontal, 18)
             .padding(.top, 8)
             .padding(.bottom, 26)
+            // 목록 첫 줄은 지연 생성이라 사라졌다 돌아올 수 있다 — 늘 있는 바깥 스택에 단다
+            .rrTracksScroll($scrolled)
         }
         .refreshable { await store.refresh() }
         .scrollDismissesKeyboard(.immediately)
@@ -107,11 +112,13 @@ struct RaceListScreen: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14))
                 .foregroundStyle(RR.text3)
+                .accessibilityHidden(true)
             TextField("대회명·지역·종목 검색", text: $query)
                 .font(.system(size: 14))
                 .foregroundStyle(RR.text)
                 .submitLabel(.search)
                 .autocorrectionDisabled()
+                .accessibilityLabel("대회 검색")
             if !query.isEmpty {
                 Button {
                     query = ""
@@ -119,8 +126,10 @@ struct RaceListScreen: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 15))
                         .foregroundStyle(RR.text3)
+                        .rrTapTarget()
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("검색어 지우기")
             }
         }
         .padding(.horizontal, 12)
@@ -147,8 +156,10 @@ struct RaceListScreen: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(selected ? RR.brand : RR.surface2, in: Capsule())
+                .rrTapTarget()
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func row(_ entry: RaceEngine.Entry, isFavorite: Bool) -> some View {
@@ -267,6 +278,7 @@ struct RaceListScreen: View {
             Image(systemName: searching ? "magnifyingglass" : filter == .favorites ? "star" : "flag.slash")
                 .font(.system(size: 22))
                 .foregroundStyle(RR.text3)
+                .accessibilityHidden(true)
             Text(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(RR.text)

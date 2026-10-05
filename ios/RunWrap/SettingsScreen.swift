@@ -685,6 +685,12 @@ struct SettingsScreen: View {
                             Capsule().fill(ShoeEngine.tone(progress: progress).color)
                                 .frame(width: geo.size.width * progress)
                         }
+                        // 기준을 넘긴 몫은 막대 끝에 과부하 색으로 덧칠한다 — 꽉 찬 막대만으로는 초과가 안 보인다
+                        .overlay(alignment: .trailing) {
+                            Capsule().fill(RRTone.overload.color)
+                                .frame(width: geo.size.width * ShoeEngine.overshoot(mileageKm: mileage,
+                                                                                    replaceKm: shoe.replaceKm))
+                        }
                     }
                     .frame(height: 4)
                 }
@@ -799,6 +805,7 @@ struct SettingsScreen: View {
                    in: Date()...Date().addingTimeInterval(366 * 86_400),
                    displayedComponents: .date)
             .datePickerStyle(.compact)
+            .environment(\.locale, Locale(identifier: "ko_KR"))  // 시스템 언어가 영어여도 "2026년 10월 25일"
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(RR.text)
             .tint(RR.brand)
@@ -866,6 +873,7 @@ struct SettingsScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])  // 버튼 라벨에는 체크 아이콘이 실리지 않아 선택 상태를 트레이트로 알린다 (이슈 #212)
     }
 }
 

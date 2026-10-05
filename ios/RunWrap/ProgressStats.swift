@@ -54,14 +54,14 @@ struct MonthlySeries {
     }
 }
 
-/// 거리별 최고 기록 — 1K/5K/10K/하프/풀 (기획서 §4.7, 이슈 #166).
+/// 거리별 최고 기록 — 5K/10K/하프/풀 (기획서 §4.7, 이슈 #166).
 /// PR = 세션마다 거리 샘플에서 잰 베스트 에포트(목표 거리를 가장 빨리 지난 연속 구간의
 /// 벽시계 시간, BestEffortEngine)의 최소값. 10km 세션 안의 빠른 5km도 5K 기록이 된다.
 /// 아직 계산되지 않은(백필 대기) 세션은 후보에서 빠진다.
 /// 해당 거리 기록이 없으면 항목 자체를 내지 않는다.
 struct PersonalRecords {
     struct Entry {
-        let label: String        // "1K" · "5K" · "10K" · "하프" · "풀"
+        let label: String        // "5K" · "10K" · "하프" · "풀"
         let distanceKm: Double   // 공인 거리
         let timeSec: Double      // 베스트 에포트 — 공인 거리 구간의 소요 시간
         let run: RunSummary      // 기록을 세운 세션 — 목록에서 탭하면 이 세션 상세로 간다
@@ -69,8 +69,9 @@ struct PersonalRecords {
         var date: Date { run.start }
     }
 
-    /// 공인 거리 5종 (m) — 베스트 에포트 목표 거리와 같다
-    static let targets = BestEffortEngine.targets
+    /// 공인 거리 4종 (m) — 베스트 에포트 목표 거리에서 1K를 뺀 것.
+    /// 1K는 대회 종목이 아니고 거의 모든 러닝이 후보라 PB로서 의미가 옅다 (엔진·캐시는 그대로 잰다)
+    static let targets = BestEffortEngine.targets.filter { $0.meters >= 5_000 }
 
     static func compute(runs: [RunSummary], efforts: BestEffortTable) -> [Entry] {
         targets.compactMap { target in
