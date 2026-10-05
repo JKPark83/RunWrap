@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Health Connect 읽기 권한 선언 — iOS HealthPermissions.swift(core·recovery)의 readTypes에 대응하는 것만.
+     매니페스트에 없는 권한은 요청 시트에서 조용히 거부되므로 health/ 의 요청 셋과 1:1로 맞춘다.
+     HC에 대응 타입이 없는 iOS 항목(수직 진폭·지면 접촉·보폭·생년월일·심박 회복·노력도)은 선언하지 않는다 —
+     스토어가 nil을 주고 엔진 가드로 카드가 사라진다 (android/CLAUDE.md).
+     몸무게는 iOS도 요청하지 않는다 (기획서 §2 Q9 각주). 케이던스(StepsCadenceRecord)는 READ_STEPS에 묶여 있다.
+     백그라운드 읽기(READ_HEALTH_DATA_IN_BACKGROUND)는 요청하지 않는다 — 동기화는 앱이 열릴 때만. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 외부 통신은 날씨·대기질·대회정보뿐 — 건강 데이터는 싣지 않는다 (기획서 §6) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- iOS LocationProvider 대응: 날씨는 km 정확도(coarse)로 충분하지만,
+         코스 탭 주변 보급은 300m 밖 음수대를 짚어야 해서 정확한 위치가 필요하다 (이슈 #74).
+         FINE은 Android 12+에서 COARSE와 함께 선언해야 사용자가 대략/정확을 고를 수 있다. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- iOS NotificationScheduler 대응 (Android 13+ 런타임 권한) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 러닝 코어 (iOS HealthPermissions.core 대응) -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE_ROUTES" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <!-- iOS activeEnergyBurned 대응 — 기기에 따라 활동/총 칼로리 중 한쪽만 기록되므로 둘 다 선언 -->
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+    <uses-permission android:name="android.permission.health.READ_VO2_MAX" />
+    <uses-permission android:name="android.permission.health.READ_POWER" />
+
+    <!-- 체력 배터리 회복 신호 (iOS HealthPermissions.recovery 대응) -->
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_RESPIRATORY_RATE" />
+    <uses-permission android:name="android.permission.health.READ_SKIN_TEMPERATURE" />
+
+    <!-- 30일 초과 이력 — 주간 추세 차트(최소 8주)·완주 예측·월간/연간 리캡 재료 -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
+
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
+    <!-- 진행도 백업은 Auto Backup으로 한다. 건강 데이터 캐시 제외 규칙은 data_extraction_rules.xml에 -->
+    <application
+        android:label="런미새"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:supportsRtl="false">
+
+        <!-- Google Maps 키 — local.properties의 MAPS_API_KEY를 빌드가 주입한다 (커밋 금지).
+             키가 없으면 빈 값이 들어가고 지도 자리는 빈 상태로 보인다. -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Android 14+ 필수: 시스템 설정 '권한 사용 이유' 진입점.
+             누락하면 HC 권한 시트 자체가 뜨지 않는다. -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+    </application>
+</manifest>
