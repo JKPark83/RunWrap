@@ -34,6 +34,8 @@ export ANDROID_HOME=$HOME/Library/Android/sdk     # 환경변수가 없다 — �
 
 - 에뮬레이터는 AVD `syd_api36`만 부팅된다. 삼성헬스 동기화는 에뮬레이터로 검증할 수 없다 —
   합성 데이터는 디버그 빌드의 HC 시더로 넣는다.
+  (`app/src/debug/…/debug/HealthSeedReceiver.kt` — 쓰기 권한 `pm grant` 뒤 `adb shell am broadcast -n com.jkpark.runwrap/.debug.HealthSeedReceiver`,
+  자세한 순서는 그 파일 주석. 쓰기 권한은 디버그 매니페스트에만 있다 — 릴리스에 넣지 않는다.)
 - 완료 기준은 루트 CLAUDE.md와 같다: 빌드 경고 0, 관련 테스트 통과, UI는 에뮬레이터 스크린샷으로
   iOS 화면과 대조, 돌려 본 것만 보고.
 

@@ -773,7 +773,8 @@ fun BatteryGauge(
                             .width(max(2.dp, cellW))
                             .fillMaxHeight()
                             .background(
-                                if (index < filledCells) fillColor else RR.barFill.copy(alpha = 0.45f),
+                                // SwiftUI .opacity(0.45)는 토큰의 알파에 곱한다 — copy(alpha = 0.45f)로 덮으면 회색 칸이 된다
+                                if (index < filledCells) fillColor else RR.barFill.let { it.copy(alpha = it.alpha * 0.45f) },
                                 RoundedCornerShape(1.5.dp),
                             ),
                     )

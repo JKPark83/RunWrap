@@ -13,19 +13,20 @@ object FeedbackMail {
 
     /// 퍼센트 인코딩은 URLComponents(queryItems)에 맡긴다 — 한글·공백·줄바꿈을 직접 치환하지 않는다
     /// (Android: URLComponents 대응이 없어 쿼리 값 인코딩을 직접 한다. `URLEncoder`는 공백을 `+`로 바꿔 쓰지 않는다)
-    fun url(appVersion: String, build: String, systemVersion: String, deviceModel: String): URI {
+    fun url(appVersion: String, build: String, systemVersion: String, deviceModel: String, platform: String = "iOS"): URI {
         val items = listOf(
             "subject" to subject,
             "body" to body(appVersion = appVersion, build = build,
-                           systemVersion = systemVersion, deviceModel = deviceModel),
+                           systemVersion = systemVersion, deviceModel = deviceModel, platform = platform),
         )
         val query = items.joinToString("&") { (name, value) -> "${encodeQueryItem(name)}=${encodeQueryItem(value)}" }
         return URI("mailto:$address?$query")
     }
 
     /// "앱 1.3 (4) / iOS 17.5 / iPhone16,1" + 빈 줄 + 구분선 안내
-    fun body(appVersion: String, build: String, systemVersion: String, deviceModel: String): String =
-        "앱 $appVersion ($build) / iOS $systemVersion / $deviceModel\n" +
+    /// (Android: 앱은 `platform = "Android"`를 넘긴다 — 기본값 "iOS"는 iOS에서 옮긴 테스트 기대값을 그대로 두기 위한 것)
+    fun body(appVersion: String, build: String, systemVersion: String, deviceModel: String, platform: String = "iOS"): String =
+        "앱 $appVersion ($build) / $platform $systemVersion / $deviceModel\n" +
             "\n" +
             "----\n" +
             "위 정보는 문제 확인에만 써요. 이 아래에 의견이나 겪은 문제를 적어 주세요.\n"
