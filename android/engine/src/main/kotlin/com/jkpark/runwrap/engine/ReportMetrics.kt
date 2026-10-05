@@ -4,6 +4,7 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
+import kotlinx.serialization.Serializable
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.temporal.ChronoUnit
@@ -39,6 +40,7 @@ data class WeeklyReport(
         val id: Int get() = index
     }
 
+    @Serializable  // 화면 route 인자(JSON 문자열)용
     data class DistanceCard(
         val tone: RRTone,
         val recent7Km: Double,      // 최근 7일 — 헤더와 같은 달력 창 (판정 기준, 이슈 #75)

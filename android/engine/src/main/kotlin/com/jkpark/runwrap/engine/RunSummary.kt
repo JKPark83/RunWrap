@@ -1,12 +1,15 @@
 package com.jkpark.runwrap.engine
 
 import java.time.Instant
+import kotlinx.serialization.Serializable
 
 /// 러닝 1회 요약 — HKWorkout에서 화면에 필요한 값만 추린다
-/// (Android: Health Connect ExerciseSessionRecord에서 추린다. id는 iOS UUID 대신 String)
+/// (Android: Health Connect ExerciseSessionRecord에서 추린다. id는 iOS UUID 대신 String.
+/// @Serializable은 화면 route 인자(JSON 문자열)용)
+@Serializable
 data class RunSummary(
     val id: String,
-    val start: Instant,
+    @Serializable(with = ReferenceDateInstantSerializer::class) val start: Instant,
     val durationSec: Double,
     val distanceMeters: Double?,
     val avgHeartRate: Double?,

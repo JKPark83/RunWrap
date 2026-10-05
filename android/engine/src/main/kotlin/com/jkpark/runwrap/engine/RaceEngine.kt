@@ -109,15 +109,17 @@ object RaceFileSerializer : KSerializer<RaceFile> {
 /// 대회일이 지난 대회는 목록에서 뺀다 (크롤 사이에 날짜가 지날 수 있다).
 /// 정렬은 대회일이 가까운 순 (기획서 §4.14 "오늘 기준 최근 순").
 object RaceEngine {
+    @Serializable  // Entry가 화면 route 인자(JSON 문자열)라서
     sealed interface RegisterStatus {
-        data class notYet(val start: Instant) : RegisterStatus   // 접수예정
-        data class open(val end: Instant?) : RegisterStatus      // 접수중 — 마감일을 모르면 nil (대회 D-30 이상일 때만)
-        data object closed : RegisterStatus                      // 접수완료
+        @Serializable data class notYet(@Serializable(with = ReferenceDateInstantSerializer::class) val start: Instant) : RegisterStatus   // 접수예정
+        @Serializable data class open(@Serializable(with = ReferenceDateInstantSerializer::class) val end: Instant?) : RegisterStatus      // 접수중 — 마감일을 모르면 nil (대회 D-30 이상일 때만)
+        @Serializable data object closed : RegisterStatus                      // 접수완료
     }
 
+    @Serializable  // 화면 route 인자(JSON 문자열)용
     data class Entry(
         val race: Race,
-        val raceDate: Instant,          // 대회일 자정 (KST)
+        @Serializable(with = ReferenceDateInstantSerializer::class) val raceDate: Instant,          // 대회일 자정 (KST)
         val dDay: Int,                  // 오늘 기준 대회까지 남은 날 (0 = 오늘)
         val status: RegisterStatus?,    // 접수기간 미상이면 nil
         val deadlineDDay: Int?,         // 접수중일 때 마감까지 남은 날 (0 = 오늘 마감)

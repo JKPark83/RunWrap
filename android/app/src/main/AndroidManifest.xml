@@ -51,6 +51,7 @@
 
     <!-- 진행도 백업은 Auto Backup으로 한다. 건강 데이터 캐시 제외 규칙은 data_extraction_rules.xml에 -->
     <application
+        android:name=".RunWrapApp"
         android:label="런미새"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"

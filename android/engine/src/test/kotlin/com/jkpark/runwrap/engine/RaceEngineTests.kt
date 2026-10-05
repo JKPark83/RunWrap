@@ -258,4 +258,19 @@ class RaceEngineTests {
         assertEquals("지금 접수받는 대회 12곳\n새로 받지 못해 자료가 조금 오래됐어요 · 8월 12일 자료",
                      RaceFormat.caption(openCount = 12, updatedAt = updated, refreshFailed = true, stale = true))
     }
+
+    // (Android 전용: Entry는 화면 route 인자로 EngineJson 문자열에 실린다 — 봉인 타입 RegisterStatus 세 가지가 모두 되돌아와야 한다)
+    @Test
+    @DisplayName("route JSON 왕복 — Entry와 접수 상태 세 가지가 그대로 되돌아온다")
+    fun routeJsonRoundTrip() {
+        val entries = RaceEngine.entries(listOf(
+            race(id = 1, date = "2026-09-01", registerStart = "2026-08-01", registerEnd = "2026-08-20"),   // open(end)
+            race(id = 2, date = "2026-10-01", registerStart = "2026-08-20"),                               // notYet
+            race(id = 3, date = "2026-09-05", registerStart = "2026-07-01", registerEnd = "2026-08-01"),   // closed
+        ), now = now)
+        assertEquals(3, entries.size)
+        for (entry in entries) {
+            assertEquals(entry, EngineJson.decodeFromString<RaceEngine.Entry>(EngineJson.encodeToString(entry)))
+        }
+    }
 }

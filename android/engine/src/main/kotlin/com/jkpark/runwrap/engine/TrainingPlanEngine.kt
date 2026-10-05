@@ -3,6 +3,7 @@ package com.jkpark.runwrap.engine
 import java.time.Instant
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
+import kotlinx.serialization.Serializable
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -30,9 +31,10 @@ import kotlin.math.pow
 /// 주 3km 미만이면 nil. 대회가 지났거나 24주보다 멀어도 nil — 24주 뒤 볼륨을 오늘의
 /// 만성 부하로 외삽하는 건 근거가 없다. "틀린 인사이트는 없느니만 못하다."
 
+@Serializable  // 화면 route 인자(JSON 문자열)용
 data class TrainingPlan(
     val race: RaceDistance,
-    val raceDate: Instant,
+    @Serializable(with = ReferenceDateInstantSerializer::class) val raceDate: Instant,
     /// D-day (대회 당일 = 0)
     val daysToRace: Int,
     /// 이 종목·레벨의 권장 피크 주간 거리 — 점증이 여기서 멈춘다
@@ -40,9 +42,10 @@ data class TrainingPlan(
     /// 오래된 → 대회 주간. 지난 주(최대 4개) + 이번 주 + 미래 주
     val weeks: List<Week>,
 ) {
+    @Serializable
     data class Week(
         /// ISO 8601 달력 주(월요일 시작) — ZoneDistributionEngine.compute와 같은 경계
-        val weekStart: Instant,
+        @Serializable(with = ReferenceDateInstantSerializer::class) val weekStart: Instant,
         /// "10월 2째주" — Format.weekLabel(weekStart:)
         val label: String,
         /// 지난 주(계획 없음)는 nil
