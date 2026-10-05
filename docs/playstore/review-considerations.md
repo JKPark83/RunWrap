@@ -42,7 +42,7 @@ App access 지시문, Health apps 선언, Data safety 세 곳에 나눠 넣는�
 계정 생성을 기다리는 동안, 또는 14일 테스트가 도는 동안 아래를 진행한다. 서로 의존하지 않는다.
 
 - 테스터 12명 모집(Android 기기 보유자). 테스터는 데모 모드로도 앱을 둘러볼 수 있으므로 워치가 없어도 된다.
-- Android용 개인정보처리방침 페이지 작성·배포(§4).
+- Android용 개인정보처리방침 배포(§4) — 초안은 `docs/privacy-android.html`에 있다.
 - Google Maps API 키 발급과 키 제한 설정(§6).
 - 스토어 등록정보 문안과 그래픽 자산 제작(§5).
 - 한국 법규 확인(§7).
@@ -209,7 +209,7 @@ Health apps 양식에 붙여 넣을 문구다. 영어를 양식에 넣고 한국
 | 개인 정보(이름·이메일 등) | 아니요 | 아니요 | 계정이 없다 |
 | 앱 활동·기기 ID·비정상 종료 로그 | 아니요 | 아니요 | 분석·크래시 SDK가 없다 |
 | Google Maps SDK가 수집하는 항목 | **미확인** | **미확인** | 아래 참고 |
-| ML Kit가 수집하는 항목 | **미확인** | **미확인** | 아래 참고 |
+| ML Kit가 수집하는 항목 | **미확인** | **미확인** | 사용 통계 전송은 매니페스트에서 껐다. 아래 참고 |
 
 **날씨 좌표**: 소수 2자리(위도 37°에서 약 1.1km × 0.9km, 약 1km²)는 3km² 미만이라 "정확한 위치"에 해당한다.
 1km² 계산은 정책 문구가 아니라 추론이다(**해석**). 조사의 권고는 iOS와 같은 정밀도를 유지하고
@@ -229,12 +229,16 @@ Health apps 양식에 붙여 넣을 문구다. 영어를 양식에 넣고 한국
 **Google Maps SDK·ML Kit**: 각 SDK가 무엇을 수집한다고 공개하는지는 이번 조사 범위 밖이다(**미확인**).
 제출 전에 Google Maps Platform과 ML Kit의 공식 Data safety 안내를 읽고 이 표를 채운다.
 지도 타일을 받으면 보이는 영역이 Google에 전달된다는 점은 iOS의 Apple 지도(§3(6))와 같은 구조다.
+ML Kit는 기본으로 사용 통계를 Google 서버로 보낸다(datatransport). 이 앱은 `AndroidManifest.xml`에서 그 전송 백엔드
+(`CctBackendFactory`) 등록을 지워 이벤트가 저장·예약되기 전에 버려지게 했다 — 병합된 매니페스트와 라이브러리 바이트코드로 확인했고,
+실제 통신이 없는지는 기기에서 네트워크를 잡아 확인하지 않았다(**확인 필요**). ML Kit 버전을 올리면 다시 확인한다.
 
 **Auto Backup**: Play는 사용자가 본인 클라우드로 직접 백업하고 앱이 접근하지 않는 경우를 수집으로 보지 않는다.
 Android Auto Backup이 이 예외에 해당한다는 것은 그 문구에서 추론한 것이다(**해석**). 확정 결정대로 건강 데이터 캐시는
 백업 규칙에서 빼고, 백업되는 것은 진행도·설정뿐이어야 이 답이 성립한다.
-**현재 상태**: `android/app/src/main/res/xml/data_extraction_rules.xml`의 `cloud-backup`·`device-transfer`에는 제외 규칙이 아직 없다
-(TODO 주석만 있다). 이대로 출시하면 리포트 캐시 같은 건강 데이터 파생물이 사용자 Google 계정 백업으로 나간다. 제출 전에 반드시 채운다(§9).
+**현재 상태**: `android/app/src/main/res/xml/data_extraction_rules.xml`의 `cloud-backup`·`device-transfer`는 포함 목록 방식이다 —
+설정(`settings.xml`)과 `RunWrap/collection.json`·`race-records.json`·`race-record-tombstones.json`만 백업하고,
+리포트 캐시 같은 건강 데이터 파생물과 러닝화 사진은 목록에 없어서 나가지 않는다. 파일을 새로 만들 때 목록에 넣을지 같이 정한다(§9).
 
 출처:
 - https://support.google.com/googleplay/android-developer/answer/10787469
@@ -252,7 +256,7 @@ Android Auto Backup이 이 예외에 해당한다는 것은 그 문구에서 추
 
 ### 분리 권고
 
-**Android 전용 페이지를 따로 둔다**(예: 같은 Vercel 프로젝트의 `privacy-android.html`). 이유:
+**Android 전용 페이지를 따로 둔다** — `docs/privacy-android.html`(같은 Vercel 프로젝트로 배포). 이유:
 - Play·HC·근거 화면 세 곳이 한 URL을 가리켜야 하는데, HealthKit과 HC는 타입 목록과 철회 경로가 많이 다르다.
 - 심사자가 자기 플랫폼에 맞는 문서를 본다.
 
@@ -362,14 +366,18 @@ iOS 6.9인치 스크린샷(`docs/appstore/screenshots-6.9/`)은 비율이 약 9:
 
 2027-02-01부터 16KB 페이지를 지원하지 않는 업데이트는 출시할 수 없다. 대상은 API 35 이상 타깃이면서 네이티브 코드가 있는 앱이다.
 순수 Java/Kotlin 앱은 이미 지원하는 것으로 본다. 이 앱은 Google Maps SDK와 ML Kit를 넣으므로, 두 라이브러리가
-네이티브 `.so`를 포함하는지와 16KB 정렬 여부를 빌드 결과로 확인한다(**확인 필요**).
+네이티브 `.so`를 포함하는지와 16KB 정렬 여부를 빌드 결과로 확인한다.
+
+2026-10-05 디버그 APK로 확인했다: 네이티브 라이브러리는 `libmlkit_google_ocr_pipeline.so`(ML Kit)와
+`libandroidx.graphics.path.so`(Compose) 둘이고, 64비트 ABI 모두 ELF LOAD 정렬이 0x4000(16KB)이며
+`zipalign -c -P 16 -v 4`(build-tools 36.0.0)도 통과한다. 릴리스 AAB는 Play Console의 번들 탐색기에서 한 번 더 본다.
 
 ### 알림과 정확한 알람
 
 - `POST_NOTIFICATIONS`는 런타임 권한이고 Play 선언 양식은 없다. 알림 설정을 켤 때 요청하고, 보내기 전에 `areNotificationsEnabled()`를 확인한다.
 - `USE_EXACT_ALARM`은 알람·타이머 앱과 일정 알림 캘린더 앱에만 허용되고, 해당하지 않으면 출시가 막힌다.
   `SCHEDULE_EXACT_ALARM`은 Android 14 이상에서 기본 거부된다.
-- 수분 섭취, 주간 리포트, 대회 접수 알림은 분 단위 정확도가 필요 없다. **두 권한 모두 선언하지 않고** WorkManager나 비정확 알람으로 처리한다.
+- 수분 섭취, 주간 리포트, 대회 접수 알림은 분 단위 정확도가 필요 없다. **두 권한 모두 선언하지 않고** 비정확 알람(`AlarmManager.setWindow`, 최대 10분 늦음)으로 처리한다.
 
 ### 위치 권한
 
@@ -453,6 +461,10 @@ Google 1차 출처로는 확인할 수 없는 국내법 사항이다. iOS 앱이
 ### 워치 없이 검증하는 한계
 
 - 에뮬레이터(AVD `syd_api36`)로는 삼성헬스 동기화를 검증할 수 없다. 합성 데이터는 디버그 빌드의 HC 시더로 넣는다.
+  시더(`android/app/src/debug/`)는 HC **쓰기** 권한 11종을 디버그 매니페스트에만 선언한다 — 릴리스 병합 매니페스트에 `health.WRITE_*`가
+  하나라도 있으면 Health apps 양식(읽기 전용 선언)과 어긋나 반려 사유가 된다. 2026-10-06 릴리스 병합 매니페스트에서 0건임을 확인했다.
+  같은 날 에뮬레이터에서 시더 데이터로 실제 읽기 경로(세션 68건·거리·심박·케이던스·수면·RMSSD·안정 심박·호흡수·VO2max)가 `Loaded`까지 가는 것을 확인했다.
+  앱이 화면 밖에 있을 때의 읽기는 HC가 SecurityException으로 거절한다(백그라운드 읽기 권한을 요청하지 않은 결과 — 의도한 동작).
 - 갤럭시폰만 있고 워치가 없으면 운동 중 심박·VO2max·수면 단계처럼 워치 센서가 만드는 데이터는 생기지 않는다고 보는 것이 자연스럽다(**해석**).
   폰 단독으로 기록한 삼성헬스 운동이 어떤 레코드로 HC에 오는지는 이번 조사에서 확인하지 않았다.
 - 따라서 "경로가 오는가", "HRV·안정 심박이 정말 비는가"는 워치가 있는 테스터의 실기기에서만 답이 나온다. 비공개 테스트 테스터 중 갤럭시워치 사용자를 최소 1명 포함한다.
@@ -478,7 +490,8 @@ Google 1차 출처로는 확인할 수 없는 국내법 사항이다. iOS 앱이
 
 - [ ] 매니페스트의 HC `uses-permission`과 Health apps 양식의 타입 목록이 1:1이다. 코드가 읽지 않는 타입은 선언하지 않았다
 - [ ] `READ_HEALTH_DATA_IN_BACKGROUND`, `USE_EXACT_ALARM`, `SCHEDULE_EXACT_ALARM`, `ACCESS_BACKGROUND_LOCATION`이 매니페스트에 없다(병합된 매니페스트까지 확인 — 라이브러리가 끌어올 수 있다)
-- [ ] `data_extraction_rules.xml`의 `cloud-backup`·`device-transfer`가 건강 데이터 캐시를 제외한다(현재 TODO 상태, §3)
+- [ ] 릴리스 병합 매니페스트에 `android.permission.health.WRITE_*`와 `HealthSeedReceiver`가 없다(디버그 전용 시더가 새지 않았다 — `./gradlew :app:processReleaseMainManifest` 뒤 grep)
+- [ ] `data_extraction_rules.xml`의 `cloud-backup`·`device-transfer`가 건강 데이터 캐시를 제외한다(포함 목록 방식으로 구현됨, §3 — 새 파일을 추가했으면 다시 본다)
 - [ ] `VIEW_PERMISSION_USAGE` activity-alias가 있고, 그 화면이 Play 등록 방침과 같은 URL을 보여 준다
 - [ ] 개인정보처리방침이 공개 HTML이고(PDF 아님) 지역 제한이 없다. HC 타입·보존·삭제·보안을 적었다
 - [ ] Play 등록정보 방침 URL = HC 권한 화면 링크 = 앱 근거 화면
@@ -488,7 +501,7 @@ Google 1차 출처로는 확인할 수 없는 국내법 사항이다. iOS 앱이
 - [ ] 설명에 키워드 반복이 없고, Android에 없는 기능(위젯 등)을 적지 않았다
 - [ ] App access에 데모 모드 진입 절차를 적었다
 - [ ] targetSdk 36에서 edge-to-edge 인셋과 예측형 뒤로가기를 Android 16 기기(또는 에뮬레이터)로 확인했다
-- [ ] Maps·ML Kit의 네이티브 라이브러리 16KB 정렬을 확인했다
+- [ ] Maps·ML Kit의 네이티브 라이브러리 16KB 정렬을 확인했다(디버그 APK는 확인됨 — 릴리스 AAB로 재확인)
 - [ ] 콘텐츠 등급(IARC)·타깃 연령·광고 선언을 제출했다
 - [ ] 스크린샷이 2:1 비율 규칙 안이다(iOS 스크린샷 재사용 아님)
 - [ ] Static Maps API를 부르는 코드가 없다(경로 좌표 외부 전송 금지)
@@ -500,7 +513,7 @@ Google 1차 출처로는 확인할 수 없는 국내법 사항이다. iOS 앱이
 - [ ] Google Cloud에서 Maps SDK for Android API 키 발급 → 키 제한(Android 앱: 패키지명 `com.jkpark.runwrap` + Play 앱 서명 키 지문 + 디버그 키 지문, API 제한: Maps SDK for Android만) → `android/local.properties`의 `MAPS_API_KEY`에 저장(커밋 금지)
 - [ ] 업로드 키(.jks) 생성과 저장소 밖 보관
 - [ ] 날씨 좌표 정밀도와 위치 권한 범위 결정(§3)
-- [ ] Android 전용 개인정보처리방침 작성·배포(§4)
+- [ ] Android 전용 개인정보처리방침(`docs/privacy-android.html`) 검토·배포(§4)
 - [ ] 위치기반서비스 신고 여부 등 국내법 확인(§7)
 - [ ] Google Maps SDK·ML Kit의 Data safety 공개 항목 확인(§3)
 - [ ] 의료 기기 아님 고지 위치를 정책 원문으로 확인(§5)
