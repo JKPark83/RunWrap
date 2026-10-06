@@ -76,7 +76,7 @@
 <main>
 
 <h1>런미새 개인정보 처리방침 (Android)</h1>
-<p class="updated">최종 수정일: 2026년 10월 5일 · 적용: Android 앱 1.0 이상 · iOS 앱은 <a href="privacy.html">iOS용 방침</a>을 보세요</p>
+<p class="updated">최종 수정일: 2026년 10월 6일 · 적용: Android 앱 1.0 이상 · iOS 앱은 <a href="privacy.html">iOS용 방침</a>을 보세요</p>
 
 <div class="lede">
   <p><strong>런미새는 사용자의 건강 데이터를 수집하지 않습니다.</strong> 헬스 커넥트(Health Connect)에서 읽은
@@ -209,6 +209,8 @@
 <ul>
   <li>코스·세션 지도와 대회 상세의 대회장 지도를 그릴 때, 지도에 표시되는 영역의 지도 타일을 Google Maps Platform에 요청합니다.</li>
   <li>러닝 경로 좌표 자체는 Google에 보내지 않습니다 — 경로 선은 기기에서 지도 위에 그립니다. 공유 카드의 경로 그림도 지도 타일 없이 기기에서 그립니다.</li>
+  <li>Google 지도 SDK는 자체 동작을 위해 기기 정보(OS 버전·모델), IP 주소, SDK 오류 기록, 지도 이동·확대 같은 조작 기록,
+      SDK 전용 가명 식별자를 Google에 보냅니다(Google 안내: “Maps SDK for Android data disclosure”). 건강 데이터와 경로 좌표는 들어 있지 않습니다.</li>
   <li>이 요청으로 대략적인 지역과 일반적인 기기 정보가 Google에 전달될 수 있으며, 여기에는
       <a href="https://policies.google.com/privacy" rel="nofollow noopener">Google 개인정보처리방침</a>이 적용됩니다.</li>
 </ul>
@@ -218,7 +220,7 @@
   <li>건강 데이터를 <strong>누구에게도 제공하거나 판매하지 않습니다.</strong></li>
   <li>광고, 마케팅, 데이터 마이닝, 사용자 프로파일링에 쓰지 않습니다.</li>
   <li>광고 식별자를 쓰지 않고, 사용자 추적을 하지 않습니다.</li>
-  <li>분석·크래시 리포팅 SDK를 <strong>사용하지 않습니다.</strong> 앱에 들어 있는 제3자 구성요소는
+  <li>분석·크래시 리포팅 SDK를 <strong>사용하지 않습니다</strong>(Google 지도 SDK가 자체적으로 보내는 정보는 §3 (6)). 앱에 들어 있는 제3자 구성요소는
       Google 지도 SDK(지도 표시)와 Google ML Kit 텍스트 인식(완주증 인식, 기기 내 처리) 둘뿐입니다.
       ML Kit가 기본으로 Google에 보내는 사용 통계 전송은 앱에서 꺼 두었습니다.</li>
   <li>법령에 따른 요구가 있어도 개발자가 넘길 수 있는 건강 데이터가 애초에 없습니다.</li>
