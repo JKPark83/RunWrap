@@ -8,13 +8,17 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// Google Maps API 키 — local.properties(gitignore 대상)에서만 읽는다. 커밋 금지 (android/CLAUDE.md).
-// 키가 없으면 빈 문자열이 들어가고 지도 자리는 빈 상태로 보인다.
-val mapsApiKey: String = rootProject.file("local.properties")
-    .takeIf { it.exists() }
-    ?.let { file -> Properties().apply { file.inputStream().use(::load) } }
-    ?.getProperty("MAPS_API_KEY")
-    ?: ""
+// 비밀값은 local.properties(gitignore 대상)에서만 읽는다. 커밋 금지 (android/CLAUDE.md).
+val localProps: Properties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
+}
+
+// Google Maps API 키 — 없으면 빈 문자열이 들어가고 지도 자리는 빈 상태로 보인다.
+val mapsApiKey: String = localProps.getProperty("MAPS_API_KEY") ?: ""
+
+// Play 업로드 키 — UPLOAD_STORE_FILE 등 4개가 local.properties에 있을 때만 release에 서명한다.
+// 없으면 서명 없는 release(설치 불가)가 나온다 — 로컬 검증용 assembleRelease는 그래도 돌아야 한다.
+val uploadStoreFile: String? = localProps.getProperty("UPLOAD_STORE_FILE")
 
 android {
     namespace = "com.jkpark.runwrap"
@@ -24,17 +28,29 @@ android {
         applicationId = "com.jkpark.runwrap"
         minSdk = 34            // Android 14+ — Health Connect 플랫폼 내장 전제
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 1        // Play 업로드마다 +1
+        versionName = "1.0.0"
 
         manifestPlaceholders["MAPS_API_KEY"] = mapsApiKey
         // 화면의 "키 없음" 가드 재료 — 매니페스트 메타데이터를 런타임에 다시 파지 않는다
         buildConfigField("String", "MAPS_API_KEY", "\"$mapsApiKey\"")
     }
 
+    if (uploadStoreFile != null) {
+        signingConfigs {
+            create("upload") {
+                storeFile = file(uploadStoreFile)
+                storePassword = localProps.getProperty("UPLOAD_STORE_PASSWORD")
+                keyAlias = localProps.getProperty("UPLOAD_KEY_ALIAS")
+                keyPassword = localProps.getProperty("UPLOAD_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (uploadStoreFile != null) signingConfig = signingConfigs.getByName("upload")
         }
     }
 
