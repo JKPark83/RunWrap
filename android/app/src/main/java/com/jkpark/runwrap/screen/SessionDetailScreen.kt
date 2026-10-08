@@ -78,6 +78,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -105,6 +107,7 @@ import com.jkpark.runwrap.engine.FormSnapshot
 import com.jkpark.runwrap.engine.Format
 import com.jkpark.runwrap.engine.GPXWriter
 import com.jkpark.runwrap.engine.GeoPoint
+import com.jkpark.runwrap.engine.FlyoverEngine
 import com.jkpark.runwrap.engine.RoutePaceEngine
 import com.jkpark.runwrap.engine.TrackPoint
 import com.jkpark.runwrap.engine.thinned
@@ -201,6 +204,14 @@ fun SessionDetailScreen(
 
     var showShare by remember { mutableStateOf(false) }
     var showsGPXExport by remember { mutableStateOf(false) }
+    /// 경로 플라이오버 (이슈 #224) — 지도 키가 있고 플라이오버 화면과 같은 가드(FlyoverEngine.track)를
+    /// 통과할 때만 진입 버튼을 건다. 버튼만 따로 거르면 빈 다이얼로그가 뜬다
+    var showsFlyover by remember { mutableStateOf(false) }
+    /// 표시용 솎기(~600점)로 충분 — 원본 시각이 남아 있어 시간 비례 재생이 그대로다
+    val flyoverTrack = remember(detail?.route, run.distanceKm) {
+        FlyoverEngine.track(detail?.route.orEmpty().thinned(), distanceM = run.distanceKm?.let { it * 1_000 })
+    }
+    val canFlyover = BuildConfig.MAPS_API_KEY.isNotEmpty() && flyoverTrack != null
     var showsShoePicker by remember { mutableStateOf(false) }
     var showsShoeEditor by remember { mutableStateOf(false) }
     // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·헬스 커넥트 값. 해석은 엔진 한 곳
@@ -272,6 +283,7 @@ fun SessionDetailScreen(
                     MapHeader(
                         run = run, route = routePoints, splitCount = detail?.splits?.size ?: 0, isLoading = isLoading, loadFailed = loadFailed,
                         consentRequired = routeConsentRequired, onConsent = { routeConsent.launch(run.id) },
+                        onFlyover = if (canFlyover) ({ showsFlyover = true }) else null,
                     )
                 }
 
@@ -375,6 +387,15 @@ fun SessionDetailScreen(
         }
     }
 
+    if (showsFlyover && flyoverTrack != null) {
+        // (Android: 뒤로가기로도 닫힌다 — iOS 전체 화면 커버는 닫기 버튼으로만 닫힌다)
+        Dialog(
+            onDismissRequest = { showsFlyover = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        ) {
+            RouteFlyoverScreen(flyoverTrack, onClose = { showsFlyover = false })
+        }
+    }
     if (showShare) {
         ShareSheet(
             run = run, detail = detail, route = routePoints,
@@ -458,6 +479,7 @@ private fun MapHeader(
     loadFailed: Boolean,
     consentRequired: Boolean,
     onConsent: () -> Unit,
+    onFlyover: (() -> Unit)?,
 ) {
     Box(Modifier.fillMaxWidth().height(320.dp)) {
         if (route.size >= 2 && BuildConfig.MAPS_API_KEY.isNotEmpty()) {
@@ -508,6 +530,25 @@ private fun MapHeader(
                     .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(9.dp))
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             )
+        }
+
+        // 경로 플라이오버 진입 (이슈 #224) — 거리 배지와 같은 오버레이 스타일
+        if (onFlyover != null) {
+            Row(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(14.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .clickable(role = Role.Button, onClick = onFlyover)
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .minimumInteractiveComponentSize()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(RRIcons.named("play.fill"), null, Modifier.size(12.dp), tint = Color.White)
+                Text("플라이오버", style = TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold), color = Color.White)
+            }
         }
     }
 }

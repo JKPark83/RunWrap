@@ -143,6 +143,9 @@ iOS 파일을 고쳤는데 Android에 옮길 것이 없을 때(iOS 전용 API·�
 - **알림 토글**: 켜면 `POST_NOTIFICATIONS` 시스템 다이얼로그가 뜨고, 거부하면 토글이 꺼진다(아직 묻지 않은 상태도 거부로 본다).
 - **의견 보내기**: `mailto:` 인텐트로 메일 앱을 연다. 본문의 플랫폼 표기는 "Android"(`FeedbackMail`의 `platform` 인자).
 - **로드 실패 문구**: 첫 로드가 실패하면 Health Connect 예외 문구가 그대로 보인다.
+- **경로 플라이오버 (이슈 #224)**: Google 지도에는 3D 지형(iOS `elevation: .realistic`)이 없어 기울기 + 3D 건물만 쓴다.
+  `mapCameraKeyframeAnimator`도 없어 키프레임마다 `CameraPositionState.animate`를 이어 부른다.
+  전체 화면 다이얼로그라 닫기 버튼 외에 시스템 뒤로가기로도 닫힌다(iOS 전체 화면 커버는 닫기 버튼으로만 닫힌다).
 
 ### 문구 (iOS와 달라야 하는 곳만)
 

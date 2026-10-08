@@ -16,6 +16,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -58,6 +59,9 @@ object RRIcons {
             "exclamationmark.triangle.fill" to Icons.Rounded.Warning,
             "house.fill" to Icons.Rounded.Home,
             "arrow.clockwise" to Icons.Rounded.Refresh,
+            // core에 반시계 화살표가 없어 같은 새로고침 아이콘을 쓴다 (플라이오버 "다시 재생", #224)
+            "arrow.counterclockwise" to Icons.Rounded.Refresh,
+            "play.fill" to Icons.Rounded.PlayArrow,
             "square.and.pencil" to Icons.Outlined.Edit,
             "mappin.and.ellipse" to Icons.Outlined.Place,
             "cart.fill" to Icons.Rounded.ShoppingCart,
