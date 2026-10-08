@@ -12,6 +12,8 @@ import androidx.health.connect.client.records.PowerRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.request.AggregateRequest
 import com.jkpark.runwrap.engine.ActiveTimeline
+import com.jkpark.runwrap.engine.CourseFingerprintCache
+import com.jkpark.runwrap.engine.CourseMatchEngine
 import com.jkpark.runwrap.engine.DriftEngine
 import com.jkpark.runwrap.engine.FormEngine
 import com.jkpark.runwrap.engine.FormSnapshot
@@ -24,6 +26,7 @@ import com.jkpark.runwrap.engine.WorkoutDetail
 import com.jkpark.runwrap.engine.instantSince1970
 import com.jkpark.runwrap.engine.timeIntervalSince1970
 import com.jkpark.runwrap.store.DemoMode
+import com.jkpark.runwrap.store.appSupportDir
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +65,12 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
             consent.parseResult(resultCode, intent)?.route.orEmpty().trackPoints()
     }
 
+    /// 같은 코스 기록(시작 순, 이 세션 포함) — 3회 미만·실내·경로 없음이면 null (이슈 #223)
+    private val _courseMatches = MutableStateFlow<List<RunSummary>?>(null)
+    val courseMatches: StateFlow<List<RunSummary>?> = _courseMatches.asStateFlow()
+    /// 코스 매칭 중복 실행 방지 — 진입 시 load와 목록 로드 뒤 collect가 겹칠 수 있다
+    private var isLoadingCourse = false
+
     /// 동의 시트 결과를 상세에 싣는다 — 거절해도 플래그는 내려 같은 세션에서 다시 묻지 않는다
     fun applyConsentedRoute(route: List<TrackPoint>) {
         _routeConsentRequired.value = false
@@ -90,11 +99,63 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
                 _detail.value = fetch(run, heartRate)
                 _loadFailed.value = _detail.value == null
             }
+            loadCourse(run, others)
             if (snapshotGeneration != startGeneration) return
             reloadSnapshots(others, excluding = run)
         } finally {
             _isLoading.value = false
         }
+    }
+
+    /// 같은 코스 비교 (이슈 #223) — 이 세션의 지문을 캐시에 쌓고, 처음 한 번은 최근 90일 야외 세션을
+    /// 채운 뒤 매칭한다. 목록(others)이 아직 없으면 백필을 미루고, 목록이 로드되면 화면이 다시 부른다.
+    /// 데모 모드는 합성 경로로 지문을 바로 만들고 캐시에 쓰지 않는다 — 합성 지문이 실기록 캐시에 섞이지 않게.
+    /// (Android: 다른 앱이 기록한 경로는 세션마다 동의가 필요해(ConsentRequired) 백필이 건너뛴다 —
+    ///  그런 세션의 지문은 사용자가 그 세션을 열어 동의했을 때만 쌓인다. 동의 뒤 화면이 다시 부른다)
+    suspend fun loadCourse(run: RunSummary, others: List<RunSummary>) {
+        if (run.isIndoor || isLoadingCourse) return
+        val route = _detail.value?.route ?: return
+        val target = CourseMatchEngine.fingerprint(route, run.distanceMeters ?: 0.0) ?: return
+        isLoadingCourse = true
+        try {
+            val candidates = others.filter { !it.isIndoor && it.id != run.id }
+            val cache: MutableMap<String, CourseMatchEngine.Fingerprint>
+            if (DemoMode.isActive(settings)) {
+                cache = mutableMapOf()
+                for (other in candidates) {
+                    CourseMatchEngine.fingerprint(WorkoutDetailRules.syntheticRoute(other), other.distanceMeters ?: 0.0)
+                        ?.let { cache[other.id] = it }
+                }
+            } else {
+                val dir = appSupportDir(context)
+                cache = CourseFingerprintCache.load(dir).toMutableMap()
+                cache[run.id] = target
+                if (candidates.isNotEmpty() && !settings.bool(CourseFingerprintCache.backfillDoneKey)) {
+                    // 최초 1회 백필 — 경로를 세션마다 다시 읽는 비용을 한 번만 치른다. 실내는 경로가 없어 건너뛴다.
+                    // ponytail: 화면을 닫으면 코루틴과 함께 멈춘다 — 플래그 전이라 다음 진입 때 처음부터
+                    val cutoff = instantSince1970(java.time.Instant.now().timeIntervalSince1970 -
+                                                  CourseFingerprintCache.backfillDays * 86_400)
+                    for (other in candidates) {
+                        if (other.start < cutoff || other.id in cache) continue
+                        val points = quietly { backfillRoute(other.id) } ?: continue
+                        CourseMatchEngine.fingerprint(points, other.distanceMeters ?: 0.0)?.let { cache[other.id] = it }
+                    }
+                    settings.set(CourseFingerprintCache.backfillDoneKey, true)
+                }
+                CourseFingerprintCache.save(cache, dir)
+            }
+            val history = listOf(run to target) + candidates.mapNotNull { other -> cache[other.id]?.let { other to it } }
+            _courseMatches.value = CourseMatchEngine.matches(target, history)
+        } finally {
+            isLoadingCourse = false
+        }
+    }
+
+    /// 백필용 경로 — 동의가 필요하거나(ConsentRequired) 경로가 없으면 null
+    private suspend fun backfillRoute(id: String): List<TrackPoint>? {
+        if (HealthConnectClient.getSdkStatus(context) != HealthConnectClient.SDK_AVAILABLE) return null
+        val session = HealthConnectClient.getOrCreate(context).readRecord(ExerciseSessionRecord::class, id).record
+        return (session.exerciseRouteResult as? ExerciseRouteResult.Data)?.exerciseRoute?.route?.trackPoints()
     }
 
     /// 기준선 스냅샷만 다시 만든다 — 진입 시 목록이 아직 로드 전이라 빈 목록으로

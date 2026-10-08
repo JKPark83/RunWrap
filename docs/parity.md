@@ -78,6 +78,7 @@ iOS(`ios/RunWrap`)가 사양 원본이고 Android(`android/`)는 이식본이다
 | `업로드 보류 판정 — 서버 스키마가 더 크면 디코드 전에 보류하고, 같거나 작거나 필드가 없으면 보류하지 않는다` | CloudKit 기기 간 병합(`ProgressMergeEngine`) — Android는 Auto Backup 통째 복원이라 병합이 없다 |
 | `병합 반영 — 기다리는 사이 바뀐 로컬 필드는 유지하고, 안 바뀐 필드·도감·maxStage는 병합 결과를 쓴다` | CloudKit 기기 간 병합(`ProgressMergeEngine`) — Android는 Auto Backup 통째 복원이라 병합이 없다 |
 | `병합 반영 — 기다리는 사이 사이클이 바뀌면 새 사이클과 그 단계를 지키고, 지운 대회 기록은 되살리지 않는다` | CloudKit 기기 간 병합(`ProgressMergeEngine`) — Android는 Auto Backup 통째 복원이라 병합이 없다 |
+| `지문 캐시 — 파일이 백업에서 제외된다` | iOS `isExcludedFromBackup` 리소스 값 — Android는 Auto Backup include 목록에 캐시 파일이 없어 자동으로 빠진다(JVM 테스트 대상 없음) |
 
 ## 반영하지 않은 iOS 변경
 
@@ -98,6 +99,7 @@ iOS 파일을 고쳤는데 Android에 옮길 것이 없을 때(iOS 전용 API·�
 - **최대심박 추정**: 생년이 없어 Tanaka 공식 폴백 대신 관찰 최대 → 190 → 수동 입력 순이다.
 - **목록의 거리·심박·칼로리·케이던스**: 세션 통계가 없어 기간 단위로 읽은 표본을 세션 구간으로 잘라 계산한다(`SessionSlices`). 세션을 기록한 앱의 표본만 쓴다. 케이던스는 걸음 수 ÷ 분이고 목록에서는 최근 28일만 채운다.
 - **경로**: Android 14는 다른 앱이 기록한 경로를 세션마다 동의받는다. 상세 화면에 "경로 보기 동의" 단계가 하나 더 있다.
+- **같은 코스 지문 (이슈 #223)**: 다른 앱이 기록한 경로는 '항상 허용'이어도 화면 밖(백필) 읽기에서 `ConsentRequired`를 준다. 그래서 최근 90일 백필은 대부분 비고, 지문은 사용자가 세션을 열어 경로에 동의할 때마다 하나씩 쌓인다. iOS는 첫 진입 때 90일치가 한 번에 채워진다.
 - **동기화 시점**: 백그라운드 읽기 권한을 받지 않아 앱을 열 때만 읽는다. iOS의 운동 직후 자동 알림이 없다.
 - **권한 확인**: Health Connect는 허용 여부를 조회할 수 있어 `HealthStore.hasPermissions()`가 있다(iOS는 빈 결과로만 안다).
 

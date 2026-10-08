@@ -98,21 +98,7 @@ object WorkoutDetailStore {
 
         // 실내(트레드밀)에는 경로·고도가 없다 — 스플릿·존·케이던스는 그대로 만든다 (계획서 M1)
         if (!run.isIndoor) {
-            // 한강 언저리 순환 코스 느낌의 타원 + 흔들림
-            val centerLat = 37.520 + rng.unit() * 0.02
-            val centerLon = 126.94 + rng.unit() * 0.03
-            val radius = 0.0016 * sqrt(km)
-            val points = 140
-            // 시각은 시작부터 세션 시간을 points 등분한 일정 간격
-            val interval = run.durationSec / points.toDouble()
-            detail = detail.copy(route = (0..points).map { i ->
-                val t = i.toDouble() / points.toDouble() * 2 * PI
-                val wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
-                TrackPoint(lat = centerLat + radius * wobble * sin(t) * 0.72,
-                           lon = centerLon + radius * wobble * cos(t),
-                           time = instantSince1970(run.start.timeIntervalSince1970 + interval * i.toDouble()),
-                           elevationM = null, horizontalAccuracyM = 5.0, speedMps = null)
-            })
+            detail = detail.copy(route = syntheticRoute(run, rng))
         }
 
         // 스플릿: 기본 페이스 ± 8초 흔들림, 마지막 1/4은 점점 처진다 (시안의 후반 드리프트)
@@ -217,6 +203,35 @@ object WorkoutDetailStore {
                              verticalOscillationCm = dynamics.oscillationCm,
                              groundContactMs = dynamics.contactMs)
             }
+    }
+
+    /// 합성 경로만 — 데모 코스 매칭이 세션마다 상세 전체를 만들지 않게 (이슈 #223). 상세의 경로와 같다
+    fun syntheticRoute(run: RunSummary): List<TrackPoint> {
+        if (run.isIndoor) return emptyList()
+        return syntheticRoute(run, SplitMix64(seed = syntheticSeed(run)))
+    }
+
+    /// 한강 언저리 순환 코스 느낌의 타원 + 흔들림. 공유 코스 세션은 중심을 고정해
+    /// '같은 코스' 카드가 시뮬레이터에서 보이게 한다 — 중심 난수는 그래도 뽑아 뒤 값의 재현성을 지킨다
+    private fun syntheticRoute(run: RunSummary, rng: SplitMix64): List<TrackPoint> {
+        val km = run.distanceKm ?: 8.0
+        val randomLat = 37.520 + rng.unit() * 0.02
+        val randomLon = 126.94 + rng.unit() * 0.03
+        val shared = run.id in DemoData.sharedCourseRunIDs
+        val centerLat = if (shared) DemoData.sharedCourseCenter.lat else randomLat
+        val centerLon = if (shared) DemoData.sharedCourseCenter.lon else randomLon
+        val radius = 0.0016 * sqrt(km)
+        val points = 140
+        // 시각은 시작부터 세션 시간을 points 등분한 일정 간격
+        val interval = run.durationSec / points.toDouble()
+        return (0..points).map { i ->
+            val t = i.toDouble() / points.toDouble() * 2 * PI
+            val wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
+            TrackPoint(lat = centerLat + radius * wobble * sin(t) * 0.72,
+                       lon = centerLon + radius * wobble * cos(t),
+                       time = instantSince1970(run.start.timeIntervalSince1970 + interval * i.toDouble()),
+                       elevationM = null, horizontalAccuracyM = 5.0, speedMps = null)
+        }
     }
 
     /// 재현 가능한 경량 난수 (SplitMix64)

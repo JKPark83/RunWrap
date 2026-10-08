@@ -92,6 +92,7 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import com.jkpark.runwrap.AppContainer
 import com.jkpark.runwrap.BuildConfig
 import com.jkpark.runwrap.LocalAppContainer
+import com.jkpark.runwrap.engine.CourseMatchEngine
 import com.jkpark.runwrap.engine.DriftEngine
 import com.jkpark.runwrap.engine.FormAdvice
 import com.jkpark.runwrap.engine.FormEngine
@@ -131,6 +132,7 @@ import com.jkpark.runwrap.ui.ShoeImage
 import com.jkpark.runwrap.ui.ShoeView
 import com.jkpark.runwrap.ui.SplitBarsChart
 import com.jkpark.runwrap.ui.ToneBadge
+import com.jkpark.runwrap.ui.TrendLineChart
 import com.jkpark.runwrap.ui.ZoneBarView
 import com.jkpark.runwrap.ui.color
 import com.jkpark.runwrap.ui.mono
@@ -182,6 +184,7 @@ fun SessionDetailScreen(
     val formSnapshots by store.formSnapshots.collectAsStateWithLifecycle()
     val isLoadingSnapshots by store.isLoadingSnapshots.collectAsStateWithLifecycle()
     val routeConsentRequired by store.routeConsentRequired.collectAsStateWithLifecycle()
+    val courseMatches by store.courseMatches.collectAsStateWithLifecycle()
     /// 러닝화 (이슈 #171) — 이 세션에 신은 신발을 바꾼다
     val allShoes by shoes.shoes.collectAsStateWithLifecycle()
     val defaultShoeID by shoes.defaultShoeID.collectAsStateWithLifecycle()
@@ -215,11 +218,18 @@ fun SessionDetailScreen(
         // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
         // (iOS onChange처럼 지금 값은 건너뛰고 바뀔 때만)
         health.state.drop(1).collect { state ->
-            if (state is HealthStore.State.Loaded) store.reloadSnapshots(state.runs, excluding = run)
+            if (state is HealthStore.State.Loaded) {
+                store.reloadSnapshots(state.runs, excluding = run)
+                store.loadCourse(run, state.runs)
+            }
         }
     }
     // (Android 전용) 운동 경로 세션별 동의 — 결과(거절이면 빈 목록)를 상세에 싣는다
-    val routeConsent = rememberLauncherForActivityResult(store.routeConsentContract) { store.applyConsentedRoute(it) }
+    val routeConsent = rememberLauncherForActivityResult(store.routeConsentContract) {
+        store.applyConsentedRoute(it)
+        // 동의로 경로가 들어오면 지문을 다시 만든다 (이슈 #223)
+        scope.launch { store.loadCourse(run, (health.state.value as? HealthStore.State.Loaded)?.runs.orEmpty()) }
+    }
 
     /// 이 세션에 배정된 신발 — 없음 표식·삭제된 신발이면 null (ShoeStore.shoe(runID)와 같은 규칙을 상태에서 읽는다)
     val assigned = assignments[run.id]?.let { id -> allShoes.firstOrNull { it.id == id } }
@@ -321,6 +331,7 @@ fun SessionDetailScreen(
                         LoadFailedCard(enabled = !isLoading) { scope.launch { load() } }
                     }
                     detail?.takeIf { it.splits.size >= 3 }?.let { SplitsCard(it) }
+                    courseMatches?.let { m -> CourseMatchEngine.standing(run, m)?.let { CourseCard(m, it, zone) } }
                     detail?.drift?.let { DriftCard(it, heatAdjustment) }
                     detail?.let { d -> d.zones?.let { ZonesCard(it, d) } }
                     detail?.takeIf(::hasDynamics)?.let { FormCard(run, it, formSnapshots, isLoadingSnapshots) }
@@ -806,6 +817,53 @@ private fun driftSentence(drift: DriftEngine.Result, heat: HeatEngine.Adjustment
 }
 
 // MARK: 구간별 페이스
+
+// 같은 코스 (이슈 #223) — 본인 화면에만, 공유 카드에는 싣지 않는다
+@Composable
+private fun CourseCard(matches: List<RunSummary>, standing: CourseMatchEngine.Standing, zone: ZoneId) {
+    val paced = matches.filter { it.paceSecPerKm != null }
+    val labels = paced.map { r -> r.start.atZone(zone).let { "${it.monthValue}/${it.dayOfMonth}" } }
+    Column(Modifier.fillMaxWidth().rrCard().padding(18.dp)) {
+        Row {
+            Text("같은 코스 ${standing.ordinal}번째", style = cardTitle, color = RR.text,
+                 modifier = Modifier.alignByBaseline())
+            Spacer(Modifier.weight(1f))
+            Text("${matches.size}번 완주", style = mono(11.5.sp), color = RR.text3, modifier = Modifier.alignByBaseline())
+        }
+        Text(
+            buildAnnotatedString {
+                val rank = standing.rank
+                when {
+                    rank == null -> withStyle(SpanStyle(color = RR.text2)) { append("이 코스를 ${paced.size}번 달린 기록이 있어요.") }
+                    rank == 1 -> {
+                        withStyle(SpanStyle(color = RR.text2)) { append("이 코스 ") }
+                        withStyle(SpanStyle(color = RR.pos, fontWeight = FontWeight.SemiBold)) { append("최고 기록") }
+                        withStyle(SpanStyle(color = RR.text2)) { append("이에요. 같은 길에서 스스로를 이기셨습니다.") }
+                    }
+                    else -> {
+                        withStyle(SpanStyle(color = RR.text2)) { append("이 코스 ${paced.size}번 중 ") }
+                        withStyle(SpanStyle(color = RR.text, fontWeight = FontWeight.SemiBold)) { append("${rank}위") }
+                        withStyle(SpanStyle(color = RR.text2)) { append(" 기록이에요.") }
+                    }
+                }
+            },
+            style = body(13f, 4f),
+            modifier = Modifier.padding(top = 9.dp),
+        )
+        if (paced.size >= 2) {
+            TrendLineChart(
+                points = paced.mapNotNull { it.paceSecPerKm },
+                modifier = Modifier.padding(top = 14.dp),
+                tint = RR.brand,
+                endLabels = labels.first() to labels.last(),
+                pointLabels = labels,
+                valueText = { Format.paceKm(it) },
+            )
+        }
+        Text("회차별 평균 페이스 · 내려갈수록 빨라진 것", style = body(11.5f, 0f), color = RR.text3,
+             modifier = Modifier.padding(top = 8.dp))
+    }
+}
 
 @Composable
 private fun SplitsCard(detail: WorkoutDetail) {
