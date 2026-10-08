@@ -8,9 +8,10 @@ import Foundation
 enum FlyoverEngine {
     /// 이보다 점이 적으면 경로가 너무 성겨 플라이오버를 내지 않는다(진입 버튼 미노출)
     static let minPoints = 20
-    /// 재생 길이 — 거리 비례(km당 6초), 15~60초 (#232: 고정 18초는 10km에서 초속 550m라 너무 빨랐다)
-    static let playbackSecPerKm: Double = 6
-    static let playbackSecRange: ClosedRange<Double> = 15...60
+    /// 재생 길이 — 거리 비례(km당 10초), 20~180초 (#232: 고정 18초는 10km에서 초속 550m라 너무 빨랐고,
+    /// km당 6초·최대 60초도 26km에서 초속 430m로 장거리가 여전히 빨랐다 — 실기기 확인)
+    static let playbackSecPerKm: Double = 10
+    static let playbackSecRange: ClosedRange<Double> = 20...180
     static func playbackSec(distanceM: Double) -> Double {
         min(max(distanceM / 1_000 * playbackSecPerKm, playbackSecRange.lowerBound), playbackSecRange.upperBound)
     }

@@ -1,7 +1,7 @@
 import SwiftUI
 import MapKit
 
-/// 앱 안 경로 플라이오버 재생 (이슈 #224, #232) — 3D 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 6초, 15~60초)로 날아간다.
+/// 앱 안 경로 플라이오버 재생 (이슈 #224, #232) — 3D 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 10초, 20~180초)로 날아간다.
 /// 카메라는 매 프레임 현재 위치 점 위에 직접 놓는다(`position = .camera`) — `mapCameraKeyframeAnimator`는 자기 시계로
 /// 움직여 점(TimelineView 시계)과 어긋나고, 제스처 한 번에 애니메이션이 통째로 사라져 카메라가 멈췄다(실기기 확인, #232).
 /// 점·지나온 경로·HUD는 `TimelineView(.animation)`로 같은 재생 시계에서 그린다.
@@ -69,6 +69,7 @@ struct RouteFlyoverScreen: View {
         }
         .ignoresSafeArea(edges: .top)
         .background(RR.bg.ignoresSafeArea())
+        .background(GeometryReader { geo in Color.clear.onAppear { viewSize = geo.size } })
         .overlay(alignment: .topLeading) { closeButton }
         .onAppear(perform: play)
         .task(id: playID) {
@@ -86,19 +87,28 @@ struct RouteFlyoverScreen: View {
             }
             guard !Task.isCancelled else { return }
             playing = false
-            // 끝나면 천천히 빠져나와 뛰어온 코스 전체를 보여준다
-            withAnimation(.easeInOut(duration: Self.outroSec)) { position = .rect(fullCourseRect) }
+            // 끝나면 천천히 빠져나와 뛰어온 코스 전체를 보여준다 — 카메라→카메라 보간이라 끊김 없이 이어진다
+            // (`.rect`로 바꾸면 기울기·방위가 한 번에 꺾여 실기기에서 덜컥거렸다)
+            withAnimation(.easeInOut(duration: Self.outroSec)) { position = .camera(fullCourseCamera) }
         }
     }
 
     /// 마무리 — 전체 코스로 빠지는 카메라 시간(초)
-    private static let outroSec: Double = 3
-    /// 전체 코스가 들어오는 사각형 — 가장자리·HUD 여백으로 사방 25%, 아래는 HUD 몫으로 20% 더 둔다
-    private var fullCourseRect: MKMapRect {
+    private static let outroSec: Double = 6
+    /// 화면 크기 — 전체 코스 카메라 거리 계산용
+    @State private var viewSize = CGSize(width: 402, height: 874)
+    /// 전체 코스가 들어오는 수직 카메라 — 사방 25% 여백, 아래는 HUD 몫으로 20% 더 둔다.
+    /// MapKit 카메라의 세로 시야각은 30°라 보이는 세로 폭 = 거리 × 2·tan(15°) (시뮬레이터에서 측정, #232)
+    private var fullCourseCamera: MapCamera {
         let rect = coordinates.map { MKMapRect(origin: MKMapPoint($0), size: MKMapSize(width: 1, height: 1)) }
             .reduce(MKMapRect.null) { $0.union($1) }
         let dx = rect.width * 0.25, dy = rect.height * 0.25
-        return MKMapRect(x: rect.minX - dx, y: rect.minY - dy, width: rect.width + dx * 2, height: rect.height + dy * 2 + rect.height * 0.2)
+        let fit = MKMapRect(x: rect.minX - dx, y: rect.minY - dy, width: rect.width + dx * 2, height: rect.height + dy * 2 + rect.height * 0.2)
+        let metersPerPoint = MKMetersPerMapPointAtLatitude(fit.origin.coordinate.latitude)
+        let heightM = max(fit.height, fit.width * viewSize.height / viewSize.width) * metersPerPoint
+        return MapCamera(
+            centerCoordinate: MKMapPoint(x: fit.midX, y: fit.midY).coordinate,
+            distance: heightM / (2 * tan(15 * .pi / 180)), heading: 0, pitch: 0)
     }
 
     private func play() {

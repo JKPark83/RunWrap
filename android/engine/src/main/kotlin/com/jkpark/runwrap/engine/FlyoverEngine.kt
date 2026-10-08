@@ -17,9 +17,10 @@ import kotlin.math.sqrt
 object FlyoverEngine {
     /// 이보다 점이 적으면 경로가 너무 성겨 플라이오버를 내지 않는다(진입 버튼 미노출)
     const val minPoints = 20
-    /// 재생 길이 — 거리 비례(km당 6초), 15~60초 (#232: 고정 18초는 10km에서 초속 550m라 너무 빨랐다)
-    const val playbackSecPerKm = 6.0
-    val playbackSecRange = 15.0..60.0
+    /// 재생 길이 — 거리 비례(km당 10초), 20~180초 (#232: 고정 18초는 10km에서 초속 550m라 너무 빨랐고,
+    /// km당 6초·최대 60초도 26km에서 초속 430m로 장거리가 여전히 빨랐다 — 실기기 확인)
+    const val playbackSecPerKm = 10.0
+    val playbackSecRange = 20.0..180.0
     fun playbackSec(distanceM: Double): Double = (distanceM / 1_000 * playbackSecPerKm).coerceIn(playbackSecRange)
     /// 카메라 키프레임 구간 수 — 이슈 #224 "30~60개"
     const val keyframeCount = 40

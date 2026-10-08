@@ -55,7 +55,7 @@ import com.jkpark.runwrap.ui.RRIcons
 import com.jkpark.runwrap.ui.mono
 import com.jkpark.runwrap.ui.rrCard
 
-/// 앱 안 경로 플라이오버 재생 (이슈 #224, #232, iOS `RouteFlyoverScreen.swift`) — 기울인 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 6초, 15~60초)로 날아간다.
+/// 앱 안 경로 플라이오버 재생 (이슈 #224, #232, iOS `RouteFlyoverScreen.swift`) — 기울인 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 10초, 20~180초)로 날아간다.
 /// 카메라는 매 프레임 현재 위치 점 위에 직접 놓는다(`camera.move`) — 따로 도는 애니메이션은 점과 어긋나고 제스처에 끊긴다(#232).
 /// (Android: 3D 지형(`elevation: .realistic`)이 없어 기울기 + 3D 건물만 쓴다 — docs/parity.md)
 /// 점·지나온 경로·HUD는 같은 재생 시계(withFrameNanos)에서 그린다. 키프레임 배치·방위 보간은 `FlyoverEngine`이 정한다.
@@ -89,9 +89,9 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
             )))
         }
         playing = false
-        // 끝나면 천천히 빠져나와 뛰어온 코스 전체를 보여준다 (iOS outroSec 3초, 사방 25% 여백)
+        // 끝나면 천천히 빠져나와 뛰어온 코스 전체를 보여준다 (iOS outroSec 6초, 사방 25% 여백)
         val bounds = LatLngBounds.builder().also { b -> points.forEach { b.include(it) } }.build()
-        camera.animate(CameraUpdateFactory.newLatLngBounds(bounds, with(density) { 72.dp.toPx() }.roundToInt()), 3_000)
+        camera.animate(CameraUpdateFactory.newLatLngBounds(bounds, with(density) { 72.dp.toPx() }.roundToInt()), 6_000)
     }
 
     val frame = FlyoverEngine.frame(track, if (playing) progress else 1.0)

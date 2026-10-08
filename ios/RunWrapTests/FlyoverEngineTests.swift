@@ -17,23 +17,23 @@ struct FlyoverEngineTests {
         }
     }
 
-    @Test("키프레임 — duration 합이 재생 길이(3km → 18초)와 같다")
+    @Test("키프레임 — duration 합이 재생 길이(3km → 30초)와 같다")
     func durationsSumToPlayback() throws {
-        // 재생 길이 = 3km × 6초/km = 18초
+        // 재생 길이 = 3km × 10초/km = 30초
         let track = try #require(FlyoverEngine.track(route(), distanceM: 3_000))
         let keyframes = FlyoverEngine.keyframes(track)
         #expect(keyframes.count == FlyoverEngine.keyframeCount + 1)
         #expect(keyframes[0].durationSec == 0)
-        #expect(abs(keyframes.map(\.durationSec).reduce(0, +) - 18) < 1e-9)
+        #expect(abs(keyframes.map(\.durationSec).reduce(0, +) - 30) < 1e-9)
     }
 
     @Test("키프레임 — 빨리 달린 구간이 짧은 duration을 받는다")
     func fastSegmentsAreShorter() throws {
         // 거리 4등분 → 10·20·30구간 지점의 경과 200·400·800·1,200초
-        // 재생 길이 3km × 6 = 18초. duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
+        // 재생 길이 3km × 10 = 30초. duration = 구간 소요 / 1,200 × 30 → 0, 5, 5, 10, 10
         let track = try #require(FlyoverEngine.track(route(), distanceM: 3_000))
         let durations = FlyoverEngine.keyframes(track, count: 4).map(\.durationSec)
-        let expected: [Double] = [0, 3, 3, 6, 6]
+        let expected: [Double] = [0, 5, 5, 10, 10]
         for (d, e) in zip(durations, expected) { #expect(abs(d - e) < 1e-9) }
     }
 
@@ -98,12 +98,12 @@ struct FlyoverEngineTests {
         #expect(FlyoverEngine.track(Array(route().prefix(20))) != nil)
     }
 
-    @Test("재생 길이 — km당 6초, 15~60초로 묶는다")
+    @Test("재생 길이 — km당 10초, 20~180초로 묶는다")
     func playbackLengthByDistance() {
-        // 1km → 6초지만 최소 15초, 5km → 30초, 20km → 120초지만 최대 60초
-        #expect(FlyoverEngine.playbackSec(distanceM: 1_000) == 15)
-        #expect(FlyoverEngine.playbackSec(distanceM: 5_000) == 30)
-        #expect(FlyoverEngine.playbackSec(distanceM: 20_000) == 60)
+        // 1km → 10초지만 최소 20초, 5km → 50초, 20km → 200초지만 최대 180초
+        #expect(FlyoverEngine.playbackSec(distanceM: 1_000) == 20)
+        #expect(FlyoverEngine.playbackSec(distanceM: 5_000) == 50)
+        #expect(FlyoverEngine.playbackSec(distanceM: 20_000) == 180)
     }
 
     @Test("지나온 꼬리 — 현재 위치에서 경로 거리 500m 뒤 점부터 시작한다")

@@ -28,23 +28,23 @@ class FlyoverEngineTests {
     }
 
     @Test
-    @DisplayName("키프레임 — duration 합이 재생 길이(3km → 18초)와 같다")
+    @DisplayName("키프레임 — duration 합이 재생 길이(3km → 30초)와 같다")
     fun durationsSumToPlayback() {
-        // 재생 길이 = 3km × 6초/km = 18초
+        // 재생 길이 = 3km × 10초/km = 30초
         val keyframes = FlyoverEngine.keyframes(assertNotNull(FlyoverEngine.track(route(), distanceM = 3_000.0)))
         assertEquals(FlyoverEngine.keyframeCount + 1, keyframes.size)
         assertEquals(0.0, keyframes[0].durationSec)
-        assertEquals(18.0, keyframes.sumOf { it.durationSec }, 1e-9)
+        assertEquals(30.0, keyframes.sumOf { it.durationSec }, 1e-9)
     }
 
     @Test
     @DisplayName("키프레임 — 빨리 달린 구간이 짧은 duration을 받는다")
     fun fastSegmentsAreShorter() {
         // 거리 4등분 → 10·20·30구간 지점의 경과 200·400·800·1,200초
-        // 재생 길이 3km × 6 = 18초. duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
+        // 재생 길이 3km × 10 = 30초. duration = 구간 소요 / 1,200 × 30 → 0, 5, 5, 10, 10
         val track = assertNotNull(FlyoverEngine.track(route(), distanceM = 3_000.0))
         val durations = FlyoverEngine.keyframes(track, count = 4).map { it.durationSec }
-        listOf(0.0, 3.0, 3.0, 6.0, 6.0).zip(durations).forEach { (e, d) -> assertEquals(e, d, 1e-9) }
+        listOf(0.0, 5.0, 5.0, 10.0, 10.0).zip(durations).forEach { (e, d) -> assertEquals(e, d, 1e-9) }
     }
 
     @Test
@@ -116,12 +116,12 @@ class FlyoverEngineTests {
     }
 
     @Test
-    @DisplayName("재생 길이 — km당 6초, 15~60초로 묶는다")
+    @DisplayName("재생 길이 — km당 10초, 20~180초로 묶는다")
     fun playbackLengthByDistance() {
-        // 1km → 6초지만 최소 15초, 5km → 30초, 20km → 120초지만 최대 60초
-        assertEquals(15.0, FlyoverEngine.playbackSec(1_000.0), 1e-9)
-        assertEquals(30.0, FlyoverEngine.playbackSec(5_000.0), 1e-9)
-        assertEquals(60.0, FlyoverEngine.playbackSec(20_000.0), 1e-9)
+        // 1km → 10초지만 최소 20초, 5km → 50초, 20km → 200초지만 최대 180초
+        assertEquals(20.0, FlyoverEngine.playbackSec(1_000.0), 1e-9)
+        assertEquals(50.0, FlyoverEngine.playbackSec(5_000.0), 1e-9)
+        assertEquals(180.0, FlyoverEngine.playbackSec(20_000.0), 1e-9)
     }
 
     @Test
