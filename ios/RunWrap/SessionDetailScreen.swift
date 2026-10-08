@@ -15,6 +15,7 @@ struct SessionDetailScreen: View {
     @StateObject private var store = WorkoutDetailStore()
     @Environment(\.dismiss) private var dismiss
     @State private var showShare = false
+    @State private var showsGPXExport = false
     /// 상단 스크림 표시 — 쉴 때는 지도 헤더를 가리지 않는다 (이슈 #211)
     @State private var scrolled = false
     /// 러닝화 (이슈 #171) — 이 세션에 신은 신발을 바꾼다. 등록한 신발이 없으면 행을 숨긴다
@@ -78,6 +79,9 @@ struct SessionDetailScreen: View {
                     if let detail = store.detail, detail.splits.count >= 3 {
                         splitsCard(detail)
                     }
+                    if let detail = store.detail, let profile = RoutePaceEngine.elevationProfile(detail.route) {
+                        elevationCard(profile)
+                    }
                     if let drift = store.detail?.drift {
                         driftCard(drift, heat: heatAdjustment)
                     }
@@ -95,6 +99,10 @@ struct SessionDetailScreen: View {
                             .padding(.horizontal, 4)
                     }
                     shareSection
+                    // 경로가 없는 세션(실내 등)은 내보낼 것이 없어 버튼을 숨긴다 (미노출 원칙, 이슈 #222)
+                    if let detail = store.detail, detail.route.count >= 2 {
+                        gpxRow
+                    }
                 }
                 .padding(.horizontal, 18)
             }
@@ -120,8 +128,13 @@ struct SessionDetailScreen: View {
         .sheet(isPresented: $showShare) {
             ShareSheetView(run: run,
                            detail: store.detail,
-                           route: store.detail?.route ?? [],
+                           route: store.detail?.route.thinned() ?? [],
                            weeklySummary: weeklySummaryLine)
+        }
+        .sheet(isPresented: $showsGPXExport) {
+            if let detail = store.detail {
+                GPXExportSheet(run: run, detail: detail)
+            }
         }
         // 새 신발 등록 — 러닝화 행과 팝업 목록이 같이 쓴다. 등록 시각이 러닝보다 늦어
         // 자동 배정 대상이 아니므로 명시적으로 배정한다 (이슈 #206)
@@ -165,13 +178,8 @@ struct SessionDetailScreen: View {
     private var mapHeader: some View {
         ZStack(alignment: .bottomLeading) {
             Group {
-                if let route = store.detail?.route, route.count >= 2 {
-                    Map(initialPosition: .region(RouteSnapshot.region(for: route)),
-                        interactionModes: []) {
-                        MapPolyline(coordinates: route)
-                            .stroke(RR.brand, style: StrokeStyle(lineWidth: 4,
-                                                                 lineCap: .round, lineJoin: .round))
-                    }
+                if let detail = store.detail, detail.route.count >= 2 {
+                    routeMap(detail)
                 } else {
                     ZStack {
                         RR.surface2
@@ -208,6 +216,59 @@ struct SessionDetailScreen: View {
                     .padding(14)
             }
         }
+    }
+
+    /// 페이스 색 구간마다 MapPolyline을 따로 칠한다 — 구간을 못 내면(표본 부족) 단색 brand.
+    /// 각 km 지점에 작은 번호 점을 얹는다 (이슈 #222)
+    private func routeMap(_ detail: WorkoutDetail) -> some View {
+        let points = detail.route.thinned()
+        let coordinates = points.map(\.coordinate)
+        let segments = RoutePaceEngine.segments(points)
+        let markers = RoutePaceEngine.kmMarkers(points, count: detail.splits.count)
+        let line = StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
+        return Map(initialPosition: .region(RouteSnapshot.region(for: coordinates)),
+                   interactionModes: []) {
+            if let segments {
+                ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                    MapPolyline(coordinates: segment.points.map(\.coordinate))
+                        .stroke(segment.color, style: line)
+                }
+            } else {
+                MapPolyline(coordinates: coordinates).stroke(RR.brand, style: line)
+            }
+            ForEach(Array(markers.enumerated()), id: \.offset) { index, marker in
+                Annotation("", coordinate: marker.coordinate) {
+                    Text("\(index + 1)")
+                        .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(RR.text)
+                        .frame(width: 15, height: 15)
+                        .background(RR.surface, in: Circle())
+                        .overlay(Circle().strokeBorder(RR.line))
+                }
+                .annotationTitles(.hidden)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if segments != nil { paceLegend.padding(14) }
+        }
+    }
+
+    /// 페이스 색 범례 — 빠름(개선) → 느림(과부하)
+    private var paceLegend: some View {
+        HStack(spacing: 5) {
+            Text("빠름")
+            ForEach([RRTone.improving, .steady, .caution, .overload], id: \.self) { tone in
+                Capsule().fill(tone.color).frame(width: 12, height: 4)
+            }
+            Text("느림")
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("경로 색은 구간 페이스 — 초록이 빠르고 빨강이 느려요")
     }
 
     private var backButton: some View {
@@ -661,6 +722,30 @@ struct SessionDetailScreen: View {
         return Text("처음부터 끝까지 페이스가 고르게 유지됐습니다.").foregroundStyle(RR.text2)
     }
 
+    // MARK: 고도 프로필 (이슈 #222)
+
+    private func elevationCard(_ profile: [RoutePaceEngine.ProfilePoint]) -> some View {
+        let elevations = profile.map(\.elevationM)
+        let low = Int((elevations.min() ?? 0).rounded())
+        let high = Int((elevations.max() ?? 0).rounded())
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("고도 프로필")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(RR.text)
+            Text("최저 \(low)m · 최고 \(high)m")
+                .font(.system(size: 13))
+                .foregroundStyle(RR.text2)
+                .padding(.top, 9)
+            TrendLineChart(points: elevations, tint: RR.brand,
+                           endLabels: ("0 km", "\(Format.km(profile.last?.distanceKm ?? 0)) km"),
+                           pointLabels: profile.map { "\(Format.km($0.distanceKm)) km" },
+                           valueText: { "\(Int($0.rounded()))m" })
+                .padding(.top, 14)
+        }
+        .padding(18)
+        .rrCard()
+    }
+
     // MARK: 심박 구간
 
     private func zonesCard(_ zones: [Double], detail: WorkoutDetail) -> some View {
@@ -849,6 +934,34 @@ struct SessionDetailScreen: View {
         .disabled(store.isLoading)
     }
 
+    /// GPX 내보내기 — 공유 카드 아래 한 줄. 시트에서 가림 여부를 고르고 공유한다 (이슈 #222)
+    private var gpxRow: some View {
+        Button {
+            showsGPXExport = true
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.badge.arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(RR.brand)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("GPX 파일로 내보내기")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(RR.text)
+                    Text("Strava·Garmin 등에 경로·심박을 옮겨요")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(RR.text3)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RR.text3)
+            }
+            .padding(16)
+            .rrCard()
+        }
+        .buttonStyle(.plain)
+    }
+
     /// 주법 기준선 재료로 전체 목록을 넘긴다 — 창·표본 가드는 엔진이 건다 (계획서 M4).
     /// 진입 시와 조회 실패 뒤 다시 시도가 같은 경로를 탄다 (이슈 #102)
     private func load() async {
@@ -873,7 +986,7 @@ private struct ShareSheetView: View {
     let run: RunSummary
     /// 존·케이던스·고도·구간 페이스 재료 — 아직 못 불러왔으면 nil이고 해당 항목은 카드에서 빠진다 (이슈 #221)
     var detail: WorkoutDetail?
-    var route: [CLLocationCoordinate2D]
+    var route: [TrackPoint]
     var weeklySummary: String?
 
     private enum CardStyle: String, CaseIterable {
@@ -951,7 +1064,8 @@ private struct ShareSheetView: View {
             guard route.count >= 2 else { return }
             routeImage = nil
             // 집 근처가 드러나지 않게 시작·끝을 선택한 반경만큼 잘라낸 경로만 그린다 (이슈 #84·#191)
-            let image = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route, meters: radius.meters),
+            let image = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route, meters: radius.meters,
+                                                                             coordinate: \.coordinate),
                                                   size: CGSize(width: 304, height: ShareCardView.routeHeight(detail: detail)))
             // 스냅샷은 취소를 무시하고 끝나므로, 반경이 바뀐 뒤 늦게 온 옛 반경 이미지를 버린다
             guard !Task.isCancelled else { return }
@@ -1103,6 +1217,87 @@ private struct ShareSheetView: View {
             saveMessage = "사진 앱에 저장했어요"
         } catch {
             saveMessage = "저장하지 못했어요 — 설정에서 사진 추가 권한을 확인해 주세요"
+        }
+    }
+}
+
+// MARK: - GPX 내보내기 시트 (이슈 #222)
+
+/// "시작·끝 가리기" 토글 + 공유. 본인이 다른 서비스로 옮기는 용도라 원본이 기대값 — 가리기는 기본 꺼짐.
+/// 파일은 임시 디렉터리에 쓰고 ShareLink로 넘긴다 — 앱은 어디에도 보내지 않는다
+private struct GPXExportSheet: View {
+    let run: RunSummary
+    let detail: WorkoutDetail
+
+    @State private var trims = false
+    @State private var fileURL: URL?
+    /// 공유 카드와 같은 가림 반경을 쓴다 (이슈 #191)
+    @AppStorage(RoutePrivacy.radiusKey) private var trimRadiusRaw = RoutePrivacy.defaultRadius.rawValue
+
+    private var radius: RoutePrivacy.Radius { RoutePrivacy.radius(rawValue: trimRadiusRaw) }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Text("GPX 내보내기")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(RR.text)
+                .padding(.top, 24)
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("시작·끝 가리기")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(RR.text)
+                    Text("경로 양끝 \(radius.label)를 빼고 내보내요")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(RR.text3)
+                }
+                Spacer(minLength: 8)
+                Toggle("시작·끝 가리기", isOn: $trims)
+                    .labelsHidden()
+                    .tint(RR.brand)
+            }
+
+            if let fileURL {
+                ShareLink(item: fileURL, preview: SharePreview(fileURL.lastPathComponent)) {
+                    Label("GPX 공유", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(RR.onBrand)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 13)
+                        .background(RR.brand, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("경로가 너무 짧아 가리면 남는 구간이 없어요")
+                    .font(.system(size: 12))
+                    .foregroundStyle(RR.text3)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .background(RR.bg.ignoresSafeArea())
+        .presentationDetents([.height(230)])
+        .presentationDragIndicator(.visible)
+        .task(id: trims) { fileURL = writeFile() }
+    }
+
+    /// 임시 디렉터리에 "러닝-2026-10-08.gpx"를 쓴다 — 가린 뒤 2점 미만이면 nil
+    private func writeFile() -> URL? {
+        let points = trims ? RoutePrivacy.trimmed(detail.route, meters: radius.meters, coordinate: \.coordinate)
+                           : detail.route
+        guard points.count >= 2 else { return nil }
+        let gpx = GPXWriter.gpx(name: run.displayTitle, start: run.start,
+                                segments: GPXWriter.segments(points),
+                                heartRates: detail.heartRateSamples)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(GPXWriter.fileName(start: run.start))
+        do {
+            try gpx.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            return nil
         }
     }
 }

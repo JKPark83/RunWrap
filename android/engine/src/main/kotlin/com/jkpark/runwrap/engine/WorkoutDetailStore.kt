@@ -10,7 +10,10 @@ import kotlin.math.sqrt
 /// 세션 상세 화면용 추가 데이터 — 경로·구간 페이스·심박 존·케이던스·상승 고도.
 /// RunSummary(목록)에 없는 값만 지연 조회한다.
 data class WorkoutDetail(
-    val route: List<GeoPoint> = emptyList(),
+    /// 경로 원본 — 솎지 않은 전체 점(시각·고도·속도 포함). 솎기는 표시 직전에 한다 (#222)
+    val route: List<TrackPoint> = emptyList(),
+    /// 심박 샘플(시각 오름차순) — 존 계산에 쓴 것을 GPX 내보내기가 재사용한다 (추가 쿼리 없음, 이슈 #222)
+    val heartRateSamples: List<TrainingGuideEngine.HeartRateSample> = emptyList(),
     val splits: List<Split> = emptyList(),
     val zones: List<Double>? = null,          // Z1~Z5 비율 (합 1)
     val cadenceSpm: Double? = null,
@@ -102,11 +105,15 @@ object WorkoutDetailStore {
             val centerLon = 126.94 + rng.unit() * 0.03
             val radius = 0.0016 * sqrt(km)
             val points = 140
+            // 시각은 시작부터 세션 시간을 points 등분한 일정 간격
+            val interval = run.durationSec / points.toDouble()
             detail = detail.copy(route = (0..points).map { i ->
                 val t = i.toDouble() / points.toDouble() * 2 * PI
                 val wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
-                GeoPoint(lat = centerLat + radius * wobble * sin(t) * 0.72,
-                         lon = centerLon + radius * wobble * cos(t))
+                TrackPoint(lat = centerLat + radius * wobble * sin(t) * 0.72,
+                           lon = centerLon + radius * wobble * cos(t),
+                           time = instantSince1970(run.start.timeIntervalSince1970 + interval * i.toDouble()),
+                           elevationM = null, horizontalAccuracyM = 5.0, speedMps = null)
             })
         }
 
@@ -133,7 +140,15 @@ object WorkoutDetailStore {
                              strideLengthM = dynamics.strideM,
                              runningPowerW = dynamics.powerW)
         if (!run.isIndoor) {
-            detail = detail.copy(elevationM = 30 + rng.unit() * 70)
+            val ascent = 30 + rng.unit() * 70
+            // 고도 프로필 합성 — 한 번 오르고 내리는 언덕(오르내림 폭 = 상승 고도). rng를 쓰지 않아 재현성 유지 (이슈 #222)
+            val last = maxOf(detail.route.size - 1, 1).toDouble()
+            detail = detail.copy(
+                elevationM = ascent,
+                route = detail.route.mapIndexed { i, p ->
+                    p.copy(elevationM = 12 + ascent * (1 - cos(i / last * 2 * PI)) / 2)
+                },
+            )
         }
 
         // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다

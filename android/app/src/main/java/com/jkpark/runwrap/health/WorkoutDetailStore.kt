@@ -15,10 +15,10 @@ import com.jkpark.runwrap.engine.ActiveTimeline
 import com.jkpark.runwrap.engine.DriftEngine
 import com.jkpark.runwrap.engine.FormEngine
 import com.jkpark.runwrap.engine.FormSnapshot
-import com.jkpark.runwrap.engine.GeoPoint
 import com.jkpark.runwrap.engine.HeartRateProfile
 import com.jkpark.runwrap.engine.KeyValueStore
 import com.jkpark.runwrap.engine.RunSummary
+import com.jkpark.runwrap.engine.TrackPoint
 import com.jkpark.runwrap.engine.TrainingGuideEngine
 import com.jkpark.runwrap.engine.WorkoutDetail
 import com.jkpark.runwrap.engine.instantSince1970
@@ -54,16 +54,16 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
     /// 화면이 routeConsentContract(세션 id)를 띄우고 결과를 applyConsentedRoute로 넘긴다
     private val _routeConsentRequired = MutableStateFlow(false)
     val routeConsentRequired: StateFlow<Boolean> = _routeConsentRequired.asStateFlow()
-    /// 세션별 경로 동의 계약 — 입력은 세션 id(RunSummary.id), 결과는 솎은 경로(거절·없음이면 빈 목록)
-    val routeConsentContract: ActivityResultContract<String, List<GeoPoint>> = object : ActivityResultContract<String, List<GeoPoint>>() {
+    /// 세션별 경로 동의 계약 — 입력은 세션 id(RunSummary.id), 결과는 경로 원본(거절·없음이면 빈 목록)
+    val routeConsentContract: ActivityResultContract<String, List<TrackPoint>> = object : ActivityResultContract<String, List<TrackPoint>>() {
         private val consent = ExerciseRouteRequestContract()
         override fun createIntent(context: Context, input: String): Intent = consent.createIntent(context, input)
-        override fun parseResult(resultCode: Int, intent: Intent?): List<GeoPoint> =
-            consent.parseResult(resultCode, intent)?.route.orEmpty().thinned()
+        override fun parseResult(resultCode: Int, intent: Intent?): List<TrackPoint> =
+            consent.parseResult(resultCode, intent)?.route.orEmpty().trackPoints()
     }
 
     /// 동의 시트 결과를 상세에 싣는다 — 거절해도 플래그는 내려 같은 세션에서 다시 묻지 않는다
-    fun applyConsentedRoute(route: List<GeoPoint>) {
+    fun applyConsentedRoute(route: List<TrackPoint>) {
         _routeConsentRequired.value = false
         val detail = _detail.value ?: return
         if (route.isNotEmpty()) _detail.value = detail.copy(route = route)
@@ -132,12 +132,12 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
 
         // 실내(트레드밀) 세션에는 경로가 없다 — 쿼리 자체를 생략한다 (계획서 M1)
         // (Android: 상승 고도·수직 진폭·접촉 시간·보폭은 HC에서 받지 않아 null — 화면 미노출 가드로 빠진다)
-        var route = emptyList<GeoPoint>()
+        var route = emptyList<TrackPoint>()
         var power: Double? = null
         if (!run.isIndoor) {
             // 동의가 필요하면 빈 경로로 두고 화면에 동의 시트를 맡긴다 (NoData는 경로 없음)
             when (val result = session.exerciseRouteResult) {
-                is ExerciseRouteResult.Data -> route = result.exerciseRoute.route.thinned()
+                is ExerciseRouteResult.Data -> route = result.exerciseRoute.route.trackPoints()
                 is ExerciseRouteResult.ConsentRequired -> _routeConsentRequired.value = true
                 else -> {}
             }
@@ -162,6 +162,7 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
 
         return WorkoutDetail(
             route = route,
+            heartRateSamples = hrSamples,
             splits = ActiveTimeline.splits(distanceSamples, pauses).map { WorkoutDetail.Split(it.index, it.paceSecPerKm) },
             zones = if (hrSamples.isEmpty()) null else TrainingGuideEngine.heartRateZones(hrSamples, heartRate),
             cadenceSpm = if (steps != null && durationSec > 60) steps.toDouble() / (durationSec / 60) else null,
@@ -180,8 +181,11 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
     }
 }
 
-/// 폴리라인은 ~600점이면 충분 — 과한 포인트는 솎는다
-private fun List<ExerciseRoute.Location>.thinned(): List<GeoPoint> {
-    val stride = maxOf(1, size / 600)
-    return filterIndexed { i, _ -> i % stride == 0 }.map { GeoPoint(it.latitude, it.longitude) }
+/// 원본 전체를 보관한다 — 솎기는 표시 직전(thinnedCoordinates)에 한다 (#222 선행)
+/// (Android: HC에는 속도가 없어 speedMps = null. 고도는 HC가 값이 없을 때 null을 준다)
+private fun List<ExerciseRoute.Location>.trackPoints(): List<TrackPoint> = map {
+    TrackPoint(lat = it.latitude, lon = it.longitude, time = it.time,
+               elevationM = it.altitude?.inMeters,
+               horizontalAccuracyM = it.horizontalAccuracy?.inMeters,
+               speedMps = null)
 }

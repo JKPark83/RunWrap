@@ -39,13 +39,19 @@ enum RoutePrivacy {
     /// 거리는 직선 반경이 아니라 경로를 따라 쌓은 누적 거리다 (`CLLocation.distance(from:)`).
     static func trimmed(_ route: [CLLocationCoordinate2D],
                         meters: Double = 300) -> [CLLocationCoordinate2D] {
+        trimmed(route, meters: meters) { $0 }
+    }
+
+    /// 좌표 외 값(시각·고도)을 지닌 점도 같은 규칙으로 자른다 — GPX 내보내기의 "시작·끝 가리기" (이슈 #222)
+    static func trimmed<Point>(_ route: [Point], meters: Double,
+                               coordinate: (Point) -> CLLocationCoordinate2D) -> [Point] {
         guard route.count >= 2 else { return [] }
         var cumulative: [Double] = [0]
         cumulative.reserveCapacity(route.count)
         for i in 1..<route.count {
-            let previous = CLLocation(latitude: route[i - 1].latitude,
-                                      longitude: route[i - 1].longitude)
-            let current = CLLocation(latitude: route[i].latitude, longitude: route[i].longitude)
+            let a = coordinate(route[i - 1]), b = coordinate(route[i])
+            let previous = CLLocation(latitude: a.latitude, longitude: a.longitude)
+            let current = CLLocation(latitude: b.latitude, longitude: b.longitude)
             cumulative.append(cumulative[i - 1] + current.distance(from: previous))
         }
         let total = cumulative[route.count - 1]

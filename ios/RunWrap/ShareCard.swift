@@ -299,28 +299,34 @@ struct PhotoCardView: View {
 /// MKMapSnapshotter 래퍼 — snapshotter는 오버레이를 지원하지 않아
 /// 스냅샷 이미지 위에 polyline을 직접 그린다 (계획서 M5)
 enum RouteSnapshot {
-    static func image(route: [CLLocationCoordinate2D], size: CGSize) async -> UIImage? {
+    /// 지도 헤더와 같은 페이스 색 구간으로 그린다 — 구간을 못 내면(표본 부족) 단색 brand (이슈 #222)
+    static func image(route: [TrackPoint], size: CGSize) async -> UIImage? {
         guard route.count >= 2 else { return nil }
+        let coordinates = route.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         let options = MKMapSnapshotter.Options()
-        options.region = region(for: route)
+        options.region = region(for: coordinates)
         options.size = size
         // 카드가 늘 라이트라 지도 타일·경로 색도 라이트로 고정한다 — 다크 모드 기기에서 어두운 지도가 박히지 않게 (이슈 #221)
         options.traitCollection = UITraitCollection(userInterfaceStyle: .light)
         guard let snapshot = try? await MKMapSnapshotter(options: options).start() else {
             return nil
         }
+        let pieces: [(points: [TrackPoint], color: Color)] = RoutePaceEngine.segments(route)?
+            .map { ($0.points, $0.color) } ?? [(route, RR.brand)]
         return UIGraphicsImageRenderer(size: size).image { _ in
             snapshot.image.draw(at: .zero)
-            let path = UIBezierPath()
-            path.move(to: snapshot.point(for: route[0]))
-            for coordinate in route.dropFirst() {
-                path.addLine(to: snapshot.point(for: coordinate))
+            for piece in pieces {
+                let path = UIBezierPath()
+                for (i, point) in piece.points.enumerated() {
+                    let p = snapshot.point(for: CLLocationCoordinate2D(latitude: point.lat, longitude: point.lon))
+                    if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
+                }
+                path.lineWidth = 4.5
+                path.lineCapStyle = .round
+                path.lineJoinStyle = .round
+                UIColor(piece.color).resolvedColor(with: options.traitCollection).setStroke()
+                path.stroke()
             }
-            path.lineWidth = 4.5
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            UIColor(RR.brand).resolvedColor(with: options.traitCollection).setStroke()
-            path.stroke()
         }
     }
 
@@ -355,4 +361,10 @@ enum ShareCardRenderer {
             PHAssetChangeRequest.creationRequestForAsset(from: image)
         }
     }
+}
+
+/// 페이스 색 경로 구간 색 — 판정 불가(정확도 부족, tone nil)는 회색 (이슈 #222).
+/// Theme.swift는 위젯 타깃도 컴파일하므로(엔진 미포함) 앱 전용 파일에 둔다
+extension RoutePaceEngine.Segment {
+    var color: Color { tone?.color ?? RR.text3 }
 }

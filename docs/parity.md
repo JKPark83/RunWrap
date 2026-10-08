@@ -15,6 +15,7 @@ iOS(`ios/RunWrap`)가 사양 원본이고 Android(`android/`)는 이식본이다
 | `OnboardingFlowScreen.swift` | `OnboardingFlowScreen.kt`, `OnboardingFlowModel.kt` | 화면 상태 모델(`OnboardingFlowModel`)만 `:engine`으로 분리해 테스트 |
 | `RunWrapApp.swift` | `RunWrapApp.kt`, `MainActivity.kt`, `AppContainer.kt` | `@main App` + environmentObject → Application + 단일 액티비티 + 컨테이너 |
 | `BirdIllustrations.swift` | `BirdIllustrations.kt`, `BirdTabIcon.kt` | 탭바용 새 아이콘(`BirdTabIcon`)만 파일을 나눴다 |
+| `TrackPoint+Coordinates.swift` | `TrackPoint.kt` | iOS는 CoreLocation 좌표 변환만 엔진 파일 밖으로 뺐다 — Android는 `GeoPoint`가 엔진 타입이라 한 파일 |
 
 ## ios-only 파일
 

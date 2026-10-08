@@ -55,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -65,6 +66,8 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -87,8 +90,10 @@ import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.gms.maps.model.RoundCap
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.MarkerComposable
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
+import com.google.maps.android.compose.rememberUpdatedMarkerState
 import com.jkpark.runwrap.AppContainer
 import com.jkpark.runwrap.BuildConfig
 import com.jkpark.runwrap.LocalAppContainer
@@ -97,7 +102,11 @@ import com.jkpark.runwrap.engine.FormAdvice
 import com.jkpark.runwrap.engine.FormEngine
 import com.jkpark.runwrap.engine.FormSnapshot
 import com.jkpark.runwrap.engine.Format
+import com.jkpark.runwrap.engine.GPXWriter
 import com.jkpark.runwrap.engine.GeoPoint
+import com.jkpark.runwrap.engine.RoutePaceEngine
+import com.jkpark.runwrap.engine.TrackPoint
+import com.jkpark.runwrap.engine.thinned
 import com.jkpark.runwrap.engine.HeartRateProfile
 import com.jkpark.runwrap.engine.HeartRateZoneMethod
 import com.jkpark.runwrap.engine.HeatEngine
@@ -131,6 +140,7 @@ import com.jkpark.runwrap.ui.ShoeImage
 import com.jkpark.runwrap.ui.ShoeView
 import com.jkpark.runwrap.ui.SplitBarsChart
 import com.jkpark.runwrap.ui.ToneBadge
+import com.jkpark.runwrap.ui.TrendLineChart
 import com.jkpark.runwrap.ui.ZoneBarView
 import com.jkpark.runwrap.ui.color
 import com.jkpark.runwrap.ui.mono
@@ -175,6 +185,8 @@ fun SessionDetailScreen(
     val hrMaxEstimate by health.hrMaxEstimate.collectAsStateWithLifecycle()
     val restingHRBpm by health.restingHRBpm.collectAsStateWithLifecycle()
     val detail by store.detail.collectAsStateWithLifecycle()
+    // 경로 원본은 전부 보관하고 지도·공유 카드에는 표시 직전에 ~600점으로 솎아 넘긴다 (#222 선행)
+    val routePoints = remember(detail?.route) { detail?.route.orEmpty().thinned() }
     val isLoading by store.isLoading.collectAsStateWithLifecycle()
     val loadFailed by store.loadFailed.collectAsStateWithLifecycle()
     val formSnapshots by store.formSnapshots.collectAsStateWithLifecycle()
@@ -186,6 +198,7 @@ fun SessionDetailScreen(
     val assignments by shoes.assignments.collectAsStateWithLifecycle()
 
     var showShare by remember { mutableStateOf(false) }
+    var showsGPXExport by remember { mutableStateOf(false) }
     var showsShoePicker by remember { mutableStateOf(false) }
     var showsShoeEditor by remember { mutableStateOf(false) }
     // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·헬스 커넥트 값. 해석은 엔진 한 곳
@@ -248,7 +261,7 @@ fun SessionDetailScreen(
                 // 실내 세션은 경로가 없어 지도 헤더 자체를 걸어 두지 않는다 (기획서 §4.6)
                 if (!run.isIndoor) {
                     MapHeader(
-                        run = run, route = detail?.route.orEmpty(), isLoading = isLoading, loadFailed = loadFailed,
+                        run = run, route = routePoints, splitCount = detail?.splits?.size ?: 0, isLoading = isLoading, loadFailed = loadFailed,
                         consentRequired = routeConsentRequired, onConsent = { routeConsent.launch(run.id) },
                     )
                 }
@@ -319,6 +332,7 @@ fun SessionDetailScreen(
                         LoadFailedCard(enabled = !isLoading) { scope.launch { load() } }
                     }
                     detail?.takeIf { it.splits.size >= 3 }?.let { SplitsCard(it) }
+                    detail?.let { RoutePaceEngine.elevationProfile(it.route) }?.let { ElevationCard(it) }
                     detail?.drift?.let { DriftCard(it, heatAdjustment) }
                     detail?.let { d -> d.zones?.let { ZonesCard(it, d) } }
                     detail?.takeIf(::hasDynamics)?.let { FormCard(run, it, formSnapshots, isLoadingSnapshots) }
@@ -331,6 +345,8 @@ fun SessionDetailScreen(
                     }
                     // 경로 로딩 중에 열면 카드에 경로가 빠진다 — 불러오는 동안은 막는다 (이슈 #84)
                     ShareSection(enabled = !isLoading) { showShare = true }
+                    // 경로가 없는 세션(실내 등)은 내보낼 것이 없어 버튼을 숨긴다 (미노출 원칙, 이슈 #222)
+                    if ((detail?.route?.size ?: 0) >= 2) GPXRow { showsGPXExport = true }
                 }
             }
         }
@@ -351,13 +367,16 @@ fun SessionDetailScreen(
 
     if (showShare) {
         ShareSheet(
-            run = run, detail = detail, route = detail?.route.orEmpty(),
+            run = run, detail = detail, route = routePoints,
             /// 카드 하단 주간 요약 — 이 세션 기준 7일 러닝 횟수·거리 (기획서 §4.4, 이슈 #92)
             weeklySummary = (healthState as? HealthStore.State.Loaded)?.let {
                 ShareSummary.weeklyLine(it.runs, run.start, Instant.now(), zone)
             },
             onDismiss = { showShare = false },
         )
+    }
+    if (showsGPXExport) {
+        detail?.let { GPXExportSheet(run, it, onDismiss = { showsGPXExport = false }) }
     }
     if (showsShoePicker) {
         ShoePickerSheet(activeShoes, assigned?.id, mileage, onDismiss = { showsShoePicker = false }) { id ->
@@ -423,7 +442,8 @@ private fun contributionBadge(run: RunSummary, context: WeeklyReport.DistanceCar
 @Composable
 private fun MapHeader(
     run: RunSummary,
-    route: List<GeoPoint>,
+    route: List<TrackPoint>,
+    splitCount: Int,
     isLoading: Boolean,
     loadFailed: Boolean,
     consentRequired: Boolean,
@@ -431,7 +451,7 @@ private fun MapHeader(
 ) {
     Box(Modifier.fillMaxWidth().height(320.dp)) {
         if (route.size >= 2 && BuildConfig.MAPS_API_KEY.isNotEmpty()) {
-            RouteMap(route, Modifier.fillMaxSize())
+            RouteMap(route, splitCount, Modifier.fillMaxSize())
         } else {
             Column(
                 Modifier.fillMaxSize().background(RR.surface2),
@@ -482,11 +502,15 @@ private fun MapHeader(
     }
 }
 
-/// 조작 없는 지도 + 경로 선 — 경로 전체가 보이도록 RouteSnapshot.region 영역에 맞춘다
+/// 조작 없는 지도 + 경로 선 — 경로 전체가 보이도록 RouteSnapshot.region 영역에 맞춘다.
+/// 페이스 색 구간마다 Polyline을 따로 칠한다 — 구간을 못 내면(표본 부족) 단색 brand.
+/// 각 km 지점에 작은 번호 점을 얹는다 (이슈 #222)
 @Composable
-private fun RouteMap(route: List<GeoPoint>, modifier: Modifier) {
-    val region = remember(route) { RouteSnapshot.region(route) }
+private fun RouteMap(route: List<TrackPoint>, splitCount: Int, modifier: Modifier) {
+    val region = remember(route) { RouteSnapshot.region(route.map { GeoPoint(it.lat, it.lon) }) }
     val points = remember(route) { route.map { LatLng(it.lat, it.lon) } }
+    val segments = remember(route) { RoutePaceEngine.segments(route) }
+    val markers = remember(route, splitCount) { RoutePaceEngine.kmMarkers(route, splitCount) }
     val camera = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(LatLng(region.centerLat, region.centerLon), 14f)
     }
@@ -508,10 +532,56 @@ private fun RouteMap(route: List<GeoPoint>, modifier: Modifier) {
         ),
         onMapLoaded = { camera.move(CameraUpdateFactory.newLatLngBounds(bounds, 0)) },
     ) {
-        Polyline(
-            points = points, color = RR.brand, width = strokeWidth,
-            startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND,
-        )
+        if (segments != null) {
+            segments.forEach { segment ->
+                Polyline(
+                    points = segment.points.map { LatLng(it.lat, it.lon) }, color = segment.color, width = strokeWidth,
+                    startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND,
+                )
+            }
+        } else {
+            Polyline(
+                points = points, color = RR.brand, width = strokeWidth,
+                startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND,
+            )
+        }
+        markers.forEachIndexed { index, marker ->
+            MarkerComposable(
+                index, state = rememberUpdatedMarkerState(LatLng(marker.lat, marker.lon)),
+                anchor = Offset(0.5f, 0.5f),
+            ) {
+                Box(
+                    Modifier.size(15.dp).background(RR.surface, CircleShape).border(1.dp, RR.line, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("${index + 1}", style = mono(8.5.sp, FontWeight.Bold), color = RR.text)
+                }
+            }
+        }
+    }
+    if (segments != null) {
+        Box(modifier.padding(14.dp), contentAlignment = Alignment.BottomEnd) { PaceLegend() }
+    }
+}
+
+/// 페이스 색 범례 — 빠름(개선) → 느림(과부하).
+/// 사진/지도 위 오버레이라 스킴 무관 — 토큰 대상 아님 (흰 글자·검정 배경)
+@Composable
+private fun PaceLegend() {
+    Row(
+        Modifier
+            .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(9.dp))
+            .padding(horizontal = 9.dp, vertical = 6.dp)
+            .clearAndSetSemantics { contentDescription = "경로 색은 구간 페이스 — 초록이 빠르고 빨강이 느려요" },
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val style = TextStyle(fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Text("빠름", style = style, color = Color.White)
+        listOf(RRTone.improving, RRTone.steady, RRTone.caution, RRTone.overload).forEach { tone ->
+            Box(Modifier.size(12.dp, 4.dp).background(tone.color, CircleShape))
+        }
+        Text("느림", style = style, color = Color.White)
     }
 }
 
@@ -838,6 +908,29 @@ private fun SplitsCard(detail: WorkoutDetail) {
     }
 }
 
+// MARK: 고도 프로필 (이슈 #222)
+
+@Composable
+private fun ElevationCard(profile: List<RoutePaceEngine.ProfilePoint>) {
+    val elevations = profile.map { it.elevationM }
+    val low = (elevations.minOrNull() ?: 0.0).swiftRoundedInt()
+    val high = (elevations.maxOrNull() ?: 0.0).swiftRoundedInt()
+    Column(Modifier.fillMaxWidth().rrCard().padding(18.dp)) {
+        Text("고도 프로필", style = cardTitle, color = RR.text)
+        Text(
+            "최저 ${low}m · 최고 ${high}m",
+            style = TextStyle(fontSize = 13.sp), color = RR.text2,
+            modifier = Modifier.padding(top = 9.dp),
+        )
+        TrendLineChart(
+            elevations, Modifier.padding(top = 14.dp), tint = RR.brand,
+            endLabels = "0 km" to "${Format.km(profile.lastOrNull()?.distanceKm ?: 0.0)} km",
+            pointLabels = profile.map { "${Format.km(it.distanceKm)} km" },
+            valueText = { "${it.swiftRoundedInt()}m" },
+        )
+    }
+}
+
 // MARK: 심박 구간
 
 @Composable
@@ -972,6 +1065,29 @@ private fun ShareSection(enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
+/// GPX 내보내기 — 공유 카드 아래 한 줄. 시트에서 가림 여부를 고르고 공유한다 (이슈 #222)
+/// (Android: SF `doc.badge.arrow.up` 대응 아이콘이 없어 공유 아이콘을 쓴다)
+@Composable
+private fun GPXRow(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .rrCard()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(RRIcons.named("square.and.arrow.up"), null, Modifier.size(14.dp), tint = RR.brand)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("GPX 파일로 내보내기", style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold), color = RR.text)
+            Text("Strava·Garmin 등에 경로·심박을 옮겨요", style = TextStyle(fontSize = 12.5.sp), color = RR.text3)
+        }
+        Icon(RRIcons.named("chevron.right"), null, Modifier.size(13.dp), tint = RR.text3)
+    }
+}
+
 // MARK: - 공유 시트 (계획서 M5)
 
 /// 스타일 토글 + 카드 미리보기 + 사진 저장(add-only) + 공유 시트
@@ -982,7 +1098,7 @@ private fun ShareSheet(
     run: RunSummary,
     /// 존·케이던스·고도·구간 페이스 재료 — 아직 못 불러왔으면 null이고 해당 항목은 카드에서 빠진다 (이슈 #221)
     detail: WorkoutDetail?,
-    route: List<GeoPoint>,
+    route: List<TrackPoint>,
     weeklySummary: String?,
     onDismiss: () -> Unit,
 ) {
@@ -1001,7 +1117,7 @@ private fun ShareSheet(
     var saveMessage by remember { mutableStateOf<String?>(null) }
     val radius = RoutePrivacy.radius(trimRadiusRaw)
     // 집 근처가 드러나지 않게 시작·끝을 선택한 반경만큼 잘라낸 경로만 그린다 (이슈 #84·#191)
-    val trimmed = remember(route, radius) { RoutePrivacy.trimmed(route, radius.meters) }
+    val trimmed = remember(route, radius) { RoutePrivacy.trimmed(route, radius.meters) { GeoPoint(it.lat, it.lon) } }
     val layer = rememberGraphicsLayer()
 
     val picker = rememberLauncherForActivityResult(PickVisualMedia()) { uri ->
@@ -1216,4 +1332,97 @@ private suspend fun sendImage(context: Context, image: ImageBitmap) {
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     send.clipData = ClipData.newRawUri(null, uri)
     context.startActivity(Intent.createChooser(send, "러닝 스토리 카드"))
+}
+
+// MARK: - GPX 내보내기 시트 (이슈 #222)
+
+/// "시작·끝 가리기" 토글 + 공유. 본인이 다른 서비스로 옮기는 용도라 원본이 기대값 — 가리기는 기본 꺼짐.
+/// 파일은 임시 디렉터리에 쓰고 ShareLink로 넘긴다 — 앱은 어디에도 보내지 않는다
+/// (Android: cacheDir/share/에 쓰고 FileProvider uri로 공유 시트(ACTION_SEND)를 띄운다)
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GPXExportSheet(run: RunSummary, detail: WorkoutDetail, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val settings = LocalAppContainer.current.settings
+    val scope = rememberCoroutineScope()
+    var trims by remember { mutableStateOf(false) }
+    /// 공유 카드와 같은 가림 반경을 쓴다 (이슈 #191)
+    val trimRadiusRaw by settings.rememberSetting(RoutePrivacy.radiusKey, RoutePrivacy.defaultRadius.rawValue)
+    val radius = RoutePrivacy.radius(trimRadiusRaw)
+    val points = remember(trims, radius, detail.route) {
+        if (trims) RoutePrivacy.trimmed(detail.route, radius.meters) { GeoPoint(it.lat, it.lon) } else detail.route
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = RR.bg,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("GPX 내보내기", style = TextStyle(fontSize = 17.sp, fontWeight = FontWeight.Bold), color = RR.text)
+
+            Row(
+                Modifier.fillMaxWidth().toggleable(trims, role = Role.Switch) { trims = it },
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("시작·끝 가리기", style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = RR.text)
+                    Text("경로 양끝 ${radius.label}를 빼고 내보내요", style = TextStyle(fontSize = 11.5.sp), color = RR.text3)
+                }
+                Switch(
+                    checked = trims, onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = RR.onBrand, checkedTrackColor = RR.brand,
+                        uncheckedThumbColor = RR.surface, uncheckedTrackColor = RR.barFill, uncheckedBorderColor = RR.line,
+                    ),
+                )
+            }
+
+            if (points.size >= 2) {
+                val buttonShape = RoundedCornerShape(14.dp)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(buttonShape)
+                        .background(RR.brand, buttonShape)
+                        .clickable(role = Role.Button) { scope.launch { sendGPX(context, run, detail, points) } }
+                        .padding(vertical = 13.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(RRIcons.named("square.and.arrow.up"), null, Modifier.size(15.dp), tint = RR.onBrand)
+                    Text("GPX 공유", style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.SemiBold), color = RR.onBrand)
+                }
+            } else {
+                Text("경로가 너무 짧아 가리면 남는 구간이 없어요", style = TextStyle(fontSize = 12.sp), color = RR.text3)
+            }
+        }
+    }
+}
+
+/// "러닝-2026-10-08.gpx"를 cacheDir/share/에 쓰고 공유 시트를 띄운다 — 쓰기에 실패하면 아무것도 하지 않는다
+private suspend fun sendGPX(context: Context, run: RunSummary, detail: WorkoutDetail, points: List<TrackPoint>) {
+    val zone = ZoneId.systemDefault()
+    val file = withContext(Dispatchers.IO) {
+        runCatching {
+            val gpx = GPXWriter.gpx(
+                name = run.displayTitle(zone), start = run.start,
+                segments = GPXWriter.segments(points), heartRates = detail.heartRateSamples,
+            )
+            val dir = File(context.cacheDir, "share").apply { mkdirs() }
+            File(dir, GPXWriter.fileName(run.start, zone)).also { it.writeText(gpx) }
+        }.getOrNull()
+    } ?: return
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val send = Intent(Intent.ACTION_SEND)
+        .setType("application/gpx+xml")
+        .putExtra(Intent.EXTRA_STREAM, uri)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    send.clipData = ClipData.newRawUri(null, uri)
+    context.startActivity(Intent.createChooser(send, "GPX 파일"))
 }
