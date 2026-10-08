@@ -52,6 +52,7 @@ import com.jkpark.runwrap.engine.FlyoverEngine
 import com.jkpark.runwrap.engine.Format
 import com.jkpark.runwrap.ui.RR
 import com.jkpark.runwrap.ui.RRIcons
+import com.jkpark.runwrap.ui.RRSegmented
 import com.jkpark.runwrap.ui.mono
 import com.jkpark.runwrap.ui.rrCard
 
@@ -66,6 +67,8 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
     var playID by remember { mutableIntStateOf(0) }
     var playing by remember { mutableStateOf(true) }
     var progress by remember { mutableDoubleStateOf(0.0) }
+    /// 재생 배속 — 재생 중 HUD 세그먼트로 바꾼다. 경과는 매 프레임 (프레임 간격 × 배속)을 쌓으므로 바꿔도 위치가 튀지 않는다 (iOS와 같은 0.5·1·2배)
+    var speed by remember { mutableDoubleStateOf(1.0) }
     var mapLoaded by remember { mutableStateOf(false) }
     val camera = rememberCameraPositionState { position = cameraAt(keyframes[0]) }
     val density = LocalDensity.current
@@ -76,10 +79,12 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
         playing = true
         progress = 0.0
         camera.move(CameraUpdateFactory.newCameraPosition(cameraAt(keyframes[0])))
-        val start = withFrameNanos { it }
+        var last = withFrameNanos { it }
+        var elapsed = 0.0
         while (progress < 1) {
             val now = withFrameNanos { it }
-            val elapsed = (now - start) / 1e9
+            elapsed += (now - last) / 1e9 * speed
+            last = now
             progress = elapsed / track.playbackSec
             // 재생 중 핀치로 바꾼 줌은 유지하고 중심·방위만 매 프레임 덮어쓴다 (#232)
             val f = FlyoverEngine.frame(track, progress)
@@ -133,7 +138,7 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
             )
         }
 
-        Hud(frame, playing, onReplay = { playID += 1 }, Modifier.align(Alignment.BottomCenter))
+        Hud(frame, playing, speed, onSpeed = { speed = it }, onReplay = { playID += 1 }, Modifier.align(Alignment.BottomCenter))
 
         Box(
             Modifier
@@ -158,7 +163,13 @@ private fun cameraAt(k: FlyoverEngine.Keyframe): CameraPosition =
     CameraPosition(LatLng(k.lat, k.lon), 17f, cameraPitch, (((k.headingDeg % 360) + 360) % 360).toFloat())
 
 @Composable
-private fun Hud(frame: FlyoverEngine.Frame, playing: Boolean, onReplay: () -> Unit, modifier: Modifier) {
+private val speeds = listOf(0.5, 1.0, 2.0)
+
+@Composable
+private fun Hud(
+    frame: FlyoverEngine.Frame, playing: Boolean, speed: Double,
+    onSpeed: (Double) -> Unit, onReplay: () -> Unit, modifier: Modifier,
+) {
     Column(
         modifier
             .navigationBarsPadding()
@@ -173,7 +184,13 @@ private fun Hud(frame: FlyoverEngine.Frame, playing: Boolean, onReplay: () -> Un
             Stat("시간", Format.duration(frame.elapsedSec), Modifier.weight(1f))
             Stat("페이스", frame.paceSecPerKm?.let(Format::paceKm) ?: "—", Modifier.weight(1f))
         }
-        if (!playing) {
+        if (playing) {
+            RRSegmented(
+                options = speeds.map { if (it == 0.5) "0.5×" else "${it.toInt()}×" },
+                selected = speeds.indexOf(speed),
+                onSelect = { onSpeed(speeds[it]) },
+            )
+        } else {
             Row(
                 Modifier
                     .fillMaxWidth()

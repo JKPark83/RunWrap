@@ -14,6 +14,9 @@ struct RouteFlyoverScreen: View {
     @State private var playID = 0
     @State private var startedAt = Date()
     @State private var playing = true
+    /// 재생 배속 — 재생 중 HUD 세그먼트로 바꾼다. 경과 = 벽시계 × 배속이라 바꿀 때 `startedAt`을 다시 잡아 끊김 없이 잇는다
+    @State private var speed: Double = 1
+    private static let speeds: [Double] = [0.5, 1, 2]
     @State private var position: MapCameraPosition
     /// 재생 중 핀치로 바꾼 줌을 따라간다 — 카메라를 매 프레임 다시 놓아도 사용자가 고른 거리는 유지 (#232)
     @State private var cameraDistance: Double
@@ -50,7 +53,7 @@ struct RouteFlyoverScreen: View {
                 map
                 if playing {
                     TimelineView(.animation) { context in
-                        let progress = context.date.timeIntervalSince(startedAt) / track.playbackSec
+                        let progress = elapsed(at: context.date) / track.playbackSec
                         let frame = FlyoverEngine.frame(track, progress: progress)
                         let here = CLLocationCoordinate2D(latitude: frame.lat, longitude: frame.lon)
                         ZStack(alignment: .bottom) {
@@ -75,7 +78,7 @@ struct RouteFlyoverScreen: View {
         .task(id: playID) {
             // 재생 시계 — 매 틱 카메라를 현재 위치 점 위에 놓고, 재생 길이가 지나면 멈춰 제스처·"다시 재생"을 연다
             while !Task.isCancelled {
-                let elapsed = Date().timeIntervalSince(startedAt)
+                let elapsed = elapsed(at: Date())
                 guard elapsed < track.playbackSec else { break }
                 let frame = FlyoverEngine.frame(track, progress: elapsed / track.playbackSec)
                 position = .camera(MapCamera(
@@ -115,6 +118,16 @@ struct RouteFlyoverScreen: View {
         startedAt = Date()
         playing = true
         playID += 1
+    }
+
+    /// 재생 경과(초) = 벽시계 경과 × 배속
+    private func elapsed(at date: Date) -> Double { date.timeIntervalSince(startedAt) * speed }
+
+    /// 배속 변경 — 지금까지의 재생 경과를 새 배속으로 환산한 시작 시각으로 바꿔 위치가 튀지 않게 한다
+    private func setSpeed(_ new: Double) {
+        let played = elapsed(at: Date())
+        startedAt = Date().addingTimeInterval(-played / new)
+        speed = new
     }
 
     private var map: some View {
@@ -172,7 +185,14 @@ struct RouteFlyoverScreen: View {
                 stat("시간", Format.duration(frame.elapsedSec))
                 stat("페이스", frame.paceSecPerKm.map(Format.paceKm) ?? "—")
             }
-            if !playing {
+            if playing {
+                Picker("재생 속도", selection: Binding(get: { speed }, set: setSpeed)) {
+                    ForEach(Self.speeds, id: \.self) { s in
+                        Text(s == 0.5 ? "0.5×" : "\(Int(s))×").tag(s)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } else {
                 Button(action: play) {
                     Label("다시 재생", systemImage: "arrow.counterclockwise")
                         .font(.system(size: 14, weight: .semibold))
