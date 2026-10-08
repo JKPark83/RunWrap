@@ -39,6 +39,8 @@ import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.JointType
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import kotlin.math.roundToInt
 import com.google.android.gms.maps.model.RoundCap
 import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
@@ -66,6 +68,7 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
     var progress by remember { mutableDoubleStateOf(0.0) }
     var mapLoaded by remember { mutableStateOf(false) }
     val camera = rememberCameraPositionState { position = cameraAt(keyframes[0]) }
+    val density = LocalDensity.current
 
     LaunchedEffect(playID, mapLoaded) {
         // 지도가 뜨기 전에 시계를 돌리면 카메라만 늦게 출발해 점과 어긋난다
@@ -86,11 +89,13 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
             )))
         }
         playing = false
+        // 끝나면 천천히 빠져나와 뛰어온 코스 전체를 보여준다 (iOS outroSec 3초, 사방 25% 여백)
+        val bounds = LatLngBounds.builder().also { b -> points.forEach { b.include(it) } }.build()
+        camera.animate(CameraUpdateFactory.newLatLngBounds(bounds, with(density) { 72.dp.toPx() }.roundToInt()), 3_000)
     }
 
     val frame = FlyoverEngine.frame(track, if (playing) progress else 1.0)
     val here = LatLng(frame.lat, frame.lon)
-    val density = LocalDensity.current
     Box(Modifier.fillMaxSize().background(RR.bg)) {
         GoogleMap(
             modifier = Modifier.fillMaxSize(),

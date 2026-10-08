@@ -86,7 +86,19 @@ struct RouteFlyoverScreen: View {
             }
             guard !Task.isCancelled else { return }
             playing = false
+            // 끝나면 천천히 빠져나와 뛰어온 코스 전체를 보여준다
+            withAnimation(.easeInOut(duration: Self.outroSec)) { position = .rect(fullCourseRect) }
         }
+    }
+
+    /// 마무리 — 전체 코스로 빠지는 카메라 시간(초)
+    private static let outroSec: Double = 3
+    /// 전체 코스가 들어오는 사각형 — 가장자리·HUD 여백으로 사방 25%, 아래는 HUD 몫으로 20% 더 둔다
+    private var fullCourseRect: MKMapRect {
+        let rect = coordinates.map { MKMapRect(origin: MKMapPoint($0), size: MKMapSize(width: 1, height: 1)) }
+            .reduce(MKMapRect.null) { $0.union($1) }
+        let dx = rect.width * 0.25, dy = rect.height * 0.25
+        return MKMapRect(x: rect.minX - dx, y: rect.minY - dy, width: rect.width + dx * 2, height: rect.height + dy * 2 + rect.height * 0.2)
     }
 
     private func play() {
