@@ -202,9 +202,14 @@ fun SessionDetailScreen(
 
     var showShare by remember { mutableStateOf(false) }
     var showsGPXExport by remember { mutableStateOf(false) }
-    /// 경로 플라이오버 (이슈 #224) — 지도 키가 있고 경로 점이 충분할 때만 진입 버튼을 건다
+    /// 경로 플라이오버 (이슈 #224) — 지도 키가 있고 플라이오버 화면과 같은 가드(FlyoverEngine.track)를
+    /// 통과할 때만 진입 버튼을 건다. 버튼만 따로 거르면 빈 다이얼로그가 뜬다
     var showsFlyover by remember { mutableStateOf(false) }
-    val canFlyover = BuildConfig.MAPS_API_KEY.isNotEmpty() && (detail?.route?.size ?: 0) >= FlyoverEngine.minPoints
+    /// 표시용 솎기(~600점)로 충분 — 원본 시각이 남아 있어 시간 비례 재생이 그대로다
+    val flyoverTrack = remember(detail?.route, run.distanceKm) {
+        FlyoverEngine.track(detail?.route.orEmpty().thinned(), distanceM = run.distanceKm?.let { it * 1_000 })
+    }
+    val canFlyover = BuildConfig.MAPS_API_KEY.isNotEmpty() && flyoverTrack != null
     var showsShoePicker by remember { mutableStateOf(false) }
     var showsShoeEditor by remember { mutableStateOf(false) }
     // 심박 기준 (이슈 #56) — 0/빈 문자열이면 미설정 → 추정·헬스 커넥트 값. 해석은 엔진 한 곳
@@ -372,16 +377,13 @@ fun SessionDetailScreen(
         }
     }
 
-    if (showsFlyover) {
-        val track = remember(detail?.route) {
-            FlyoverEngine.track(detail?.route.orEmpty().thinned(), distanceM = run.distanceKm?.let { it * 1_000 })
-        }
+    if (showsFlyover && flyoverTrack != null) {
         // (Android: 뒤로가기로도 닫힌다 — iOS 전체 화면 커버는 닫기 버튼으로만 닫힌다)
         Dialog(
             onDismissRequest = { showsFlyover = false },
             properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
         ) {
-            if (track != null) RouteFlyoverScreen(track, onClose = { showsFlyover = false })
+            RouteFlyoverScreen(flyoverTrack, onClose = { showsFlyover = false })
         }
     }
     if (showShare) {

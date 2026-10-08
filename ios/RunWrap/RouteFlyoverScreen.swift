@@ -3,7 +3,7 @@ import MapKit
 
 /// 앱 안 경로 플라이오버 재생 (이슈 #224) — 3D 지도 위를 카메라가 경로를 따라 18초 동안 날아간다.
 /// 카메라는 `mapCameraKeyframeAnimator`(iOS 17, WWDC23 10157)가 움직이고, 키프레임 애니메이터는
-/// 카메라만 움직이므로 현재 위치 점·지나온 경로·HUD는 `TimelineView(.animation)`로 같은 재생 시계에서 그린다.
+/// 카메라만 움직이므로 현재 위치 점·지나온 경로 꼬리·HUD는 `TimelineView(.animation)`로 같은 재생 시계에서 그린다.
 /// 키프레임 배치·보간은 `FlyoverEngine`이 정한다 — 이 화면은 그리기만 한다.
 /// 앱 안 재생이라 본인만 본다 — 경로 가림(RoutePrivacy)은 저장·공유로 확장할 때 붙인다.
 struct RouteFlyoverScreen: View {
@@ -15,6 +15,12 @@ struct RouteFlyoverScreen: View {
     /// 재생 중에는 지도 제스처를 막는다 — 제스처가 들어오면 키프레임 애니메이션이 제거된다
     @State private var playing = true
     @State private var position: MapCameraPosition
+    /// 지도에 그린 지나온 경로 단계 — 이 값이 바뀔 때만 지도 내용이 다시 만들어진다
+    @State private var passedStep = 0
+    /// 지나온 경로 갱신 단계 수 — 18초에 90단계(초당 약 5번)
+    private static let passedSteps = 90
+    /// 꼬리를 겹쳐 그리는 단계 수 — 약 0.6초 분량
+    private static let tailOverlapSteps = 3
 
     private let keyframes: [FlyoverEngine.Keyframe]
     private let coordinates: [CLLocationCoordinate2D]
@@ -34,13 +40,33 @@ struct RouteFlyoverScreen: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: nil, paused: !playing)) { context in
-            let progress = playing
-                ? context.date.timeIntervalSince(startedAt) / FlyoverEngine.playbackSec : 1
-            let frame = FlyoverEngine.frame(track, progress: progress)
+        // 지도는 TimelineView 밖에 둔다 — 지도 내용(MapPolyline·Annotation)을 매 프레임 다시 만들면 MapKit이
+        // 오버레이를 매 틱 지웠다 다시 올려 재생 중 선이 보이지 않았다(시뮬레이터 확인).
+        // 지도는 지나온 경로 단계(passedStep)가 바뀔 때만 다시 그리고, 재생 중 매 프레임 움직이는
+        // 점·꼬리·HUD는 지도 위 SwiftUI 층이 `MapProxy.convert`로 화면 좌표를 구해 그린다
+        MapReader { proxy in
             ZStack(alignment: .bottom) {
-                map(frame)
-                hud(frame)
+                map
+                if playing {
+                    TimelineView(.animation) { context in
+                        let progress = context.date.timeIntervalSince(startedAt) / FlyoverEngine.playbackSec
+                        let frame = FlyoverEngine.frame(track, progress: progress)
+                        let here = CLLocationCoordinate2D(latitude: frame.lat, longitude: frame.lon)
+                        ZStack(alignment: .bottom) {
+                            tail(to: here, passedCount: frame.passedCount, proxy: proxy)
+                            if let point = proxy.convert(here, to: .local) {
+                                dot.position(point).allowsHitTesting(false)
+                            }
+                            hud(frame)
+                        }
+                        .onChange(of: Self.step(frame.passedCount, of: coordinates.count), initial: true) { _, step in
+                            passedStep = step
+                        }
+                    }
+                } else {
+                    // 멈춘 뒤에는 지도를 움직일 수 있다 — 점은 지도 안 Annotation이 끝 지점에 붙어 따라간다
+                    hud(FlyoverEngine.frame(track, progress: 1))
+                }
             }
         }
         .ignoresSafeArea(edges: .top)
@@ -51,29 +77,39 @@ struct RouteFlyoverScreen: View {
             // 재생 길이가 지나면 멈추고 제스처·"다시 재생"을 연다
             try? await Task.sleep(for: .seconds(FlyoverEngine.playbackSec))
             guard !Task.isCancelled else { return }
+            passedStep = Self.passedSteps
             playing = false
         }
     }
 
+    /// 지나온 경로 점 수 → 갱신 단계(0...passedSteps)
+    private static func step(_ passedCount: Int, of total: Int) -> Int {
+        passedCount * passedSteps / total
+    }
+
+    /// 갱신 단계 → 지도에 그리는 지나온 경로 점 수(1 이상, passedCount 이하)
+    private static func passedEnd(_ step: Int, of total: Int) -> Int {
+        max(1, total * step / passedSteps)
+    }
+
     private func play() {
         startedAt = Date()
+        passedStep = 0
         playing = true
         playID += 1
     }
 
-    private func map(_ frame: FlyoverEngine.Frame) -> some View {
-        let here = CLLocationCoordinate2D(latitude: frame.lat, longitude: frame.lon)
+    private var map: some View {
+        // 단계 끝까지 — 그 뒤 현재 위치까지는 `tail`이 잇는다
+        let passedEnd = Self.passedEnd(passedStep, of: coordinates.count)
         return Map(position: $position, interactionModes: playing ? [] : .all) {
             MapPolyline(coordinates: coordinates)
                 .stroke(RR.brand.opacity(0.3), style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
             // 지나온 경로 — #222 RoutePaceEngine 머지 후 페이스 색 구간(MapPolyline 여러 개)으로 교체한다
-            MapPolyline(coordinates: Array(coordinates.prefix(frame.passedCount)) + [here])
+            MapPolyline(coordinates: Array(coordinates.prefix(passedEnd)))
                 .stroke(RR.brand, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-            Annotation("", coordinate: here, anchor: .center) {
-                Circle()
-                    .fill(RR.brand)
-                    .frame(width: 16, height: 16)
-                    .overlay(Circle().stroke(RR.onBrand, lineWidth: 3))
+            if !playing, let end = coordinates.last {
+                Annotation("", coordinate: end, anchor: .center) { dot }
             }
         }
         .mapStyle(.standard(elevation: .realistic, pointsOfInterest: .excludingAll))
@@ -101,6 +137,25 @@ struct RouteFlyoverScreen: View {
                 LinearKeyframe(cameraPitch, duration: FlyoverEngine.playbackSec)
             }
         }
+    }
+
+    /// 지도에 그린 지나온 경로 끝 ~ 현재 위치 사이 꼬리 — 단계 사이에 점과 선이 끊겨 보이지 않게 매 프레임 이어 그린다.
+    /// 단계가 바뀐 뒤 MapKit이 새 선을 올리기까지 몇 프레임 걸려 그 사이가 비므로, 몇 단계 앞에서부터 겹쳐 그린다
+    private func tail(to here: CLLocationCoordinate2D, passedCount: Int, proxy: MapProxy) -> some View {
+        let passedEnd = Self.passedEnd(max(0, passedStep - Self.tailOverlapSteps), of: coordinates.count)
+        let coords = coordinates[(passedEnd - 1)..<max(passedEnd, passedCount)] + [here]
+        let points = coords.compactMap { proxy.convert($0, to: .local) }
+        return Path { $0.addLines(points) }
+            .stroke(RR.brand, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+            .allowsHitTesting(false)
+    }
+
+    /// 현재 위치 점 — 재생 중에는 지도 위 SwiftUI 층에, 멈춘 뒤에는 지도 안 Annotation으로 놓는다
+    private var dot: some View {
+        Circle()
+            .fill(RR.brand)
+            .frame(width: 16, height: 16)
+            .overlay(Circle().stroke(RR.onBrand, lineWidth: 3))
     }
 
     // MARK: HUD

@@ -128,9 +128,7 @@ struct SessionDetailScreen: View {
             Task { await store.reloadSnapshots(others: all, excluding: run) }
         }
         .fullScreenCover(isPresented: $showsFlyover) {
-            // 표시용 솎기(~600점)로 충분 — 원본 시각이 남아 있어 시간 비례 재생이 그대로다
-            if let track = FlyoverEngine.track(store.detail?.route.thinned() ?? [],
-                                               distanceM: run.distanceKm.map { $0 * 1_000 }) {
+            if let track = flyoverTrack {
                 RouteFlyoverScreen(track: track)
             }
         }
@@ -226,11 +224,18 @@ struct SessionDetailScreen: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            // 경로가 없거나 점이 너무 적으면(20점 미만) 진입하지 않는다 (이슈 #224)
-            if (store.detail?.route.count ?? 0) >= FlyoverEngine.minPoints {
+            // 플라이오버 화면과 같은 가드 — 경로가 없거나 점이 너무 적거나(20점 미만) 거리·시간이 0이면
+            // 진입하지 않는다. 버튼만 따로 거르면 닫기 버튼도 없는 빈 fullScreenCover에 갇힌다 (이슈 #224)
+            if flyoverTrack != nil {
                 flyoverButton
             }
         }
+    }
+
+    /// 플라이오버 재생 경로 — 진입 버튼과 화면이 같은 값을 본다.
+    /// 표시용 솎기(~600점)로 충분 — 원본 시각이 남아 있어 시간 비례 재생이 그대로다
+    private var flyoverTrack: FlyoverEngine.Track? {
+        FlyoverEngine.track(store.detail?.route.thinned() ?? [], distanceM: run.distanceKm.map { $0 * 1_000 })
     }
 
     /// 지도 오른쪽 아래 플라이오버 진입 — 거리 배지와 같은 지도 위 오버레이 스타일
