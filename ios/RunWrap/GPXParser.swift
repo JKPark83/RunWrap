@@ -2,7 +2,7 @@ import Foundation
 
 /// 코스 좌표 한 점 — 엔진 계층은 CoreLocation을 모르므로 자체 타입을 쓴다 (계획서 M12-2).
 /// Sendable은 코스 화면이 파싱·분석을 백그라운드 태스크에서 돌려 결과를 넘기기 때문이다 (#147)
-struct GeoPoint: Equatable, Sendable {
+struct GeoPoint: Codable, Equatable, Sendable {
     let lat: Double
     let lon: Double
 }

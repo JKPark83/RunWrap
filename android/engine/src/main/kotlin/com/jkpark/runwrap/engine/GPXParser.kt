@@ -8,6 +8,7 @@ import javax.xml.parsers.SAXParserFactory
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlinx.serialization.Serializable
 import org.xml.sax.Attributes
 import org.xml.sax.InputSource
 import org.xml.sax.SAXException
@@ -15,6 +16,7 @@ import org.xml.sax.helpers.DefaultHandler
 
 /// 코스 좌표 한 점 — 엔진 계층은 CoreLocation을 모르므로 자체 타입을 쓴다 (계획서 M12-2).
 /// Sendable은 코스 화면이 파싱·분석을 백그라운드 태스크에서 돌려 결과를 넘기기 때문이다 (#147)
+@Serializable
 data class GeoPoint(val lat: Double, val lon: Double)
 
 /// GPX 파일에서 코스 좌표를 뽑는 파서 — 코스 보급 가이드의 입구 (기획서 §4.13).
