@@ -31,13 +31,16 @@ enum ShareSummary {
     /// 그보다 많으면 연속 구간을 ceil(n / maxRows)km씩 묶어 평균 페이스를 적는다 —
     /// 하프(21구간)는 3km씩 7줄, 풀(42구간)은 5km씩 9줄(마지막은 41–42km). 구간 거리가 같아(1km) 단순 평균이 곧 시간 가중 평균이다.
     /// 3구간 미만이면 표가 의미 없어 빈 배열 — 세션 상세 스플릿 카드와 같은 가드 (미노출 원칙)
-    static func splitRows(paces: [Double], maxRows: Int = 10) -> [SplitRow] {
-        guard paces.count >= 3, maxRows > 0 else { return [] }
-        let size = (paces.count + maxRows - 1) / maxRows
-        let groups = stride(from: 0, to: paces.count, by: size).map { start in
-            let end = min(start + size, paces.count)
-            let label = end - start == 1 ? "\(start + 1)km" : "\(start + 1)–\(end)km"
-            return (label, paces[start..<end].reduce(0, +) / Double(end - start))
+    /// 라벨은 배열 위치가 아니라 실제 km 번호(`index`)로 적는다 — ActiveTimeline이 데이터 오류 구간을
+    /// 건너뛰어 번호가 비어도(1·2·4km…) 뒤 라벨이 밀리지 않게, 세션 상세 스플릿 차트와 같은 번호를 쓴다.
+    static func splitRows(splits: [(index: Int, paceSecPerKm: Double)], maxRows: Int = 10) -> [SplitRow] {
+        guard splits.count >= 3, maxRows > 0 else { return [] }
+        let size = (splits.count + maxRows - 1) / maxRows
+        let groups = stride(from: 0, to: splits.count, by: size).map { start in
+            let group = splits[start..<min(start + size, splits.count)]
+            let first = group.first!.index, last = group.last!.index
+            let label = group.count == 1 ? "\(first)km" : "\(first)–\(last)km"
+            return (label, group.map(\.paceSecPerKm).reduce(0, +) / Double(group.count))
         }
         let fastest = groups.indices.min { groups[$0].1 < groups[$1].1 }
         return groups.indices.map {

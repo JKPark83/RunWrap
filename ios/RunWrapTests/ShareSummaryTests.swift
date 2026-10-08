@@ -56,13 +56,18 @@ struct ShareSummaryTests {
 
     // MARK: - 구간 페이스 표 (이슈 #221)
 
+    /// 1km부터 빠짐없이 이어진 스플릿
+    private func kms(_ paces: [Double]) -> [(index: Int, paceSecPerKm: Double)] {
+        paces.enumerated().map { ($0.offset + 1, $0.element) }
+    }
+
     @Test("구간 표 — 10구간 이하는 1km마다 한 줄, 가장 빠른 구간 하나만 강조")
     func splitRowsPerKm() {
-        let rows = ShareSummary.splitRows(paces: [340, 330, 330, 350, 360])
+        let rows = ShareSummary.splitRows(splits: kms([340, 330, 330, 350, 360]))
         #expect(rows.map(\.label) == ["1km", "2km", "3km", "4km", "5km"])
         // 2·3km가 330초로 같으면 앞 구간(2km)만 강조
         #expect(rows.map(\.isFastest) == [false, true, false, false, false])
-        #expect(ShareSummary.splitRows(paces: Array(repeating: 330, count: 10)).count == 10)
+        #expect(ShareSummary.splitRows(splits: kms(Array(repeating: 330, count: 10))).count == 10)
     }
 
     @Test("구간 표 — 하프(21구간)는 3km씩 묶어 7줄")
@@ -70,7 +75,7 @@ struct ShareSummaryTests {
         // 1~20km는 330초, 21km는 300초 → 3km 평균 330초 × 6줄 + 19–21km (330+330+300)/3 = 320초
         var paces = Array(repeating: 330.0, count: 20)
         paces.append(300)
-        let rows = ShareSummary.splitRows(paces: paces)
+        let rows = ShareSummary.splitRows(splits: kms(paces))
         #expect(rows.count == 7)
         #expect(rows.first == .init(label: "1–3km", paceSecPerKm: 330, isFastest: false))
         #expect(rows.last == .init(label: "19–21km", paceSecPerKm: 320, isFastest: true))
@@ -80,7 +85,7 @@ struct ShareSummaryTests {
     func splitRowsFullGrouped() {
         // 1~5km: 320·330·340·330·330 → 평균 330초
         let paces = [320.0, 330, 340, 330, 330] + Array(repeating: 350.0, count: 37)
-        let rows = ShareSummary.splitRows(paces: paces)
+        let rows = ShareSummary.splitRows(splits: kms(paces))
         #expect(rows.count == 9)
         #expect(rows[0] == .init(label: "1–5km", paceSecPerKm: 330, isFastest: true))
         #expect(rows[8] == .init(label: "41–42km", paceSecPerKm: 350, isFastest: false))
@@ -88,7 +93,21 @@ struct ShareSummaryTests {
 
     @Test("구간 표 — 3구간 미만이면 표를 내지 않는다")
     func splitRowsTooShort() {
-        #expect(ShareSummary.splitRows(paces: [330, 340]).isEmpty)
-        #expect(ShareSummary.splitRows(paces: []).isEmpty)
+        #expect(ShareSummary.splitRows(splits: kms([330, 340])).isEmpty)
+        #expect(ShareSummary.splitRows(splits: []).isEmpty)
+    }
+
+    @Test("구간 표 — 건너뛴 구간이 있으면 라벨은 배열 순서가 아니라 실제 km 번호")
+    func splitRowsKeepsKmIndex() {
+        // 3km가 데이터 오류로 빠진 6km 러닝 → 1·2·4·5·6km, 가장 빠른 줄은 실제 4km
+        let rows = ShareSummary.splitRows(splits: [(1, 340), (2, 330), (4, 300), (5, 350), (6, 360)])
+        #expect(rows.map(\.label) == ["1km", "2km", "4km", "5km", "6km"])
+        #expect(rows.map(\.isFastest) == [false, false, true, false, false])
+        // 22km에서 3km가 빠진 21구간 → 3개씩 묶음, 첫 줄은 1·2·4km라 "1–4km", 마지막은 "20–22km"
+        let gapped = (1...22).filter { $0 != 3 }.map { (index: $0, paceSecPerKm: 330.0) }
+        let grouped = ShareSummary.splitRows(splits: gapped)
+        #expect(grouped.count == 7)
+        #expect(grouped.first?.label == "1–4km")
+        #expect(grouped.last?.label == "20–22km")
     }
 }

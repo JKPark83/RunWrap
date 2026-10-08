@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jkpark.runwrap.engine.ActiveTimeline
 import com.jkpark.runwrap.engine.Format
 import com.jkpark.runwrap.engine.GeoPoint
 import com.jkpark.runwrap.engine.RoutePrivacy
@@ -100,7 +101,7 @@ fun ShareCardView(
         (detail?.cadenceSpm ?: run.cadenceSpm)?.let { add(Triple("케이던스", "${it.swiftRoundedInt()}", "spm")) }
         detail?.elevationM?.let { add(Triple("고도 상승", "${it.swiftRoundedInt()}", "m")) }
     }
-    val splitRows = ShareSummary.splitRows(detail?.splits.orEmpty().map { it.paceSecPerKm })
+    val splitRows = ShareSummary.splitRows(detail?.splits.orEmpty().map { ActiveTimeline.Split(it.index, it.paceSecPerKm) })
     Column(
         Modifier
             .size(360.dp, 640.dp)

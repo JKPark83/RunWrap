@@ -59,21 +59,25 @@ class ShareSummaryTests {
 
     // MARK: - 구간 페이스 표 (이슈 #221)
 
+    /// 1km부터 빠짐없이 이어진 스플릿
+    private fun kms(paces: List<Double>): List<ActiveTimeline.Split> =
+        paces.mapIndexed { i, pace -> ActiveTimeline.Split(i + 1, pace) }
+
     @Test
     @DisplayName("구간 표 — 10구간 이하는 1km마다 한 줄, 가장 빠른 구간 하나만 강조")
     fun splitRowsPerKm() {
-        val rows = ShareSummary.splitRows(listOf(340.0, 330.0, 330.0, 350.0, 360.0))
+        val rows = ShareSummary.splitRows(kms(listOf(340.0, 330.0, 330.0, 350.0, 360.0)))
         assertEquals(listOf("1km", "2km", "3km", "4km", "5km"), rows.map { it.label })
         // 2·3km가 330초로 같으면 앞 구간(2km)만 강조
         assertEquals(listOf(false, true, false, false, false), rows.map { it.isFastest })
-        assertEquals(10, ShareSummary.splitRows(List(10) { 330.0 }).size)
+        assertEquals(10, ShareSummary.splitRows(kms(List(10) { 330.0 })).size)
     }
 
     @Test
     @DisplayName("구간 표 — 하프(21구간)는 3km씩 묶어 7줄")
     fun splitRowsHalfGrouped() {
         // 1~20km는 330초, 21km는 300초 → 3km 평균 330초 × 6줄 + 19–21km (330+330+300)/3 = 320초
-        val rows = ShareSummary.splitRows(List(20) { 330.0 } + 300.0)
+        val rows = ShareSummary.splitRows(kms(List(20) { 330.0 } + 300.0))
         assertEquals(7, rows.size)
         assertEquals(ShareSummary.SplitRow("1–3km", 330.0, false), rows.first())
         assertEquals(ShareSummary.SplitRow("19–21km", 320.0, true), rows.last())
@@ -83,7 +87,7 @@ class ShareSummaryTests {
     @DisplayName("구간 표 — 풀(42구간)은 5km씩 9줄, 마지막은 남은 2km, 묶음 페이스는 평균")
     fun splitRowsFullGrouped() {
         // 1~5km: 320·330·340·330·330 → 평균 330초
-        val rows = ShareSummary.splitRows(listOf(320.0, 330.0, 340.0, 330.0, 330.0) + List(37) { 350.0 })
+        val rows = ShareSummary.splitRows(kms(listOf(320.0, 330.0, 340.0, 330.0, 330.0) + List(37) { 350.0 }))
         assertEquals(9, rows.size)
         assertEquals(ShareSummary.SplitRow("1–5km", 330.0, true), rows[0])
         assertEquals(ShareSummary.SplitRow("41–42km", 350.0, false), rows[8])
@@ -92,7 +96,22 @@ class ShareSummaryTests {
     @Test
     @DisplayName("구간 표 — 3구간 미만이면 표를 내지 않는다")
     fun splitRowsTooShort() {
-        assertEquals(emptyList(), ShareSummary.splitRows(listOf(330.0, 340.0)))
+        assertEquals(emptyList(), ShareSummary.splitRows(kms(listOf(330.0, 340.0))))
         assertEquals(emptyList(), ShareSummary.splitRows(emptyList()))
+    }
+
+    @Test
+    @DisplayName("구간 표 — 건너뛴 구간이 있으면 라벨은 배열 순서가 아니라 실제 km 번호")
+    fun splitRowsKeepsKmIndex() {
+        // 3km가 데이터 오류로 빠진 6km 러닝 → 1·2·4·5·6km, 가장 빠른 줄은 실제 4km
+        val rows = ShareSummary.splitRows(listOf(1 to 340.0, 2 to 330.0, 4 to 300.0, 5 to 350.0, 6 to 360.0)
+            .map { (i, pace) -> ActiveTimeline.Split(i, pace) })
+        assertEquals(listOf("1km", "2km", "4km", "5km", "6km"), rows.map { it.label })
+        assertEquals(listOf(false, false, true, false, false), rows.map { it.isFastest })
+        // 22km에서 3km가 빠진 21구간 → 3개씩 묶음, 첫 줄은 1·2·4km라 "1–4km", 마지막은 "20–22km"
+        val grouped = ShareSummary.splitRows((1..22).filter { it != 3 }.map { ActiveTimeline.Split(it, 330.0) })
+        assertEquals(7, grouped.size)
+        assertEquals("1–4km", grouped.first().label)
+        assertEquals("20–22km", grouped.last().label)
     }
 }

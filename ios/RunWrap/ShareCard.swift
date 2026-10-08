@@ -120,13 +120,13 @@ struct ShareCardView: View {
     /// 지도 스냅샷은 scaledToFill로 깔려 비율이 다르면 경로가 잘리므로 ShareSheetView가 이 높이로 스냅샷을 뜬다.
     /// 수치는 케이던스 줄·존 막대까지 다 있을 때의 iPhone 17 시뮬레이터 실측(구간 표 한 줄 ≈ 16.5pt)
     static func routeHeight(detail: WorkoutDetail?) -> CGFloat {
-        let rows = ShareSummary.splitRows(paces: detail?.splits.map(\.paceSecPerKm) ?? []).count
+        let rows = ShareSummary.splitRows(splits: detail?.splits.map { ($0.index, $0.paceSecPerKm) } ?? []).count
         guard rows > 0 else { return 204 }
         return min(204, 194 - 16.5 * CGFloat((rows + 1) / 2))
     }
 
     private var splitRows: [ShareSummary.SplitRow] {
-        ShareSummary.splitRows(paces: detail?.splits.map(\.paceSecPerKm) ?? [])
+        ShareSummary.splitRows(splits: detail?.splits.map { ($0.index, $0.paceSecPerKm) } ?? [])
     }
 
     /// 구간 페이스 2열 표 — 왼쪽 열을 먼저 채운다. 가장 빠른 구간은 브랜드색 (이슈 #221)
