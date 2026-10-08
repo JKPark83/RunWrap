@@ -116,6 +116,12 @@ enum DemoData {
                    weatherHumidityPct: humidityPct)
     }
 
+    /// 같은 코스 시나리오 (이슈 #223) — 합성 경로 중심을 고정해 '같은 코스' 카드를 시뮬레이터에서 보이게 한다.
+    /// 6km 야외 세 세션(10·16·23일 전)은 카드가 뜨고(3회), 10km 두 세션(1·8일 전)은 2회라 카드가 숨는다.
+    /// 거리가 다른 두 묶음이 같은 중심을 써도 반경(√km 비례)·거리 ±5% 가드로 갈린다
+    static let sharedCourseRunIDs: Set<UUID> = [demoID(5), demoID(7), demoID(10), pausedRunID, demoID(4)]
+    static let sharedCourseCenter = (lat: 37.512, lon: 126.95)
+
     /// 신호 대기 정지 시나리오를 심은 세션(1일 전 10km)의 고정 ID.
     /// 새 세션을 28일 창에 추가하면 리포트 홈 톤(증가율·ACWR·EF)이 바뀌므로 기존 세션을 쓴다.
     static let pausedRunID = UUID(uuidString: "4E3A7C1D-2B9F-4E57-A0C6-47F1A2B3C4D5")!

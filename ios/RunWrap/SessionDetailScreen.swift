@@ -82,6 +82,10 @@ struct SessionDetailScreen: View {
                     if let detail = store.detail, let profile = RoutePaceEngine.elevationProfile(detail.route) {
                         elevationCard(profile)
                     }
+                    if let matches = store.courseMatches,
+                       let standing = CourseMatchEngine.standing(of: run, in: matches) {
+                        courseCard(matches, standing: standing)
+                    }
                     if let drift = store.detail?.drift {
                         driftCard(drift, heat: heatAdjustment)
                     }
@@ -123,7 +127,10 @@ struct SessionDetailScreen: View {
         .onChange(of: health.state) { _, state in
             // 진입 시 목록이 로드 전이었다면 빈 기준선으로 끝났다 — 로드되면 스냅샷만 다시 부른다 (이슈 #92)
             guard case .loaded(let all) = state else { return }
-            Task { await store.reloadSnapshots(others: all, excluding: run) }
+            Task {
+                await store.reloadSnapshots(others: all, excluding: run)
+                await store.loadCourse(run: run, others: all)
+            }
         }
         .sheet(isPresented: $showShare) {
             ShareSheetView(run: run,
@@ -633,6 +640,63 @@ struct SessionDetailScreen: View {
             + Text(Format.paceKm(heat.adjustedPaceSecPerKm)).foregroundStyle(RR.pos).fontWeight(.semibold)
             + Text(" 수준 — 더위 몫까지 뛰었으니 오늘 기록, 억울해하지 않으셔도 됩니다.")
             .foregroundStyle(RR.text2)
+    }
+
+    // MARK: 같은 코스 (이슈 #223) — 본인 화면에만, 공유 카드에는 싣지 않는다
+
+    private func courseCard(_ matches: [RunSummary],
+                            standing: (ordinal: Int, rank: Int?)) -> some View {
+        let paced = matches.filter { $0.paceSecPerKm != nil }
+        let labels = paced.map { run in
+            let parts = Calendar.current.dateComponents([.month, .day], from: run.start)
+            return "\(parts.month ?? 0)/\(parts.day ?? 0)"
+        }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("같은 코스 \(standing.ordinal)번째")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(RR.text)
+                Spacer()
+                Text("\(matches.count)번 완주")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(RR.text3)
+            }
+
+            courseSentence(rank: standing.rank, count: paced.count)
+                .font(.system(size: 13))
+                .lineSpacing(4)
+                .padding(.top, 9)
+
+            if paced.count >= 2 {
+                TrendLineChart(points: paced.compactMap(\.paceSecPerKm),
+                               tint: RR.brand,
+                               endLabels: (labels.first ?? "", labels.last ?? ""),
+                               pointLabels: labels,
+                               valueText: { Format.paceKm($0) })
+                    .padding(.top, 14)
+            }
+
+            Text("회차별 평균 페이스 · 내려갈수록 빨라진 것")
+                .font(.system(size: 11.5))
+                .foregroundStyle(RR.text3)
+                .padding(.top, 8)
+        }
+        .padding(18)
+        .rrCard()
+    }
+
+    private func courseSentence(rank: Int?, count: Int) -> Text {
+        guard let rank else {
+            return Text("이 코스를 \(count)번 달린 기록이 있어요.").foregroundStyle(RR.text2)
+        }
+        if rank == 1 {
+            return Text("이 코스 ").foregroundStyle(RR.text2)
+                + Text("최고 기록").foregroundStyle(RR.pos).fontWeight(.semibold)
+                + Text("이에요. 같은 길에서 스스로를 이기셨습니다.").foregroundStyle(RR.text2)
+        }
+        return Text("이 코스 \(count)번 중 ").foregroundStyle(RR.text2)
+            + Text("\(rank)위").foregroundStyle(RR.text).fontWeight(.semibold)
+            + Text(" 기록이에요.").foregroundStyle(RR.text2)
     }
 
     // MARK: 심박 드리프트 (Pw:HR 디커플링, 제안 문서 A2)
