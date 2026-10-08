@@ -10,7 +10,8 @@ import kotlin.math.sqrt
 /// 세션 상세 화면용 추가 데이터 — 경로·구간 페이스·심박 존·케이던스·상승 고도.
 /// RunSummary(목록)에 없는 값만 지연 조회한다.
 data class WorkoutDetail(
-    val route: List<GeoPoint> = emptyList(),
+    /// 경로 원본 — 솎지 않은 전체 점(시각·고도·속도 포함). 솎기는 표시 직전에 한다 (#222)
+    val route: List<TrackPoint> = emptyList(),
     val splits: List<Split> = emptyList(),
     val zones: List<Double>? = null,          // Z1~Z5 비율 (합 1)
     val cadenceSpm: Double? = null,
@@ -102,11 +103,15 @@ object WorkoutDetailStore {
             val centerLon = 126.94 + rng.unit() * 0.03
             val radius = 0.0016 * sqrt(km)
             val points = 140
+            // 시각은 시작부터 세션 시간을 points 등분한 일정 간격
+            val interval = run.durationSec / points.toDouble()
             detail = detail.copy(route = (0..points).map { i ->
                 val t = i.toDouble() / points.toDouble() * 2 * PI
                 val wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
-                GeoPoint(lat = centerLat + radius * wobble * sin(t) * 0.72,
-                         lon = centerLon + radius * wobble * cos(t))
+                TrackPoint(lat = centerLat + radius * wobble * sin(t) * 0.72,
+                           lon = centerLon + radius * wobble * cos(t),
+                           time = instantSince1970(run.start.timeIntervalSince1970 + interval * i.toDouble()),
+                           elevationM = null, horizontalAccuracyM = 5.0, speedMps = null)
             })
         }
 

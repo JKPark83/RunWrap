@@ -98,6 +98,7 @@ import com.jkpark.runwrap.engine.FormEngine
 import com.jkpark.runwrap.engine.FormSnapshot
 import com.jkpark.runwrap.engine.Format
 import com.jkpark.runwrap.engine.GeoPoint
+import com.jkpark.runwrap.engine.thinnedCoordinates
 import com.jkpark.runwrap.engine.HeartRateProfile
 import com.jkpark.runwrap.engine.HeartRateZoneMethod
 import com.jkpark.runwrap.engine.HeatEngine
@@ -174,6 +175,8 @@ fun SessionDetailScreen(
     val hrMaxEstimate by health.hrMaxEstimate.collectAsStateWithLifecycle()
     val restingHRBpm by health.restingHRBpm.collectAsStateWithLifecycle()
     val detail by store.detail.collectAsStateWithLifecycle()
+    // 경로 원본은 전부 보관하고 지도·공유 카드에는 표시 직전에 ~600점으로 솎아 넘긴다 (#222 선행)
+    val routeCoordinates = remember(detail?.route) { detail?.route.orEmpty().thinnedCoordinates() }
     val isLoading by store.isLoading.collectAsStateWithLifecycle()
     val loadFailed by store.loadFailed.collectAsStateWithLifecycle()
     val formSnapshots by store.formSnapshots.collectAsStateWithLifecycle()
@@ -247,7 +250,7 @@ fun SessionDetailScreen(
                 // 실내 세션은 경로가 없어 지도 헤더 자체를 걸어 두지 않는다 (기획서 §4.6)
                 if (!run.isIndoor) {
                     MapHeader(
-                        run = run, route = detail?.route.orEmpty(), isLoading = isLoading, loadFailed = loadFailed,
+                        run = run, route = routeCoordinates, isLoading = isLoading, loadFailed = loadFailed,
                         consentRequired = routeConsentRequired, onConsent = { routeConsent.launch(run.id) },
                     )
                 }
@@ -350,7 +353,7 @@ fun SessionDetailScreen(
 
     if (showShare) {
         ShareSheet(
-            run = run, zones = detail?.zones, route = detail?.route.orEmpty(),
+            run = run, zones = detail?.zones, route = routeCoordinates,
             /// 카드 하단 주간 요약 — 이 세션 기준 7일 러닝 횟수·거리 (기획서 §4.4, 이슈 #92)
             weeklySummary = (healthState as? HealthStore.State.Loaded)?.let {
                 ShareSummary.weeklyLine(it.runs, run.start, Instant.now(), zone)

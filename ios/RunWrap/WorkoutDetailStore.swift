@@ -11,7 +11,8 @@ struct WorkoutDetail {
         var id: Int { index }
     }
 
-    var route: [CLLocationCoordinate2D] = []
+    /// 경로 원본 — 솎지 않은 전체 점(시각·고도·속도 포함). 솎기는 표시 직전에 한다 (#222)
+    var route: [TrackPoint] = []
     var splits: [Split] = []
     var zones: [Double]?          // Z1~Z5 비율 (합 1)
     var cadenceSpm: Double?
@@ -260,7 +261,7 @@ final class WorkoutDetailStore: ObservableObject {
         }
     }
 
-    private func fetchRoute(of workout: HKWorkout) async throws -> [CLLocationCoordinate2D] {
+    private func fetchRoute(of workout: HKWorkout) async throws -> [TrackPoint] {
         let routeSample: HKWorkoutRoute? = try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(sampleType: HKSeriesType.workoutRoute(),
                                       predicate: HKQuery.predicateForObjects(from: workout),
@@ -278,12 +279,15 @@ final class WorkoutDetailStore: ObservableObject {
                 if let error { continuation.resume(throwing: error); return }
                 locations.append(contentsOf: batch ?? [])
                 if done {
-                    // 폴리라인은 ~600점이면 충분 — 과한 포인트는 솎는다
-                    let stride = max(1, locations.count / 600)
-                    let thinned = locations.enumerated()
-                        .filter { $0.offset % stride == 0 }
-                        .map { $0.element.coordinate }
-                    continuation.resume(returning: thinned)
+                    // 원본 전체를 보관한다 — 음수 정확도·속도는 '측정 무효'라 nil로 둔다 (애플 문서)
+                    continuation.resume(returning: locations.map { location in
+                        TrackPoint(lat: location.coordinate.latitude,
+                                   lon: location.coordinate.longitude,
+                                   time: location.timestamp,
+                                   elevationM: location.verticalAccuracy < 0 ? nil : location.altitude,
+                                   horizontalAccuracyM: location.horizontalAccuracy,
+                                   speedMps: location.speed < 0 ? nil : location.speed)
+                    })
                 }
             }
             store.execute(query)
@@ -384,12 +388,15 @@ final class WorkoutDetailStore: ObservableObject {
             let center = (lat: 37.520 + rng.unit() * 0.02, lon: 126.94 + rng.unit() * 0.03)
             let radius = 0.0016 * km.squareRoot()
             let points = 140
+            // 시각은 시작부터 세션 시간을 points 등분한 일정 간격
+            let interval = run.durationSec / Double(points)
             detail.route = (0...points).map { i in
                 let t = Double(i) / Double(points) * 2 * .pi
                 let wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
-                return CLLocationCoordinate2D(
-                    latitude: center.lat + radius * wobble * sin(t) * 0.72,
-                    longitude: center.lon + radius * wobble * cos(t))
+                return TrackPoint(lat: center.lat + radius * wobble * sin(t) * 0.72,
+                                  lon: center.lon + radius * wobble * cos(t),
+                                  time: run.start.addingTimeInterval(interval * Double(i)),
+                                  elevationM: nil, horizontalAccuracyM: 5, speedMps: nil)
             }
         }
 

@@ -120,7 +120,7 @@ struct SessionDetailScreen: View {
         .sheet(isPresented: $showShare) {
             ShareSheetView(run: run,
                            zones: store.detail?.zones,
-                           route: store.detail?.route ?? [],
+                           route: store.detail?.route.thinnedCoordinates() ?? [],
                            weeklySummary: weeklySummaryLine)
         }
         // 새 신발 등록 — 러닝화 행과 팝업 목록이 같이 쓴다. 등록 시각이 러닝보다 늦어
@@ -165,7 +165,7 @@ struct SessionDetailScreen: View {
     private var mapHeader: some View {
         ZStack(alignment: .bottomLeading) {
             Group {
-                if let route = store.detail?.route, route.count >= 2 {
+                if let route = store.detail?.route.thinnedCoordinates(), route.count >= 2 {
                     Map(initialPosition: .region(RouteSnapshot.region(for: route)),
                         interactionModes: []) {
                         MapPolyline(coordinates: route)
