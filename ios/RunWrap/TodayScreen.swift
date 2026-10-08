@@ -176,7 +176,8 @@ struct TodayScreen: View {
 
     // MARK: 시간대별 카드 (이슈 #173)
 
-    /// 달리기 좋은 시간 추천 + 24시간 띠. 추천 구간에 든 칸은 모두 improving 톤으로 칠한다 (이슈 #219)
+    /// 달리기 좋은 시간 추천 + 24시간 띠. 좋은 칸(RunWindowEngine.isGood)은 요약 구간에 들었는지와 상관없이
+    /// 모두 improving 톤으로 칠한다 (이슈 #219 §2) — 오늘 구간이 있어도 띠에 보이는 내일 좋은 칸까지
     private func hourlyCard(_ hourly: [HourlyWeather]) -> some View {
         let now = Date()
         let windows = RunWindowEngine.windows(hourly: hourly, now: now)
@@ -207,7 +208,7 @@ struct TodayScreen: View {
                     ForEach(hourly, id: \.time) { hour in
                         hourCell(hour,
                                  isNow: hour.time <= now && now < hour.time.addingTimeInterval(3_600),
-                                 inWindow: windows.contains { hour.time >= $0.start && hour.time < $0.end })
+                                 isGood: RunWindowEngine.isGood(hour))
                     }
                 }
             }
@@ -238,7 +239,7 @@ struct TodayScreen: View {
     }
 
     /// 한 칸 — 시각·하늘 상태·기온·강수확률. 칸이 좁아 체감은 뺀다 (이슈 #220)
-    private func hourCell(_ hour: HourlyWeather, isNow: Bool, inWindow: Bool) -> some View {
+    private func hourCell(_ hour: HourlyWeather, isNow: Bool, isGood: Bool) -> some View {
         VStack(spacing: 7) {
             Text(isNow ? "지금" : "\(RunWindowEngine.kst.component(.hour, from: hour.time))시")
                 .font(.system(size: 11, weight: isNow ? .bold : .regular))
@@ -263,7 +264,7 @@ struct TodayScreen: View {
         }
         .frame(width: 46)
         .padding(.vertical, 10)
-        .background(inWindow ? RRTone.improving.softColor : Color.clear,
+        .background(isGood ? RRTone.improving.softColor : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 

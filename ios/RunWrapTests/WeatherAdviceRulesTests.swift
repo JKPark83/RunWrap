@@ -55,10 +55,10 @@ struct WeatherAdviceRulesTests {
         let hot = WeatherAdviceRules.advice(temperatureC: 19, humidityPct: 80, windMs: 0,
                                             precipitationMm: 0, uvIndex: nil, weatherCode: nil)
         #expect(hot.first?.text.contains("고온다습") == true)
-        // 18°C → 포근 steady + 습도 높음 caution
+        // 18°C → 덥다 caution + 습도 높음 caution (고온다습 overload 아님)
         let mild = WeatherAdviceRules.advice(temperatureC: 18, humidityPct: 80, windMs: 0,
                                              precipitationMm: 0, uvIndex: nil, weatherCode: nil)
-        #expect(mild.first?.text.contains("습도가 높아요") == true)
+        #expect(mild.contains { $0.text.contains("습도가 높아요") })
         #expect(mild.allSatisfy { !$0.text.contains("고온다습") })
     }
 }
@@ -122,20 +122,38 @@ struct RunNameTests {
         #expect(WeatherAdviceRules.runName(temperatureC: -3, precipitationMm: 0, weatherCode: nil).title == "펭귄런")
     }
 
-    @Test("온도 경계 — 시간대 점수 경계(0·7·15·19·23°C)와 28°C에서 이름이 바뀐다")
+    @Test("온도 경계 — 시간대 점수 경계(0·4·7·15·17°C)와 23·28°C에서 이름이 바뀐다")
     func temperatureBoundaries() {
         func title(_ t: Double) -> String {
             WeatherAdviceRules.runName(temperatureC: t, precipitationMm: 0, weatherCode: 0).title
         }
         #expect(title(-0.1) == "펭귄런")
         #expect(title(0) == "핫팩런")
-        #expect(title(6.9) == "핫팩런")
+        #expect(title(3.9) == "핫팩런")
+        #expect(title(4) == "청량런")
+        #expect(title(6.9) == "청량런")
         #expect(title(7) == "펀런")
         #expect(title(14.9) == "펀런")
         #expect(title(15) == "청량런")
-        #expect(title(19) == "그늘런")
+        #expect(title(16.9) == "청량런")
+        #expect(title(17) == "그늘런")
         #expect(title(23) == "새벽런")
         #expect(title(28) == "찜런")
+    }
+
+    @Test("추천 구간 톤 일치 — 70점 이상인 4~17°C는 이름·조언 모두 긍정 톤, 밖은 caution")
+    func toneMatchesGoodScore() {
+        // 시간대 점수: 5°C·16°C → 70, 10°C → 100 (추천) / 2°C·18°C → 40 (미추천)
+        for t in [5.0, 10, 16] {
+            let name = WeatherAdviceRules.runName(temperatureC: t, precipitationMm: 0, weatherCode: 0)
+            let advice = WeatherAdviceRules.advice(temperatureC: t, humidityPct: 50, windMs: 0,
+                                                   precipitationMm: 0, uvIndex: nil, weatherCode: 0)
+            #expect([.steady, .improving].contains(name.tone))
+            #expect(advice.allSatisfy { [.steady, .improving].contains($0.tone) })
+        }
+        for t in [2.0, 18] {
+            #expect(WeatherAdviceRules.runName(temperatureC: t, precipitationMm: 0, weatherCode: 0).tone == .caution)
+        }
     }
 
     @Test("펀런 톤 — 7~15°C는 improving으로 advice의 온도 톤과 일치")

@@ -178,7 +178,7 @@ struct TodayVerdictEngineTests {
         #expect(parts.temperature == "29°C 체감 33°")
     }
 
-    @Test("날씨 캡션 — 달리기 좋은 구간을 모두 나열해 '6~9시 · 18~21시가 좋아요', 없으면 nil (이슈 #173, #219)")
+    @Test("날씨 캡션 — 구간 2개까지 나열해 '6~9시 · 18~21시가 좋아요', 넘으면 '외 N곳이', 없으면 nil (이슈 #173, #219)")
     func weatherWindowsCaption() throws {
         // now = KST 18:00 → 구간 06:00~09:00(now − 12h)와 18:00~21:00. 판정문(값)은 추천과 무관하게 그대로
         let morning = RunWindow(start: now.addingTimeInterval(-43_200), end: now.addingTimeInterval(-32_400),
@@ -191,6 +191,14 @@ struct TodayVerdictEngineTests {
                                                                  windows: [morning, evening])))
         #expect(withWindows.weather.caption == "6~9시 · 18~21시가 좋아요")
         #expect(withWindows.weather.content == .value("12°C 체감 11° · 반팔 티+반바지"))
+
+        // 세 번째 구간(21~22시)은 홈 캡션 한 줄 폭을 넘지 않게 "외 1곳"으로 줄인다
+        let late = RunWindow(start: now.addingTimeInterval(10_800), end: now.addingTimeInterval(14_400),
+                             avgScore: 70, temperatureC: 15, apparentC: 14,
+                             precipitationProbabilityPct: 0)
+        let withThree = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11),
+                                                               windows: [morning, evening, late])))
+        #expect(withThree.weather.caption == "6~9시 · 18~21시 외 1곳이 좋아요")
 
         let withoutWindow = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11))))
         #expect(withoutWindow.weather.caption == nil)

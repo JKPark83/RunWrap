@@ -34,7 +34,8 @@ enum OutfitItem: String, CaseIterable, Equatable {
     }
 }
 
-/// 복장 룰 — "달릴 때 기온"(실제 기온 + runWarmthC) 구간을 기본으로 습도·바람·강수·자외선·계절을 가산한다
+/// 복장 룰 — "달릴 때 기온"(실제 기온 + runWarmthC) 구간을 기본으로 바람·강수·자외선·계절을 가산한다
+/// (습도는 +10 기준에서 복장을 바꾸지 않는다 — humidityPct는 받기만 하고 쓰지 않는다. 16..<24 구간 주석 참조)
 /// (확장 요구, 2026-08-12 · 이슈 #219). 구간은 계획서 M6 표, 가산 조건 출처:
 /// - 기온 +10°C: "실제 기온보다 10°C 따뜻하다고 생각하고 입어라", "출발 후 5~10분만 쌀쌀할 정도로 입어라"
 ///   (러닝 레이어링 통념 — GQ Korea 러닝 레이어링 가이드, Brooks Running 기온별 복장 가이드).
@@ -62,8 +63,9 @@ enum OutfitRules {
         case 24...:
             items = [.singlet, .shorts]
         case 16..<24:
-            // 고온다습(≥80%)이면 땀이 증발하지 못해 한 단계 가볍게 — 반팔 대신 싱글렛
-            items = humidityPct >= 80 ? [.singlet, .shorts] : [.shortSleeve, .shorts]
+            // 습도는 복장을 바꾸지 않는다 — 이 구간은 실제 6~14°C라 고온다습(WeatherAdviceRules.isHumidHeat,
+            // 19°C↑)에 들지 않고, 고온다습한 실제 기온은 이미 위 싱글렛 구간이다
+            items = [.shortSleeve, .shorts]
         case 8..<16:
             items = [.longSleeve, .tights]
         case 0..<8:
@@ -97,10 +99,11 @@ enum OutfitRules {
         return items
     }
 
-    /// 복장 카드 한 줄 — +10°C로 입으면 출발 직후는 춥다는 걸 미리 말해 둔다.
-    /// 실제 기온이 반팔 하한(달릴 때 구간의 16°C) 아래일 때만 — 그 위에서는 출발부터 춥지 않다
+    /// 복장 카드 한 줄 — +10°C로 입으면 출발 직후는 춥다는 걸 미리 말해 둔다 (이슈 #219 §3 문구).
+    /// 실제 20°C 미만일 때만 — 기온 점수가 10점(더위)으로 떨어지는 20°C부터는 싱글렛으로도 출발이 쌀쌀하지 않아
+    /// "덥다"는 조언 카드와 모순된다
     static func startChillNote(temperatureC: Double) -> String? {
-        temperatureC < 16 ? "출발 후 5~10분은 쌀쌀해야 정답이에요 — 몸이 데워지면 딱 맞아요" : nil
+        temperatureC < 20 ? "출발 후 5~10분은 쌀쌀할 수 있어요 — 몸이 데워지면 딱 맞아요" : nil
     }
 
     private static func month(_ now: Date) -> Int {

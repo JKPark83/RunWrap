@@ -70,10 +70,10 @@ class WeatherAdviceRulesTests {
             val hot = WeatherAdviceRules.advice(temperatureC = 19.0, humidityPct = 80.0, windMs = 0.0,
                                                 precipitationMm = 0.0, uvIndex = null, weatherCode = null)
             assertEquals(true, hot.firstOrNull()?.text?.contains("고온다습"))
-            // 18°C → 포근 steady + 습도 높음 caution
+            // 18°C → 덥다 caution + 습도 높음 caution (고온다습 overload 아님)
             val mild = WeatherAdviceRules.advice(temperatureC = 18.0, humidityPct = 80.0, windMs = 0.0,
                                                  precipitationMm = 0.0, uvIndex = null, weatherCode = null)
-            assertEquals(true, mild.firstOrNull()?.text?.contains("습도가 높아요"))
+            assertTrue(mild.any { it.text.contains("습도가 높아요") })
             assertTrue(mild.all { !it.text.contains("고온다습") })
         }
     }
@@ -148,19 +148,40 @@ class WeatherAdviceRulesTests {
         }
 
         @Test
-        @DisplayName("온도 경계 — 시간대 점수 경계(0·7·15·19·23°C)와 28°C에서 이름이 바뀐다")
+        @DisplayName("온도 경계 — 시간대 점수 경계(0·4·7·15·17°C)와 23·28°C에서 이름이 바뀐다")
         fun temperatureBoundaries() {
             fun title(t: Double): String =
                 WeatherAdviceRules.runName(temperatureC = t, precipitationMm = 0.0, weatherCode = 0).title
             assertEquals("펭귄런", title(-0.1))
             assertEquals("핫팩런", title(0.0))
-            assertEquals("핫팩런", title(6.9))
+            assertEquals("핫팩런", title(3.9))
+            assertEquals("청량런", title(4.0))
+            assertEquals("청량런", title(6.9))
             assertEquals("펀런", title(7.0))
             assertEquals("펀런", title(14.9))
             assertEquals("청량런", title(15.0))
-            assertEquals("그늘런", title(19.0))
+            assertEquals("청량런", title(16.9))
+            assertEquals("그늘런", title(17.0))
             assertEquals("새벽런", title(23.0))
             assertEquals("찜런", title(28.0))
+        }
+
+        @Test
+        @DisplayName("추천 구간 톤 일치 — 70점 이상인 4~17°C는 이름·조언 모두 긍정 톤, 밖은 caution")
+        fun toneMatchesGoodScore() {
+            // 시간대 점수: 5°C·16°C → 70, 10°C → 100 (추천) / 2°C·18°C → 40 (미추천)
+            val positive = listOf(RRTone.steady, RRTone.improving)
+            for (t in listOf(5.0, 10.0, 16.0)) {
+                val name = WeatherAdviceRules.runName(temperatureC = t, precipitationMm = 0.0, weatherCode = 0)
+                val advice = WeatherAdviceRules.advice(temperatureC = t, humidityPct = 50.0, windMs = 0.0,
+                                                       precipitationMm = 0.0, uvIndex = null, weatherCode = 0)
+                assertTrue(name.tone in positive)
+                assertTrue(advice.all { it.tone in positive })
+            }
+            for (t in listOf(2.0, 18.0)) {
+                assertEquals(RRTone.caution,
+                             WeatherAdviceRules.runName(temperatureC = t, precipitationMm = 0.0, weatherCode = 0).tone)
+            }
         }
 
         @Test

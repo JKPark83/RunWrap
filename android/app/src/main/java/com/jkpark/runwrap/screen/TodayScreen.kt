@@ -270,7 +270,8 @@ private fun RowScope.Metric(label: String, value: String, unit: String) {
 
 // MARK: 시간대별 카드 (이슈 #173)
 
-/// 달리기 좋은 시간 추천 + 24시간 띠. 추천 구간에 든 칸은 모두 improving 톤으로 칠한다 (이슈 #219)
+/// 달리기 좋은 시간 추천 + 24시간 띠. 좋은 칸(RunWindowEngine.isGood)은 요약 구간에 들었는지와 상관없이
+/// 모두 improving 톤으로 칠한다 (이슈 #219 §2) — 오늘 구간이 있어도 띠에 보이는 내일 좋은 칸까지
 @Composable
 private fun HourlyCard(hourly: List<HourlyWeather>, now: Instant) {
     val windows = RunWindowEngine.windows(hourly, now)
@@ -294,7 +295,7 @@ private fun HourlyCard(hourly: List<HourlyWeather>, now: Instant) {
             hourly.forEach { hour ->
                 HourCell(hour,
                          isNow = hour.time <= now && now < hour.time.plusSeconds(3_600),
-                         inWindow = windows.any { hour.time >= it.start && hour.time < it.end })
+                         isGood = RunWindowEngine.isGood(hour))
             }
         }
     }
@@ -319,10 +320,10 @@ private fun WindowSummary(window: RunWindow, showsRange: Boolean) {
 
 /// 한 칸 — 시각·하늘 상태·기온·강수확률. 칸이 좁아 체감은 뺀다 (이슈 #220)
 @Composable
-private fun HourCell(hour: HourlyWeather, isNow: Boolean, inWindow: Boolean) {
+private fun HourCell(hour: HourlyWeather, isNow: Boolean, isGood: Boolean) {
     Column(
         Modifier
-            .background(if (inWindow) RRTone.improving.softColor else Color.Transparent, RoundedCornerShape(10.dp))
+            .background(if (isGood) RRTone.improving.softColor else Color.Transparent, RoundedCornerShape(10.dp))
             .width(46.dp)
             .padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

@@ -182,7 +182,8 @@ object TodayVerdictEngine {
                                   content = TodayVerdict.Line.Content.hint("날씨를 불러오지 못했어요"), tone = null)
             is WeatherInput.current -> {
                 // 추천 시간은 판정문에 이어 붙이지 않고 캡션으로 — 홈 타일은 문구 대신 그림으로 값을 그려서
-                // 문구 끝에 붙이면 보이지 않는다.
+                // 문구 끝에 붙이면 보이지 않는다. 캡션은 한 줄이라 구간은 2개까지, 나머지는 "외 N곳"
+                // (전체 목록은 오늘 화면 시간대별 카드가 보여 준다).
                 // 공기가 나쁨 이상이면 날씨 문구 뒤에 공식 등급을 덧붙인다 (이슈 #183) — 헤드라인을 끌어내린 이유가
                 // 한 줄 문구에서도 읽히게 (홈 타일은 대기질 배지를 따로 그린다). 유도 문구 줄에는 붙이지 않는다
                 val airSuffix = air?.let { if (it >= AirGrade.bad) " · 대기질 ${it.label}" else null } ?: ""
@@ -190,7 +191,8 @@ object TodayVerdictEngine {
                                   content = TodayVerdict.Line.Content.value(
                                       weatherPhrase(weather.weather, now = now, zone = zone) + airSuffix),
                                   tone = null,
-                                  caption = RunWindowEngine.rangesLabel(weather.windows)?.let { "${it}가 좋아요" })
+                                  caption = RunWindowEngine.rangesLabel(weather.windows, limit = 2)
+                                      ?.let { "$it${if (weather.windows.size > 2) "이" else "가"} 좋아요" })
             }
         }
     }

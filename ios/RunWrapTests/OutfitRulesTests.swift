@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import RunWrap
 
-/// 복장 룰 — "달릴 때 기온"(실제 기온 + 10°C) 경계값 + 습도·바람·강수·자외선·계절 가산
+/// 복장 룰 — "달릴 때 기온"(실제 기온 + 10°C) 경계값 + 바람·강수·자외선·계절 가산(습도는 무관)
 /// + 출발 직후 안내 문구 + fixture 디코드 검증 (계획서 M6, 이슈 #219)
 struct OutfitRulesTests {
     /// 고정 시각 — 계절 가산이 없는 봄(4월)을 기본으로 쓴다
@@ -44,10 +44,13 @@ struct OutfitRulesTests {
             == [.thermalTop, .thermalBottom, .beanie, .neckWarmer, .gloves])
     }
 
-    @Test("습도 가산 — 달릴 때 16~24°C에서 습도 80%부터 반팔 대신 싱글렛")
-    func humidityLightensTop() {
+    @Test("습도 무관 — 실제 10°C(달릴 때 20°C)는 습도 90%여도 반팔, 고온다습(19°C↑)은 이미 싱글렛 구간")
+    func humidityDoesNotChangeOutfit() {
         #expect(outfit(temperatureC: 10, humidityPct: 79.9) == [.shortSleeve, .shorts])
-        #expect(outfit(temperatureC: 10, humidityPct: 80) == [.singlet, .shorts])
+        #expect(outfit(temperatureC: 10, humidityPct: 90) == [.shortSleeve, .shorts])
+        // 실제 8°C·습도 90% 흐린 아침(리뷰 지적 사례) — 싱글렛이 아니라 반팔
+        #expect(outfit(temperatureC: 8, humidityPct: 90) == [.shortSleeve, .shorts])
+        #expect(outfit(temperatureC: 19, humidityPct: 80) == [.singlet, .shorts])
     }
 
     @Test("바람 가산 — 달릴 때 8~24°C에서 8.0 m/s부터 바람막이, 더위(달릴 때 24°C+)엔 안 붙는다")
@@ -108,11 +111,12 @@ struct OutfitRulesTests {
         #expect(outfit(temperatureC: -5, now: spring) == [.longSleeve, .jacket, .tights, .gloves])
     }
 
-    @Test("출발 직후 안내 — 실제 16°C 미만이면 '출발 후 5~10분은 쌀쌀' 한 줄, 그 위는 없음")
+    @Test("출발 직후 안내 — 실제 20°C 미만이면 '출발 후 5~10분은 쌀쌀' 한 줄, 더위(20°C~)엔 없음")
     func startChillNote() {
-        #expect(OutfitRules.startChillNote(temperatureC: 15.9)
-            == "출발 후 5~10분은 쌀쌀해야 정답이에요 — 몸이 데워지면 딱 맞아요")
-        #expect(OutfitRules.startChillNote(temperatureC: 16) == nil)
+        #expect(OutfitRules.startChillNote(temperatureC: 19.9)
+            == "출발 후 5~10분은 쌀쌀할 수 있어요 — 몸이 데워지면 딱 맞아요")
+        #expect(OutfitRules.startChillNote(temperatureC: -5) != nil)
+        #expect(OutfitRules.startChillNote(temperatureC: 20) == nil)
     }
 
     @Test("응답 fixture 디코드 — current 필드 5개를 그대로 옮긴다")

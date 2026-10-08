@@ -19,11 +19,12 @@ import com.jkpark.runwrap.engine.OutfitItem.waterproofJacket
 import com.jkpark.runwrap.engine.OutfitItem.windbreaker
 import java.time.Instant
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
-/// 복장 룰 — "달릴 때 기온"(실제 기온 + 10°C) 경계값 + 습도·바람·강수·자외선·계절 가산
+/// 복장 룰 — "달릴 때 기온"(실제 기온 + 10°C) 경계값 + 바람·강수·자외선·계절 가산(습도는 무관)
 /// + 출발 직후 안내 문구 + fixture 디코드 검증 (계획서 M6, 이슈 #219)
 class OutfitRulesTests {
     /// 고정 시각 — 계절 가산이 없는 봄(4월)을 기본으로 쓴다
@@ -70,10 +71,13 @@ class OutfitRulesTests {
     }
 
     @Test
-    @DisplayName("습도 가산 — 달릴 때 16~24°C에서 습도 80%부터 반팔 대신 싱글렛")
-    fun humidityLightensTop() {
+    @DisplayName("습도 무관 — 실제 10°C(달릴 때 20°C)는 습도 90%여도 반팔, 고온다습(19°C↑)은 이미 싱글렛 구간")
+    fun humidityDoesNotChangeOutfit() {
         assertEquals(listOf(shortSleeve, shorts), outfit(temperatureC = 10.0, humidityPct = 79.9))
-        assertEquals(listOf(singlet, shorts), outfit(temperatureC = 10.0, humidityPct = 80.0))
+        assertEquals(listOf(shortSleeve, shorts), outfit(temperatureC = 10.0, humidityPct = 90.0))
+        // 실제 8°C·습도 90% 흐린 아침(리뷰 지적 사례) — 싱글렛이 아니라 반팔
+        assertEquals(listOf(shortSleeve, shorts), outfit(temperatureC = 8.0, humidityPct = 90.0))
+        assertEquals(listOf(singlet, shorts), outfit(temperatureC = 19.0, humidityPct = 80.0))
     }
 
     @Test
@@ -142,11 +146,12 @@ class OutfitRulesTests {
     }
 
     @Test
-    @DisplayName("출발 직후 안내 — 실제 16°C 미만이면 '출발 후 5~10분은 쌀쌀' 한 줄, 그 위는 없음")
+    @DisplayName("출발 직후 안내 — 실제 20°C 미만이면 '출발 후 5~10분은 쌀쌀' 한 줄, 더위(20°C~)엔 없음")
     fun startChillNote() {
-        assertEquals("출발 후 5~10분은 쌀쌀해야 정답이에요 — 몸이 데워지면 딱 맞아요",
-                     OutfitRules.startChillNote(temperatureC = 15.9))
-        assertNull(OutfitRules.startChillNote(temperatureC = 16.0))
+        assertEquals("출발 후 5~10분은 쌀쌀할 수 있어요 — 몸이 데워지면 딱 맞아요",
+                     OutfitRules.startChillNote(temperatureC = 19.9))
+        assertNotNull(OutfitRules.startChillNote(temperatureC = -5.0))
+        assertNull(OutfitRules.startChillNote(temperatureC = 20.0))
     }
 
     @Test

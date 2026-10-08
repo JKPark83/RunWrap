@@ -197,7 +197,7 @@ class TodayVerdictEngineTests {
     }
 
     @Test
-    @DisplayName("날씨 캡션 — 달리기 좋은 구간을 모두 나열해 '6~9시 · 18~21시가 좋아요', 없으면 nil (이슈 #173, #219)")
+    @DisplayName("날씨 캡션 — 구간 2개까지 나열해 '6~9시 · 18~21시가 좋아요', 넘으면 '외 N곳이', 없으면 nil (이슈 #173, #219)")
     fun weatherWindowsCaption() {
         // now = KST 18:00 → 구간 06:00~09:00(now − 12h)와 18:00~21:00. 판정문(값)은 추천과 무관하게 그대로
         val morning = RunWindow(start = now.minusSeconds(43_200), end = now.minusSeconds(32_400),
@@ -210,6 +210,14 @@ class TodayVerdictEngineTests {
             weather(temperatureC = 12.4, apparentC = 11.0), windows = listOf(morning, evening))))
         assertEquals("6~9시 · 18~21시가 좋아요", withWindows.weather.caption)
         assertEquals(value("12°C 체감 11° · 반팔 티+반바지"), withWindows.weather.content)
+
+        // 세 번째 구간(21~22시)은 홈 캡션 한 줄 폭을 넘지 않게 "외 1곳"으로 줄인다
+        val late = RunWindow(start = now.plusSeconds(10_800), end = now.plusSeconds(14_400),
+                             avgScore = 70, temperatureC = 15.0, apparentC = 14.0,
+                             precipitationProbabilityPct = 0)
+        val withThree = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(
+            weather(temperatureC = 12.4, apparentC = 11.0), windows = listOf(morning, evening, late))))
+        assertEquals("6~9시 · 18~21시 외 1곳이 좋아요", withThree.weather.caption)
 
         val withoutWindow = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(temperatureC = 12.4, apparentC = 11.0))))
         assertNull(withoutWindow.weather.caption)

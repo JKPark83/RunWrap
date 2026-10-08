@@ -32,16 +32,17 @@ struct RunWindowEngineTests {
 
     // MARK: - 칸 점수
 
-    @Test("점수표 경계 — 실제 기온 0·4·7·15·19·23°C에서 구간이 바뀐다")
+    @Test("점수표 경계 — 실제 기온 0·4·7·15·17·20°C에서 구간이 바뀐다 (고온 쪽이 더 가파르다)")
     func scoreTemperatureBoundaries() {
+        // 고온 쪽은 15→20°C(5°C)만에 10점, 추운 쪽은 7→0°C(7°C) — El Helou 2012 비대칭
         #expect(score(temp: 6.9) == 70)
         #expect(score(temp: 7) == 100)
         #expect(score(temp: 14.9) == 100)
         #expect(score(temp: 15) == 70)
-        #expect(score(temp: 18.9) == 70)
-        #expect(score(temp: 19) == 40)
-        #expect(score(temp: 22.9) == 40)
-        #expect(score(temp: 23) == 10)
+        #expect(score(temp: 16.9) == 70)
+        #expect(score(temp: 17) == 40)
+        #expect(score(temp: 19.9) == 40)
+        #expect(score(temp: 20) == 10)
         #expect(score(temp: 4) == 70)
         #expect(score(temp: 3.9) == 40)
         #expect(score(temp: 0) == 40)
@@ -52,17 +53,18 @@ struct RunWindowEngineTests {
     func scoreUsesActualTemperature() {
         // 체감(apparentC)은 기온 − 2로 넣는다 — 체감 기준이었다면 22°C 칸(체감 20)이 만점이었다
         #expect(score(temp: 10) == 100)
-        #expect(score(temp: 22) == 40)
+        #expect(score(temp: 22) == 10)
     }
 
     @Test("고온다습 — 습도 80%↑이면서 19°C↑면 −20, 19°C 아래는 감점 없음")
     func scoreHumidHeat() {
-        // 22°C(40) − 고온다습(20) = 20
-        #expect(score(temp: 22, humidity: 85) == 20)
+        // 19°C(40) − 고온다습(20) = 20
         #expect(score(temp: 19, humidity: 80) == 20)
         #expect(score(temp: 19, humidity: 79.9) == 40)
-        // 18°C는 고온다습 선 아래 — 기온 점수 70 그대로
-        #expect(score(temp: 18, humidity: 90) == 70)
+        // 22°C(10) − 고온다습(20) → 하한 0
+        #expect(score(temp: 22, humidity: 85) == 0)
+        // 18°C는 고온다습 선 아래 — 기온 점수 40 그대로
+        #expect(score(temp: 18, humidity: 90) == 40)
     }
 
     @Test("점수표 경계 — 강수확률 30%부터 −20, 60%부터 −40")
@@ -115,7 +117,7 @@ struct RunWindowEngineTests {
 
     @Test("추천 구간 — 한 칸짜리도 구간이고, 70점 미만 칸에서 끊긴다")
     func windowsSplitsOnLowScore() throws {
-        // 7시 100 · 8시 40(기온 20) · 9~10시 100 → 7~8시 · 9~11시
+        // 7시 100 · 8시 10(기온 20) · 9~10시 100 → 7~8시 · 9~11시
         let hourly = day { h in
             switch h {
             case 7, 9, 10: 10
@@ -160,6 +162,28 @@ struct RunWindowEngineTests {
     func windowsTooLateNoTomorrow() {
         let hourly = (0..<24).map { slot($0) }
         #expect(RunWindowEngine.windows(hourly: hourly, now: at(22)).isEmpty)
+    }
+
+    @Test("좋은 칸 — 05~21시이면서 70점 이상, 오늘 구간이 있어도 내일 좋은 칸은 그대로 좋은 칸 (시간별 띠 강조)")
+    func isGoodMarksEveryGoodHour() {
+        // 오늘 18시·내일 6시 모두 만점 — windows()는 오늘 것만 돌려주지만 띠 강조는 둘 다
+        let hourly = (15..<39).map { slot($0) }
+        #expect(RunWindowEngine.windows(hourly: hourly, now: at(15)).allSatisfy { !$0.isTomorrow })
+        #expect(RunWindowEngine.isGood(slot(18)))
+        #expect(RunWindowEngine.isGood(slot(30)))      // 내일 6시
+        #expect(!RunWindowEngine.isGood(slot(22)))     // 22시 칸은 추천 시간대 밖
+        #expect(!RunWindowEngine.isGood(slot(28)))     // 내일 4시
+        #expect(!RunWindowEngine.isGood(slot(18, temp: 18)))   // 40점
+    }
+
+    @Test("구간 라벨 줄임 — limit개 넘는 구간은 '외 N곳'으로")
+    func rangesLabelLimit() {
+        // 6·8·10·12시 한 칸짜리 만점 구간 4개 (사이 칸은 기온 25 → 10점)
+        let hourly = day { h in [6, 8, 10, 12].contains(h) ? 10 : 25 }
+        let windows = RunWindowEngine.windows(hourly: hourly, now: at(5))
+        #expect(RunWindowEngine.rangesLabel(windows) == "6~7시 · 8~9시 · 10~11시 · 12~13시")
+        #expect(RunWindowEngine.rangesLabel(windows, limit: 2) == "6~7시 · 8~9시 외 2곳")
+        #expect(RunWindowEngine.rangesLabel(Array(windows.prefix(2)), limit: 2) == "6~7시 · 8~9시")
     }
 
     @Test("후보 시각 — 05시 이전 칸과 지나간 칸은 구간에 들지 않는다")
