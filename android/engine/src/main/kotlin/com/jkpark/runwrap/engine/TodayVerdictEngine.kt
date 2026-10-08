@@ -38,7 +38,7 @@ data class TodayVerdict(
         val content: Content,
         /// 값이 있고 상태 판정이 가능할 때만 — 유도 문구 줄은 항상 nil
         val tone: RRTone?,
-        /// 값 아래 덧붙이는 짧은 한 줄 — 날씨 줄의 "18~20시가 좋아요" (이슈 #173). 없으면 nil
+        /// 값 아래 덧붙이는 짧은 한 줄 — 날씨 줄의 "6~9시 · 18~21시가 좋아요" (이슈 #173). 없으면 nil
         val caption: String? = null,
     ) {
         /// 줄의 종류 — 아이콘·이동 목적지 매핑은 화면 몫이다
@@ -61,8 +61,8 @@ object TodayVerdictEngine {
         data object loading : WeatherInput
         data object denied : WeatherInput         // 위치 권한 거부 — 앱 안에서 다시 물을 수 없어 설정으로 보내야 한다
         data object unavailable : WeatherInput    // 위치·날씨 조회 실패
-        /// bestWindow: 오늘 달리기 좋은 시간(RunWindowEngine) — 추천이 없으면 nil (이슈 #173)
-        data class current(val weather: CurrentWeather, val bestWindow: RunWindow? = null) : WeatherInput
+        /// windows: 오늘 달리기 좋은 시간 구간 전부(RunWindowEngine) — 추천이 없으면 빈 리스트 (이슈 #173, #219)
+        data class current(val weather: CurrentWeather, val windows: List<RunWindow> = emptyList()) : WeatherInput
     }
 
     /// - Parameters:
@@ -182,7 +182,8 @@ object TodayVerdictEngine {
                                   content = TodayVerdict.Line.Content.hint("날씨를 불러오지 못했어요"), tone = null)
             is WeatherInput.current -> {
                 // 추천 시간은 판정문에 이어 붙이지 않고 캡션으로 — 홈 타일은 문구 대신 그림으로 값을 그려서
-                // 문구 끝에 붙이면 보이지 않는다.
+                // 문구 끝에 붙이면 보이지 않는다. 캡션은 한 줄이라 구간은 2개까지, 나머지는 "외 N곳"
+                // (전체 목록은 오늘 화면 시간대별 카드가 보여 준다).
                 // 공기가 나쁨 이상이면 날씨 문구 뒤에 공식 등급을 덧붙인다 (이슈 #183) — 헤드라인을 끌어내린 이유가
                 // 한 줄 문구에서도 읽히게 (홈 타일은 대기질 배지를 따로 그린다). 유도 문구 줄에는 붙이지 않는다
                 val airSuffix = air?.let { if (it >= AirGrade.bad) " · 대기질 ${it.label}" else null } ?: ""
@@ -190,7 +191,8 @@ object TodayVerdictEngine {
                                   content = TodayVerdict.Line.Content.value(
                                       weatherPhrase(weather.weather, now = now, zone = zone) + airSuffix),
                                   tone = null,
-                                  caption = weather.bestWindow?.let { "${RunWindowEngine.rangeLabel(it)}가 좋아요" })
+                                  caption = RunWindowEngine.rangesLabel(weather.windows, limit = 2)
+                                      ?.let { "$it${if (weather.windows.size > 2) "이" else "가"} 좋아요" })
             }
         }
     }
@@ -199,26 +201,26 @@ object TodayVerdictEngine {
     /// 하늘 상태(WMO 코드)는 여기 없다. 복장이 이미 조건을 요약하고,
     /// 판단을 가르는 건 맑음/흐림이 아니라 강수 여부다 (아이콘은 화면 몫).
     data class WeatherParts(
-        val temperature: String,     // "체감 22°C"
+        val temperature: String,     // "22°C 체감 21°" — 실제 기온이 주 숫자 (이슈 #220)
         val raining: Boolean,
         val outfit: String?,         // "반팔 티+반바지" — 상·하의를 낼 수 없으면 nil
     )
 
     fun weatherParts(current: CurrentWeather, now: Instant, zone: ZoneId): WeatherParts {
-        val outfit = OutfitRules.outfit(apparentC = current.apparentC,
+        val outfit = OutfitRules.outfit(temperatureC = current.temperatureC,
                                         humidityPct = current.humidityPct,
                                         windMs = current.windMs,
                                         precipitationMm = current.precipitationMm,
                                         weatherCode = current.weatherCode,
                                         uvIndex = current.uvIndex,
                                         now = now, zone = zone)
-        return WeatherParts(temperature = "체감 ${current.apparentC.swiftRoundedInt()}°C",
+        return WeatherParts(temperature = "${current.temperatureC.swiftRoundedInt()}°C 체감 ${current.apparentC.swiftRoundedInt()}°",
                             raining = WeatherAdviceRules.isRaining(code = current.weatherCode,
                                                                    precipitationMm = current.precipitationMm),
                             outfit = outfitPhrase(outfit))
     }
 
-    /// "체감 22°C · 반팔 티+반바지" — 비가 오면 가운데에 "비"를 끼운다
+    /// "22°C 체감 21° · 반팔 티+반바지" — 비가 오면 가운데에 "비"를 끼운다
     private fun weatherPhrase(current: CurrentWeather, now: Instant, zone: ZoneId): String {
         val parts = weatherParts(current, now = now, zone = zone)
         return listOfNotNull(parts.temperature, if (parts.raining) "비" else null, parts.outfit)

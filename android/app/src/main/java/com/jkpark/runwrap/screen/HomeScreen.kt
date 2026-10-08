@@ -474,7 +474,7 @@ fun HomeScreen(
             val weatherInput = when (val s = weatherState) {
                 WeatherStore.State.Idle, WeatherStore.State.Loading -> TodayVerdictEngine.WeatherInput.loading
                 is WeatherStore.State.Loaded ->
-                    TodayVerdictEngine.WeatherInput.current(s.weather, RunWindowEngine.bestWindow(s.weather.hourly, now))
+                    TodayVerdictEngine.WeatherInput.current(s.weather, RunWindowEngine.windows(s.weather.hourly, now))
                 WeatherStore.State.Denied -> TodayVerdictEngine.WeatherInput.denied
                 WeatherStore.State.Unavailable -> TodayVerdictEngine.WeatherInput.unavailable
             }
@@ -1218,7 +1218,7 @@ private fun BatteryArt(battery: BatteryReport?, line: TodayVerdict.Line) {
     }
 }
 
-/// 하늘 상태 아이콘 + 체감온도 + 복장 — '오늘' 화면의 세 카드를 한 장으로 줄인 요약
+/// 하늘 상태 아이콘 + 기온(체감은 작게, 이슈 #220) + 복장 — '오늘' 화면의 세 카드를 한 장으로 줄인 요약
 @Composable
 private fun WeatherArt(
     weather: TodayVerdictEngine.WeatherInput,
@@ -1240,9 +1240,9 @@ private fun WeatherArt(
                         Icon(RRIcons.named(condition.symbol), null, tint = condition.tint,
                              modifier = Modifier.size(24.dp).alignBy { it.measuredHeight })
                     }
-                    Text("${current.apparentC.swiftRoundedInt()}", style = RR.numeral(25.sp), color = RR.text,
+                    Text("${current.temperatureC.swiftRoundedInt()}", style = RR.numeral(25.sp), color = RR.text,
                          modifier = Modifier.alignByBaseline())
-                    Text("°C 체감", style = ts(10.5f), color = RR.text3, modifier = Modifier.alignByBaseline())
+                    Text("°C · 체감 ${current.apparentC.swiftRoundedInt()}°", style = ts(10.5f), color = RR.text3, modifier = Modifier.alignByBaseline())
                 }
                 parts.outfit?.let { outfit ->
                     FitText(if (parts.raining) "비 · $outfit" else outfit, ts(12f, FontWeight.SemiBold), RR.text2, 0.72f)

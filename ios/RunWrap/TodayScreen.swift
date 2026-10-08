@@ -91,17 +91,22 @@ struct TodayScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("체감온도")
+                    Text("기온")
                         .font(.system(size: 11))
                         .foregroundStyle(RR.text3)
 
+                    // 실제 기온이 주 숫자, 체감은 옆에 작게 (이슈 #220 — 날씨 앱에서 익숙한 값이 기온이다)
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(String(format: "%.0f", weather.apparentC))
+                        Text(String(format: "%.0f", weather.temperatureC))
                             .font(RR.numeral(56))
                             .foregroundStyle(RR.text)
                         Text("°C")
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(RR.text2)
+                        Text("체감 \(String(format: "%.0f", weather.apparentC))°")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(RR.text3)
+                            .padding(.leading, 4)
                     }
                     .padding(.top, 4)
                 }
@@ -127,7 +132,6 @@ struct TodayScreen: View {
                 .padding(.top, 14)
 
             HStack(spacing: 0) {
-                metric("기온", String(format: "%.0f", weather.temperatureC), "°C")
                 metric("습도", String(format: "%.0f", weather.humidityPct), "%")
                 metric("바람", String(format: "%.1f", weather.windMs), "m/s")
                 metric("강수", String(format: "%.1f", weather.precipitationMm), "mm")
@@ -172,22 +176,26 @@ struct TodayScreen: View {
 
     // MARK: 시간대별 카드 (이슈 #173)
 
-    /// 달리기 좋은 시간 추천 + 24시간 띠. 추천 창에 든 칸은 improving 톤으로 칠한다
+    /// 달리기 좋은 시간 추천 + 24시간 띠. 좋은 칸(RunWindowEngine.isGood)은 요약 구간에 들었는지와 상관없이
+    /// 모두 improving 톤으로 칠한다 (이슈 #219 §2) — 오늘 구간이 있어도 띠에 보이는 내일 좋은 칸까지
     private func hourlyCard(_ hourly: [HourlyWeather]) -> some View {
         let now = Date()
-        let window = RunWindowEngine.bestWindow(hourly: hourly, now: now)
+        let windows = RunWindowEngine.windows(hourly: hourly, now: now)
         return VStack(alignment: .leading, spacing: 0) {
             Eyebrow(text: "시간대별")
 
-            if let window {
-                Text("달리기 좋은 시간 \(RunWindowEngine.rangeLabel(window))")
+            if let ranges = RunWindowEngine.rangesLabel(windows) {
+                Text("달리기 좋은 시간 \(ranges)")
                     .font(RR.display(22))
                     .foregroundStyle(RR.text)
                     .padding(.top, 8)
-                Text("체감 \(Int(window.apparentC.rounded()))° · 비 \(window.precipitationProbabilityPct)%")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(RR.text2)
-                    .padding(.top, 4)
+                // 구간마다 한 줄 — 구간이 여럿이면 어느 구간 값인지 앞에 시간대를 붙인다
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(windows, id: \.start) { window in
+                        windowSummary(window, showsRange: windows.count > 1)
+                    }
+                }
+                .padding(.top, 4)
             } else {
                 Text("오늘은 딱 좋은 시간대가 없어요 — 실내도 괜찮아요")
                     .font(.system(size: 14, weight: .bold))
@@ -200,7 +208,7 @@ struct TodayScreen: View {
                     ForEach(hourly, id: \.time) { hour in
                         hourCell(hour,
                                  isNow: hour.time <= now && now < hour.time.addingTimeInterval(3_600),
-                                 inWindow: window.map { hour.time >= $0.start && hour.time < $0.end } ?? false)
+                                 isGood: RunWindowEngine.isGood(hour))
                     }
                 }
             }
@@ -210,8 +218,28 @@ struct TodayScreen: View {
         .rrCard()
     }
 
-    /// 한 칸 — 시각·하늘 상태·체감온도·강수확률
-    private func hourCell(_ hour: HourlyWeather, isNow: Bool, inWindow: Bool) -> some View {
+    /// 추천 구간 한 줄 — "6~9시 12° 체감 10° · 비 10%". 실제 기온이 주 숫자, 체감은 작게 (이슈 #220)
+    private func windowSummary(_ window: RunWindow, showsRange: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            if showsRange {
+                Text(RunWindowEngine.rangeLabel(window))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(RRTone.improving.color)
+            }
+            Text("\(Int(window.temperatureC.rounded()))°")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(RR.text2)
+            Text("체감 \(Int(window.apparentC.rounded()))°")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(RR.text3)
+            Text("· 비 \(window.precipitationProbabilityPct)%")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(RR.text2)
+        }
+    }
+
+    /// 한 칸 — 시각·하늘 상태·기온·강수확률. 칸이 좁아 체감은 뺀다 (이슈 #220)
+    private func hourCell(_ hour: HourlyWeather, isNow: Bool, isGood: Bool) -> some View {
         VStack(spacing: 7) {
             Text(isNow ? "지금" : "\(RunWindowEngine.kst.component(.hour, from: hour.time))시")
                 .font(.system(size: 11, weight: isNow ? .bold : .regular))
@@ -227,7 +255,7 @@ struct TodayScreen: View {
             }
             .font(.system(size: 18))
             .frame(height: 22)
-            Text("\(Int(hour.apparentC.rounded()))°")
+            Text("\(Int(hour.temperatureC.rounded()))°")
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundStyle(RR.text)
             Text("\(hour.precipitationProbabilityPct)%")
@@ -236,7 +264,7 @@ struct TodayScreen: View {
         }
         .frame(width: 46)
         .padding(.vertical, 10)
-        .background(inWindow ? RRTone.improving.softColor : Color.clear,
+        .background(isGood ? RRTone.improving.softColor : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
@@ -307,10 +335,10 @@ struct TodayScreen: View {
     // MARK: 조언 카드
 
     private func adviceCard(_ weather: CurrentWeather) -> some View {
-        let name = WeatherAdviceRules.runName(apparentC: weather.apparentC,
+        let name = WeatherAdviceRules.runName(temperatureC: weather.temperatureC,
                                               precipitationMm: weather.precipitationMm,
                                               weatherCode: weather.weatherCode)
-        let items = WeatherAdviceRules.advice(apparentC: weather.apparentC,
+        let items = WeatherAdviceRules.advice(temperatureC: weather.temperatureC,
                                               humidityPct: weather.humidityPct,
                                               windMs: weather.windMs,
                                               precipitationMm: weather.precipitationMm,
@@ -385,7 +413,7 @@ struct TodayScreen: View {
     // MARK: 복장 카드
 
     private func outfitCard(_ weather: CurrentWeather) -> some View {
-        let items = OutfitRules.outfit(apparentC: weather.apparentC,
+        let items = OutfitRules.outfit(temperatureC: weather.temperatureC,
                                        humidityPct: weather.humidityPct,
                                        windMs: weather.windMs,
                                        precipitationMm: weather.precipitationMm,
@@ -401,6 +429,15 @@ struct TodayScreen: View {
 
             OutfitGrid(items: items)
                 .padding(.top, 14)
+
+            // +10°C로 고른 복장이라 출발 직후는 쌀쌀하다는 걸 미리 말해 둔다 (이슈 #219)
+            if let note = OutfitRules.startChillNote(temperatureC: weather.temperatureC) {
+                Text(note)
+                    .font(.system(size: 11.5))
+                    .lineSpacing(3)
+                    .foregroundStyle(RR.text3)
+                    .padding(.top, 12)
+            }
         }
         .padding(18)
         .rrCard()

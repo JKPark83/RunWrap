@@ -73,6 +73,7 @@ import com.jkpark.runwrap.engine.OutfitItem
 import com.jkpark.runwrap.engine.OutfitRules
 import com.jkpark.runwrap.engine.RRTone
 import com.jkpark.runwrap.engine.RunName
+import com.jkpark.runwrap.engine.RunWindow
 import com.jkpark.runwrap.engine.RunWindowEngine
 import com.jkpark.runwrap.engine.WeatherAdviceRules
 import com.jkpark.runwrap.engine.fmt
@@ -217,11 +218,14 @@ private fun WeatherCard(weather: CurrentWeather) {
     Column(Modifier.rrCard().padding(start = 18.dp, top = 18.dp, end = 18.dp, bottom = 6.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column {
-                Text("체감온도", style = TextStyle(fontSize = 11.sp), color = RR.text3)
+                Text("기온", style = TextStyle(fontSize = 11.sp), color = RR.text3)
+                // 실제 기온이 주 숫자, 체감은 옆에 작게 (이슈 #220 — 날씨 앱에서 익숙한 값이 기온이다)
                 Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(fmt(weather.apparentC, 0), Modifier.alignByBaseline(), style = RR.numeral(56.sp), color = RR.text)
+                    Text(fmt(weather.temperatureC, 0), Modifier.alignByBaseline(), style = RR.numeral(56.sp), color = RR.text)
                     Text("°C", Modifier.alignByBaseline(),
                          style = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.Bold), color = RR.text2)
+                    Text("체감 ${fmt(weather.apparentC, 0)}°", Modifier.alignByBaseline().padding(start = 4.dp),
+                         style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = RR.text3)
                 }
             }
             Spacer(Modifier.weight(1f))
@@ -238,7 +242,6 @@ private fun WeatherCard(weather: CurrentWeather) {
         HorizontalDivider(Modifier.padding(top = 14.dp), thickness = Dp.Hairline, color = RR.line)
 
         Row(Modifier.padding(top = 2.dp)) {
-            Metric("기온", fmt(weather.temperatureC, 0), "°C")
             Metric("습도", fmt(weather.humidityPct, 0), "%")
             Metric("바람", fmt(weather.windMs, 1), "m/s")
             Metric("강수", fmt(weather.precipitationMm, 1), "mm")
@@ -267,18 +270,21 @@ private fun RowScope.Metric(label: String, value: String, unit: String) {
 
 // MARK: 시간대별 카드 (이슈 #173)
 
-/// 달리기 좋은 시간 추천 + 24시간 띠. 추천 창에 든 칸은 improving 톤으로 칠한다
+/// 달리기 좋은 시간 추천 + 24시간 띠. 좋은 칸(RunWindowEngine.isGood)은 요약 구간에 들었는지와 상관없이
+/// 모두 improving 톤으로 칠한다 (이슈 #219 §2) — 오늘 구간이 있어도 띠에 보이는 내일 좋은 칸까지
 @Composable
 private fun HourlyCard(hourly: List<HourlyWeather>, now: Instant) {
-    val window = RunWindowEngine.bestWindow(hourly, now)
+    val windows = RunWindowEngine.windows(hourly, now)
+    val ranges = RunWindowEngine.rangesLabel(windows)
     Column(Modifier.fillMaxWidth().rrCard().padding(18.dp)) {
         Eyebrow("시간대별")
-        if (window != null) {
-            Text("달리기 좋은 시간 ${RunWindowEngine.rangeLabel(window)}", Modifier.padding(top = 8.dp),
+        if (ranges != null) {
+            Text("달리기 좋은 시간 $ranges", Modifier.padding(top = 8.dp),
                  style = RR.display(22.sp), color = RR.text)
-            Text("체감 ${window.apparentC.swiftRoundedInt()}° · 비 ${window.precipitationProbabilityPct}%",
-                 Modifier.padding(top = 4.dp),
-                 style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium), color = RR.text2)
+            // 구간마다 한 줄 — 구간이 여럿이면 어느 구간 값인지 앞에 시간대를 붙인다
+            Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                windows.forEach { WindowSummary(it, showsRange = windows.size > 1) }
+            }
         } else {
             Text("오늘은 딱 좋은 시간대가 없어요 — 실내도 괜찮아요", Modifier.padding(top = 8.dp),
                  style = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Bold), color = RR.text2)
@@ -289,18 +295,35 @@ private fun HourlyCard(hourly: List<HourlyWeather>, now: Instant) {
             hourly.forEach { hour ->
                 HourCell(hour,
                          isNow = hour.time <= now && now < hour.time.plusSeconds(3_600),
-                         inWindow = window != null && hour.time >= window.start && hour.time < window.end)
+                         isGood = RunWindowEngine.isGood(hour))
             }
         }
     }
 }
 
-/// 한 칸 — 시각·하늘 상태·체감온도·강수확률
+/// 추천 구간 한 줄 — "6~9시 12° 체감 10° · 비 10%". 실제 기온이 주 숫자, 체감은 작게 (이슈 #220)
 @Composable
-private fun HourCell(hour: HourlyWeather, isNow: Boolean, inWindow: Boolean) {
+private fun WindowSummary(window: RunWindow, showsRange: Boolean) {
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (showsRange) {
+            Text(RunWindowEngine.rangeLabel(window), Modifier.alignByBaseline(),
+                 style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold), color = RRTone.improving.color)
+        }
+        Text("${window.temperatureC.swiftRoundedInt()}°", Modifier.alignByBaseline(),
+             style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold), color = RR.text2)
+        Text("체감 ${window.apparentC.swiftRoundedInt()}°", Modifier.alignByBaseline(),
+             style = TextStyle(fontSize = 10.5.sp, fontWeight = FontWeight.Medium), color = RR.text3)
+        Text("· 비 ${window.precipitationProbabilityPct}%", Modifier.alignByBaseline(),
+             style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium), color = RR.text2)
+    }
+}
+
+/// 한 칸 — 시각·하늘 상태·기온·강수확률. 칸이 좁아 체감은 뺀다 (이슈 #220)
+@Composable
+private fun HourCell(hour: HourlyWeather, isNow: Boolean, isGood: Boolean) {
     Column(
         Modifier
-            .background(if (inWindow) RRTone.improving.softColor else Color.Transparent, RoundedCornerShape(10.dp))
+            .background(if (isGood) RRTone.improving.softColor else Color.Transparent, RoundedCornerShape(10.dp))
             .width(46.dp)
             .padding(vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -314,7 +337,7 @@ private fun HourCell(hour: HourlyWeather, isNow: Boolean, inWindow: Boolean) {
                 Icon(RRIcons.named(it.symbol), null, Modifier.size(18.dp), tint = it.tint)
             }
         }
-        Text("${hour.apparentC.swiftRoundedInt()}°", style = mono(14.sp, FontWeight.Bold), color = RR.text)
+        Text("${hour.temperatureC.swiftRoundedInt()}°", style = mono(14.sp, FontWeight.Bold), color = RR.text)
         Text("${hour.precipitationProbabilityPct}%", style = mono(10.5.sp),
              color = if (hour.precipitationProbabilityPct >= 30) RR.sky else RR.text3)
     }
@@ -369,8 +392,8 @@ private fun AirRow(name: String, value: Double?, unit: String, digits: Int, grad
 
 @Composable
 private fun AdviceCard(weather: CurrentWeather) {
-    val name = WeatherAdviceRules.runName(weather.apparentC, weather.precipitationMm, weather.weatherCode)
-    val items = WeatherAdviceRules.advice(weather.apparentC, weather.humidityPct, weather.windMs,
+    val name = WeatherAdviceRules.runName(weather.temperatureC, weather.precipitationMm, weather.weatherCode)
+    val items = WeatherAdviceRules.advice(weather.temperatureC, weather.humidityPct, weather.windMs,
                                           weather.precipitationMm, weather.uvIndex, weather.weatherCode)
     Column(Modifier.fillMaxWidth().rrCard().padding(18.dp)) {
         Text("오늘의 러닝", style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Bold), color = RR.text)
@@ -417,11 +440,17 @@ private fun runSymbol(kind: RunName.Kind): String = when (kind) {
 
 @Composable
 private fun OutfitCard(weather: CurrentWeather, now: Instant, zone: ZoneId) {
-    val items = OutfitRules.outfit(weather.apparentC, weather.humidityPct, weather.windMs, weather.precipitationMm,
+    val items = OutfitRules.outfit(weather.temperatureC, weather.humidityPct, weather.windMs, weather.precipitationMm,
                                    weather.weatherCode, weather.uvIndex, now, zone)
     Column(Modifier.fillMaxWidth().rrCard().padding(18.dp)) {
         Text("오늘의 러닝 복장", style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Bold), color = RR.text)
         OutfitGrid(items, Modifier.padding(top = 14.dp))
+
+        // +10°C로 고른 복장이라 출발 직후는 쌀쌀하다는 걸 미리 말해 둔다 (이슈 #219)
+        OutfitRules.startChillNote(weather.temperatureC)?.let { note ->
+            Text(note, Modifier.padding(top = 12.dp),
+                 style = TextStyle(fontSize = 11.5.sp, lineHeight = 17.sp), color = RR.text3)
+        }
     }
 }
 
