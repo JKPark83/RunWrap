@@ -116,4 +116,19 @@ struct FlyoverEngineTests {
         #expect(frame.trailStart == 20)
         #expect(FlyoverEngine.frame(track, progress: 0).trailStart == 0)
     }
+
+    @Test("카메라 방위 — 키프레임 사이를 시간으로 선형 보간하고 범위 밖은 양 끝 값")
+    func headingInterpolatesByTime() {
+        // 0초 0° → 2초 10° → 6초 30°
+        let keyframes = [
+            FlyoverEngine.Keyframe(lat: 0, lon: 0, headingDeg: 0, durationSec: 0),
+            FlyoverEngine.Keyframe(lat: 0, lon: 0, headingDeg: 10, durationSec: 2),
+            FlyoverEngine.Keyframe(lat: 0, lon: 0, headingDeg: 30, durationSec: 4),
+        ]
+        #expect(abs(FlyoverEngine.heading(keyframes, at: 1) - 5) < 1e-9)
+        #expect(abs(FlyoverEngine.heading(keyframes, at: 2) - 10) < 1e-9)
+        #expect(abs(FlyoverEngine.heading(keyframes, at: 4) - 20) < 1e-9)
+        #expect(FlyoverEngine.heading(keyframes, at: -1) == 0)
+        #expect(FlyoverEngine.heading(keyframes, at: 10) == 30)
+    }
 }

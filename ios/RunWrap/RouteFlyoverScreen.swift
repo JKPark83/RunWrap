@@ -2,9 +2,10 @@ import SwiftUI
 import MapKit
 
 /// 앱 안 경로 플라이오버 재생 (이슈 #224, #232) — 3D 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 6초, 15~60초)로 날아간다.
-/// 카메라는 `mapCameraKeyframeAnimator`(iOS 17, WWDC23 10157)가 움직이고, 키프레임 애니메이터는
-/// 카메라만 움직이므로 현재 위치 점·지나온 경로·HUD는 `TimelineView(.animation)`로 같은 재생 시계에서 그린다.
-/// 키프레임 배치·보간은 `FlyoverEngine`이 정한다 — 이 화면은 그리기만 한다.
+/// 카메라는 매 프레임 현재 위치 점 위에 직접 놓는다(`position = .camera`) — `mapCameraKeyframeAnimator`는 자기 시계로
+/// 움직여 점(TimelineView 시계)과 어긋나고, 제스처 한 번에 애니메이션이 통째로 사라져 카메라가 멈췄다(실기기 확인, #232).
+/// 점·지나온 경로·HUD는 `TimelineView(.animation)`로 같은 재생 시계에서 그린다.
+/// 키프레임 배치·방위 보간은 `FlyoverEngine`이 정한다 — 이 화면은 그리기만 한다.
 /// 앱 안 재생이라 본인만 본다 — 경로 가림(RoutePrivacy)은 저장·공유로 확장할 때 붙인다.
 struct RouteFlyoverScreen: View {
     let track: FlyoverEngine.Track
@@ -12,15 +13,16 @@ struct RouteFlyoverScreen: View {
 
     @State private var playID = 0
     @State private var startedAt = Date()
-    /// 재생 중에는 지도 제스처를 막는다 — 제스처가 들어오면 키프레임 애니메이션이 제거된다
     @State private var playing = true
     @State private var position: MapCameraPosition
+    /// 재생 중 핀치로 바꾼 줌을 따라간다 — 카메라를 매 프레임 다시 놓아도 사용자가 고른 거리는 유지 (#232)
+    @State private var cameraDistance: Double
 
     private let keyframes: [FlyoverEngine.Keyframe]
     private let coordinates: [CLLocationCoordinate2D]
-    /// 카메라 거리(m)·기울기(도) — 이슈 #224 설계(600m·60°)에서 거리만 늘렸다: 600m는 3D 건물이 점·선을 너무 가렸다(시뮬레이터 확인)
-    private let cameraDistance: Double = 800
-    private let cameraPitch: Double = 60
+    /// 기본 카메라 거리(m)·기울기(도) — 이슈 #224 설계(600m·60°)에서 거리만 늘렸다: 600m는 3D 건물이 점·선을 너무 가렸다(시뮬레이터 확인)
+    private static let defaultDistance: Double = 800
+    private static let cameraPitch: Double = 60
     /// 지나온 경로 선 굵기와 흰 테두리(halo) — 지도 위에서 도드라지게 (#232)
     private static let lineWidth: CGFloat = 6
     private static let haloWidth: CGFloat = 10
@@ -31,9 +33,10 @@ struct RouteFlyoverScreen: View {
         self.keyframes = keyframes
         coordinates = track.points.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
         let first = keyframes[0]
+        _cameraDistance = State(initialValue: Self.defaultDistance)
         _position = State(initialValue: .camera(MapCamera(
             centerCoordinate: CLLocationCoordinate2D(latitude: first.lat, longitude: first.lon),
-            distance: cameraDistance, heading: first.headingDeg, pitch: cameraPitch)))
+            distance: Self.defaultDistance, heading: first.headingDeg, pitch: Self.cameraPitch)))
     }
 
     var body: some View {
@@ -69,8 +72,18 @@ struct RouteFlyoverScreen: View {
         .overlay(alignment: .topLeading) { closeButton }
         .onAppear(perform: play)
         .task(id: playID) {
-            // 재생 길이가 지나면 멈추고 제스처·"다시 재생"을 연다
-            try? await Task.sleep(for: .seconds(track.playbackSec))
+            // 재생 시계 — 매 틱 카메라를 현재 위치 점 위에 놓고, 재생 길이가 지나면 멈춰 제스처·"다시 재생"을 연다
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(startedAt)
+                guard elapsed < track.playbackSec else { break }
+                let frame = FlyoverEngine.frame(track, progress: elapsed / track.playbackSec)
+                position = .camera(MapCamera(
+                    centerCoordinate: CLLocationCoordinate2D(latitude: frame.lat, longitude: frame.lon),
+                    distance: cameraDistance,
+                    heading: FlyoverEngine.heading(keyframes, at: elapsed),
+                    pitch: Self.cameraPitch))
+                try? await Task.sleep(for: .milliseconds(16))
+            }
             guard !Task.isCancelled else { return }
             playing = false
         }
@@ -83,7 +96,8 @@ struct RouteFlyoverScreen: View {
     }
 
     private var map: some View {
-        Map(position: $position, interactionModes: playing ? [] : .all) {
+        // 재생 중엔 줌만 허용 — 핀치로 멀리서 보더라도 카메라는 계속 점을 따라간다. 이동·회전은 카메라가 매 틱 덮어쓰므로 막는다
+        Map(position: $position, interactionModes: playing ? .zoom : .all) {
             MapPolyline(coordinates: coordinates)
                 .stroke(RR.brand.opacity(0.35), style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round, lineJoin: .round))
             if !playing {
@@ -100,29 +114,8 @@ struct RouteFlyoverScreen: View {
         // muted — 도로·건물 색을 낮춰 경로가 도드라지게 (#232)
         .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
         .mapControls {}   // 나침반이 닫기 버튼 줄과 겹친다 — 방향은 카메라가 알아서 돈다
-        .mapCameraKeyframeAnimator(trigger: playID) { _ in
-            // Cubic — 키프레임마다 속도·회전이 꺾이지 않게 한다. 점은 지도 좌표를 화면으로 바꿔 그리므로
-            // 카메라 중심이 경로에서 조금 벗어나도 점은 경로 위에 그대로 있다 (#232)
-            KeyframeTrack(\MapCamera.centerCoordinate) {
-                for k in keyframes {
-                    CubicKeyframe(CLLocationCoordinate2D(latitude: k.lat, longitude: k.lon), duration: k.durationSec)
-                }
-            }
-            KeyframeTrack(\MapCamera.heading) {
-                for k in keyframes {
-                    CubicKeyframe(k.headingDeg, duration: k.durationSec)
-                }
-            }
-            // 거리·기울기는 고정 — 시작 시 바로 맞춘다(0초 키프레임). 애니메이터는 트리거 순간의 카메라에서
-            // 출발하므로, 18초에 걸쳐 보간하면 처음 몇 초가 엉뚱한 줌으로 시작한다(시뮬레이터 확인)
-            KeyframeTrack(\MapCamera.distance) {
-                LinearKeyframe(cameraDistance, duration: 0)
-                LinearKeyframe(cameraDistance, duration: track.playbackSec)
-            }
-            KeyframeTrack(\MapCamera.pitch) {
-                LinearKeyframe(cameraPitch, duration: 0)
-                LinearKeyframe(cameraPitch, duration: track.playbackSec)
-            }
+        .onMapCameraChange(frequency: .continuous) { context in
+            cameraDistance = context.camera.distance
         }
     }
 

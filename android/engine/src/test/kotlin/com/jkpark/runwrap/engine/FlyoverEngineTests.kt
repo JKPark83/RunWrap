@@ -135,4 +135,20 @@ class FlyoverEngineTests {
         assertEquals(20, frame.trailStart)
         assertEquals(0, FlyoverEngine.frame(track, 0.0).trailStart)
     }
+
+    @Test
+    @DisplayName("카메라 방위 — 키프레임 사이를 시간으로 선형 보간하고 범위 밖은 양 끝 값")
+    fun headingInterpolatesByTime() {
+        // 0초 0° → 2초 10° → 6초 30°
+        val keyframes = listOf(
+            FlyoverEngine.Keyframe(0.0, 0.0, 0.0, 0.0),
+            FlyoverEngine.Keyframe(0.0, 0.0, 10.0, 2.0),
+            FlyoverEngine.Keyframe(0.0, 0.0, 30.0, 4.0),
+        )
+        assertEquals(5.0, FlyoverEngine.heading(keyframes, 1.0), 1e-9)
+        assertEquals(10.0, FlyoverEngine.heading(keyframes, 2.0), 1e-9)
+        assertEquals(20.0, FlyoverEngine.heading(keyframes, 4.0), 1e-9)
+        assertEquals(0.0, FlyoverEngine.heading(keyframes, -1.0), 1e-9)
+        assertEquals(30.0, FlyoverEngine.heading(keyframes, 10.0), 1e-9)
+    }
 }

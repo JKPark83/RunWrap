@@ -104,6 +104,21 @@ object FlyoverEngine {
         }
     }
 
+    /// 재생 경과 시각의 카메라 방위 — 키프레임 사이를 시간으로 선형 보간한다(범위 밖은 양 끝 값).
+    /// 카메라를 매 프레임 점 위치에 직접 놓으므로(#232) 방위도 같은 시계에서 읽는다
+    fun heading(keyframes: List<Keyframe>, atSec: Double): Double {
+        var t = 0.0
+        for (k in 1 until keyframes.size) {
+            val next = t + keyframes[k].durationSec
+            if (atSec < next) {
+                val f = if (keyframes[k].durationSec > 0) max(0.0, atSec - t) / keyframes[k].durationSec else 1.0
+                return keyframes[k - 1].headingDeg + (keyframes[k].headingDeg - keyframes[k - 1].headingDeg) * f
+            }
+            t = next
+        }
+        return keyframes.last().headingDeg
+    }
+
     /// 진행률 t(0~1) → 경로 위 위치. 카메라 키프레임과 같은 시간축(실제 경과 시간 비례)이다
     fun frame(track: Track, progress: Double): Frame {
         val current = sample(track, track.elapsedSec, progress.coerceIn(0.0, 1.0) * track.totalSec)

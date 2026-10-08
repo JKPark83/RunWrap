@@ -52,21 +52,16 @@ import com.jkpark.runwrap.ui.RR
 import com.jkpark.runwrap.ui.RRIcons
 import com.jkpark.runwrap.ui.mono
 import com.jkpark.runwrap.ui.rrCard
-import kotlin.math.max
-import kotlin.math.roundToInt
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 
 /// 앱 안 경로 플라이오버 재생 (이슈 #224, #232, iOS `RouteFlyoverScreen.swift`) — 기울인 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 6초, 15~60초)로 날아간다.
-/// (Android: Google 지도에는 iOS `mapCameraKeyframeAnimator`가 없어 키프레임마다 `CameraPositionState.animate`를
-///  이어 부른다. 3D 지형(`elevation: .realistic`)도 없어 기울기 + 3D 건물만 쓴다 — docs/parity.md)
-/// 점·지나온 경로·HUD는 같은 재생 시계(withFrameNanos)에서 그린다. 키프레임 배치·보간은 `FlyoverEngine`이 정한다.
+/// 카메라는 매 프레임 현재 위치 점 위에 직접 놓는다(`camera.move`) — 따로 도는 애니메이션은 점과 어긋나고 제스처에 끊긴다(#232).
+/// (Android: 3D 지형(`elevation: .realistic`)이 없어 기울기 + 3D 건물만 쓴다 — docs/parity.md)
+/// 점·지나온 경로·HUD는 같은 재생 시계(withFrameNanos)에서 그린다. 키프레임 배치·방위 보간은 `FlyoverEngine`이 정한다.
 @Composable
 fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
     val keyframes = remember(track) { FlyoverEngine.keyframes(track) }
     val points = remember(track) { track.points.map { LatLng(it.lat, it.lon) } }
     var playID by remember { mutableIntStateOf(0) }
-    /// 재생 중에는 지도 제스처를 막는다 — 제스처가 들어오면 animate가 취소된다
     var playing by remember { mutableStateOf(true) }
     var progress by remember { mutableDoubleStateOf(0.0) }
     var mapLoaded by remember { mutableStateOf(false) }
@@ -78,17 +73,17 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
         playing = true
         progress = 0.0
         camera.move(CameraUpdateFactory.newCameraPosition(cameraAt(keyframes[0])))
-        coroutineScope {
-            launch {
-                for (k in keyframes.drop(1)) {
-                    camera.animate(CameraUpdateFactory.newCameraPosition(cameraAt(k)), max(1, (k.durationSec * 1_000).roundToInt()))
-                }
-            }
-            val start = withFrameNanos { it }
-            while (progress < 1) {
-                val now = withFrameNanos { it }
-                progress = (now - start) / 1e9 / track.playbackSec
-            }
+        val start = withFrameNanos { it }
+        while (progress < 1) {
+            val now = withFrameNanos { it }
+            val elapsed = (now - start) / 1e9
+            progress = elapsed / track.playbackSec
+            // 재생 중 핀치로 바꾼 줌은 유지하고 중심·방위만 매 프레임 덮어쓴다 (#232)
+            val f = FlyoverEngine.frame(track, progress)
+            camera.move(CameraUpdateFactory.newCameraPosition(CameraPosition(
+                LatLng(f.lat, f.lon), camera.position.zoom, cameraPitch,
+                (((FlyoverEngine.heading(keyframes, elapsed) % 360) + 360) % 360).toFloat(),
+            )))
         }
         playing = false
     }
@@ -105,9 +100,10 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
             uiSettings = MapUiSettings(
                 compassEnabled = false, indoorLevelPickerEnabled = false, mapToolbarEnabled = false,
                 myLocationButtonEnabled = false, zoomControlsEnabled = false,
+                // 재생 중엔 줌만 허용 — 카메라가 매 프레임 중심을 덮어쓰므로 이동·회전·기울기는 막는다 (#232)
                 rotationGesturesEnabled = !playing, scrollGesturesEnabled = !playing,
-                scrollGesturesEnabledDuringRotateOrZoom = !playing, tiltGesturesEnabled = !playing,
-                zoomGesturesEnabled = !playing,
+                scrollGesturesEnabledDuringRotateOrZoom = false, tiltGesturesEnabled = !playing,
+                zoomGesturesEnabled = true,
             ),
             onMapLoaded = { mapLoaded = true },
         ) {
@@ -152,8 +148,9 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
 }
 
 /// 카메라 — iOS 거리 800m·기울기 60°에 맞춘 줌 17·기울기 60°
+private const val cameraPitch = 60f
 private fun cameraAt(k: FlyoverEngine.Keyframe): CameraPosition =
-    CameraPosition(LatLng(k.lat, k.lon), 17f, 60f, (((k.headingDeg % 360) + 360) % 360).toFloat())
+    CameraPosition(LatLng(k.lat, k.lon), 17f, cameraPitch, (((k.headingDeg % 360) + 360) % 360).toFloat())
 
 @Composable
 private fun Hud(frame: FlyoverEngine.Frame, playing: Boolean, onReplay: () -> Unit, modifier: Modifier) {

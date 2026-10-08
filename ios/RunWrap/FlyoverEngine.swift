@@ -113,6 +113,21 @@ enum FlyoverEngine {
         }
     }
 
+    /// 재생 경과 시각의 카메라 방위 — 키프레임 사이를 시간으로 선형 보간한다(범위 밖은 양 끝 값).
+    /// 카메라를 매 프레임 점 위치에 직접 놓으므로(#232) 방위도 같은 시계에서 읽는다
+    static func heading(_ keyframes: [Keyframe], at elapsedSec: Double) -> Double {
+        var t: Double = 0
+        for k in keyframes.indices.dropFirst() {
+            let next = t + keyframes[k].durationSec
+            if elapsedSec < next {
+                let f = keyframes[k].durationSec > 0 ? max(0, elapsedSec - t) / keyframes[k].durationSec : 1
+                return keyframes[k - 1].headingDeg + (keyframes[k].headingDeg - keyframes[k - 1].headingDeg) * f
+            }
+            t = next
+        }
+        return keyframes[keyframes.count - 1].headingDeg
+    }
+
     /// 진행률 t(0~1) → 경로 위 위치. 카메라 키프레임과 같은 시간축(실제 경과 시간 비례)이다
     static func frame(_ track: Track, progress t: Double) -> Frame {
         let current = sample(track, keys: track.elapsedSec, value: min(max(t, 0), 1) * track.totalSec)
