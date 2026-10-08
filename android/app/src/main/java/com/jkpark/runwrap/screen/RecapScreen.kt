@@ -73,6 +73,7 @@ import com.jkpark.runwrap.engine.swiftRoundedInt
 import com.jkpark.runwrap.health.HealthStore
 import com.jkpark.runwrap.ui.Eyebrow
 import com.jkpark.runwrap.ui.FitText
+import com.jkpark.runwrap.ui.ForceLightScheme
 import com.jkpark.runwrap.ui.RR
 import com.jkpark.runwrap.ui.RRIcons
 import com.jkpark.runwrap.ui.ShareCardRenderer
@@ -128,7 +129,8 @@ fun RecapScreen(
     Box(Modifier.fillMaxSize().background(RR.bg).statusBarsPadding()) {
         // 화면에 그리지 않고 공유 카드를 기록해 둔다 — 저장 버튼이 이 레이어를 이미지로 뽑는다.
         // 카드 나열(Column) 밖에 둬야 0 크기 자식이 간격(12dp)을 먹지 않는다
-        recap?.let { ShareCardRenderer.Source(layer) { RecapShareCardView(it, zone) } }
+        // 공유 카드는 기기 모드와 무관하게 늘 라이트 (이슈 #221)
+        recap?.let { ShareCardRenderer.Source(layer) { ForceLightScheme { RecapShareCardView(it, zone) } } }
         Column(
             Modifier
                 .fillMaxSize()

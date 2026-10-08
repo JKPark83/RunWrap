@@ -593,7 +593,8 @@ final class HealthStore: ObservableObject {
                           calories: kcal,
                           isIndoor: isIndoor,
                           weatherTempC: tempC,
-                          weatherHumidityPct: humidity)
+                          weatherHumidityPct: humidity,
+                          end: workout.endDate)
     }
 
     /// 습도 메타데이터를 0~100(%)로 정규화 — 기록 주체에 따라 0~1(비율)로도,

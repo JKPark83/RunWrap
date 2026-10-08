@@ -21,6 +21,9 @@ struct RunSummary: Identifiable, Equatable {
     /// 열 보정 페이스(HeatEngine)의 재료라 추가 쿼리 비용이 없다 (제안 문서 A1). 실내는 nil.
     var weatherTempC: Double?
     var weatherHumidityPct: Double?
+    /// 종료 시각 — 공유 카드의 "06:12~07:05" 표기용 (이슈 #221). 일시정지가 있으면 durationSec(활동 시간)보다
+    /// 늦으므로 워크아웃 종료 시각을 따로 받는다. 없으면(데모·테스트) 시작 + 활동 시간
+    let end: Date
 
     /// 뒤에 붙은 필드들의 기본값을 위한 명시적 init — 기존 호출부(테스트 포함)를 깨지 않는다
     init(id: UUID, start: Date, durationSec: Double,
@@ -28,7 +31,8 @@ struct RunSummary: Identifiable, Equatable {
          maxHeartRate: Double? = nil,
          calories: Double? = nil, isIndoor: Bool = false,
          cadenceSpm: Double? = nil,
-         weatherTempC: Double? = nil, weatherHumidityPct: Double? = nil) {
+         weatherTempC: Double? = nil, weatherHumidityPct: Double? = nil,
+         end: Date? = nil) {
         self.id = id
         self.start = start
         self.durationSec = durationSec
@@ -40,6 +44,7 @@ struct RunSummary: Identifiable, Equatable {
         self.cadenceSpm = cadenceSpm
         self.weatherTempC = weatherTempC
         self.weatherHumidityPct = weatherHumidityPct
+        self.end = end ?? start.addingTimeInterval(durationSec)
     }
 
     var distanceKm: Double? { distanceMeters.map { $0 / 1000 } }

@@ -117,6 +117,7 @@ import com.jkpark.runwrap.health.HealthStore
 import com.jkpark.runwrap.health.WorkoutDetailStore
 import com.jkpark.runwrap.ui.Eyebrow
 import com.jkpark.runwrap.ui.FitText
+import com.jkpark.runwrap.ui.ForceLightScheme
 import com.jkpark.runwrap.ui.IndoorBadge
 import com.jkpark.runwrap.ui.PhotoCardView
 import com.jkpark.runwrap.ui.RR
@@ -350,7 +351,7 @@ fun SessionDetailScreen(
 
     if (showShare) {
         ShareSheet(
-            run = run, zones = detail?.zones, route = detail?.route.orEmpty(),
+            run = run, detail = detail, route = detail?.route.orEmpty(),
             /// 카드 하단 주간 요약 — 이 세션 기준 7일 러닝 횟수·거리 (기획서 §4.4, 이슈 #92)
             weeklySummary = (healthState as? HealthStore.State.Loaded)?.let {
                 ShareSummary.weeklyLine(it.runs, run.start, Instant.now(), zone)
@@ -979,7 +980,8 @@ private fun ShareSection(enabled: Boolean, onClick: () -> Unit) {
 @Composable
 private fun ShareSheet(
     run: RunSummary,
-    zones: List<Double>?,
+    /// 존·케이던스·고도·구간 페이스 재료 — 아직 못 불러왔으면 null이고 해당 항목은 카드에서 빠진다 (이슈 #221)
+    detail: WorkoutDetail?,
     route: List<GeoPoint>,
     weeklySummary: String?,
     onDismiss: () -> Unit,
@@ -994,6 +996,8 @@ private fun ShareSheet(
     var hidesRoute by settings.rememberSetting("share.hidesRoute", false)
     /// 양끝을 가릴 반경(300/500/1000m) — 다음 공유 때도 기억한다 (이슈 #191)
     var trimRadiusRaw by settings.rememberSetting(RoutePrivacy.radiusKey, RoutePrivacy.defaultRadius.rawValue)
+    /// 날짜 줄에 시작~종료 시각을 적을지 — 기본 켜짐, 다음 공유 때도 기억한다 (이슈 #221)
+    var showsTime by settings.rememberSetting("share.showsTime", true)
     var saveMessage by remember { mutableStateOf<String?>(null) }
     val radius = RoutePrivacy.radius(trimRadiusRaw)
     // 집 근처가 드러나지 않게 시작·끝을 선택한 반경만큼 잘라낸 경로만 그린다 (이슈 #84·#191)
@@ -1005,11 +1009,18 @@ private fun ShareSheet(
         scope.launch { decodePhoto(context, uri)?.let { photo = it } }
     }
 
+    /// 미리보기와 저장 이미지 공통 — 기기 모드와 무관하게 늘 라이트로 그린다.
+    /// 스토리는 남의 피드에 섞여 보여 다크 카드가 튀므로 한 가지로 고정한다 (이슈 #221)
     val card: @Composable () -> Unit = {
-        if (style == 0) {
-            ShareCardView(run, zones, route = if (hidesRoute) null else trimmed, weeklySummary = weeklySummary)
-        } else {
-            PhotoCardView(run, photo)
+        ForceLightScheme {
+            if (style == 0) {
+                ShareCardView(
+                    run, detail, route = if (hidesRoute) null else trimmed,
+                    weeklySummary = weeklySummary, showsTime = showsTime,
+                )
+            } else {
+                PhotoCardView(run, photo, showsTime = showsTime)
+            }
         }
     }
 
@@ -1068,6 +1079,32 @@ private fun ShareSheet(
                         Modifier.widthIn(max = 190.dp),
                     )
                 }
+            }
+
+            // 날짜 줄은 두 카드 모두에 있어 스타일과 무관하게 보인다
+            // 분 단위 시각 표시 토글 — 끄면 "아침·저녁" 같은 시간대로 흐린다 (이슈 #191·#221)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .toggleable(showsTime, role = Role.Switch) { showsTime = it }
+                    .padding(horizontal = 40.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("시각 표시", style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = RR.text)
+                    Text(
+                        if (showsTime) "시작~종료 시각이 보여요" else "아침·저녁처럼 시간대만 보여요",
+                        style = TextStyle(fontSize = 11.5.sp), color = RR.text3,
+                    )
+                }
+                Switch(
+                    checked = showsTime, onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = RR.onBrand, checkedTrackColor = RR.brand,
+                        uncheckedThumbColor = RR.surface, uncheckedTrackColor = RR.barFill, uncheckedBorderColor = RR.line,
+                    ),
+                )
             }
 
             // 미리보기 — 360×640 카드를 0.52배로 줄여 보인다
