@@ -17,9 +17,10 @@ struct FlyoverEngineTests {
         }
     }
 
-    @Test("키프레임 — duration 합이 재생 길이(18초)와 같다")
+    @Test("키프레임 — duration 합이 재생 길이(3km → 18초)와 같다")
     func durationsSumToPlayback() throws {
-        let track = try #require(FlyoverEngine.track(route()))
+        // 재생 길이 = 3km × 6초/km = 18초
+        let track = try #require(FlyoverEngine.track(route(), distanceM: 3_000))
         let keyframes = FlyoverEngine.keyframes(track)
         #expect(keyframes.count == FlyoverEngine.keyframeCount + 1)
         #expect(keyframes[0].durationSec == 0)
@@ -29,8 +30,8 @@ struct FlyoverEngineTests {
     @Test("키프레임 — 빨리 달린 구간이 짧은 duration을 받는다")
     func fastSegmentsAreShorter() throws {
         // 거리 4등분 → 10·20·30구간 지점의 경과 200·400·800·1,200초
-        // duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
-        let track = try #require(FlyoverEngine.track(route()))
+        // 재생 길이 3km × 6 = 18초. duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
+        let track = try #require(FlyoverEngine.track(route(), distanceM: 3_000))
         let durations = FlyoverEngine.keyframes(track, count: 4).map(\.durationSec)
         let expected: [Double] = [0, 3, 3, 6, 6]
         for (d, e) in zip(durations, expected) { #expect(abs(d - e) < 1e-9) }
@@ -95,5 +96,24 @@ struct FlyoverEngineTests {
     func tooFewPoints() {
         #expect(FlyoverEngine.track(Array(route().prefix(19))) == nil)
         #expect(FlyoverEngine.track(Array(route().prefix(20))) != nil)
+    }
+
+    @Test("재생 길이 — km당 6초, 15~60초로 묶는다")
+    func playbackLengthByDistance() {
+        // 1km → 6초지만 최소 15초, 5km → 30초, 20km → 120초지만 최대 60초
+        #expect(FlyoverEngine.playbackSec(distanceM: 1_000) == 15)
+        #expect(FlyoverEngine.playbackSec(distanceM: 5_000) == 30)
+        #expect(FlyoverEngine.playbackSec(distanceM: 20_000) == 60)
+    }
+
+    @Test("지나온 꼬리 — 현재 위치에서 경로 거리 500m 뒤 점부터 시작한다")
+    func trailStartsWithinTrailDistance() throws {
+        // 4km로 맞추면 점 간격 100m. t=31/60 → 경과 620초 = 앞 20구간(400초) + 뒤 5.5구간 → 2,550m 지점
+        // 꼬리 시작 = 2,050m가 놓인 구간의 앞 점 = 2,000m 지점 = 20번째 점
+        let track = try #require(FlyoverEngine.track(route(), distanceM: 4_000))
+        let frame = FlyoverEngine.frame(track, progress: 31.0 / 60)
+        #expect(abs(frame.distanceM - 2_550) < 1e-6)
+        #expect(frame.trailStart == 20)
+        #expect(FlyoverEngine.frame(track, progress: 0).trailStart == 0)
     }
 }

@@ -57,7 +57,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
-/// 앱 안 경로 플라이오버 재생 (이슈 #224, iOS `RouteFlyoverScreen.swift`) — 기울인 지도 위를 카메라가 경로를 따라 18초 동안 날아간다.
+/// 앱 안 경로 플라이오버 재생 (이슈 #224, #232, iOS `RouteFlyoverScreen.swift`) — 기울인 지도 위를 카메라가 경로를 따라 거리 비례 길이(km당 6초, 15~60초)로 날아간다.
 /// (Android: Google 지도에는 iOS `mapCameraKeyframeAnimator`가 없어 키프레임마다 `CameraPositionState.animate`를
 ///  이어 부른다. 3D 지형(`elevation: .realistic`)도 없어 기울기 + 3D 건물만 쓴다 — docs/parity.md)
 /// 점·지나온 경로·HUD는 같은 재생 시계(withFrameNanos)에서 그린다. 키프레임 배치·보간은 `FlyoverEngine`이 정한다.
@@ -87,7 +87,7 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
             val start = withFrameNanos { it }
             while (progress < 1) {
                 val now = withFrameNanos { it }
-                progress = (now - start) / 1e9 / FlyoverEngine.playbackSec
+                progress = (now - start) / 1e9 / track.playbackSec
             }
         }
         playing = false
@@ -100,7 +100,8 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = camera,
-            properties = MapProperties(isBuildingEnabled = true),
+            // muted 지도 스타일(iOS)은 Google 지도에 없다 — 건물을 끄고 경로를 굵게·흰 테두리로 도드라지게 (#232)
+            properties = MapProperties(isBuildingEnabled = false),
             uiSettings = MapUiSettings(
                 compassEnabled = false, indoorLevelPickerEnabled = false, mapToolbarEnabled = false,
                 myLocationButtonEnabled = false, zoomControlsEnabled = false,
@@ -110,19 +111,24 @@ fun RouteFlyoverScreen(track: FlyoverEngine.Track, onClose: () -> Unit) {
             ),
             onMapLoaded = { mapLoaded = true },
         ) {
+            val passed = points.take(frame.passedCount) + here
             Polyline(
-                points = points, color = RR.brand.copy(alpha = 0.3f), width = with(density) { 4.dp.toPx() },
+                points = points, color = RR.brand.copy(alpha = 0.35f), width = with(density) { 6.dp.toPx() },
                 startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND,
             )
-            // 지나온 경로 — #222 RoutePaceEngine 머지 후 페이스 색 구간(Polyline 여러 개)으로 교체한다
+            // 지나온 경로 — 흰 테두리(halo) 위에 브랜드 색. #222 RoutePaceEngine 머지 후 페이스 색 구간(Polyline 여러 개)으로 교체한다
             Polyline(
-                points = points.take(frame.passedCount) + here, color = RR.brand, width = with(density) { 5.dp.toPx() },
-                startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND,
+                points = passed, color = RR.onBrand, width = with(density) { 10.dp.toPx() },
+                startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND, zIndex = 1f,
+            )
+            Polyline(
+                points = passed, color = RR.brand, width = with(density) { 6.dp.toPx() },
+                startCap = RoundCap(), endCap = RoundCap(), jointType = JointType.ROUND, zIndex = 2f,
             )
             // 현재 위치 점 — 반지름은 m 단위라 카메라 줌(17)에서 iOS 16pt 점과 비슷한 크기로 맞췄다
             Circle(
-                center = here, radius = 7.0, fillColor = RR.brand, strokeColor = RR.onBrand,
-                strokeWidth = with(density) { 3.dp.toPx() },
+                center = here, radius = 8.0, fillColor = RR.brand, strokeColor = RR.onBrand,
+                strokeWidth = with(density) { 3.dp.toPx() }, zIndex = 3f,
             )
         }
 

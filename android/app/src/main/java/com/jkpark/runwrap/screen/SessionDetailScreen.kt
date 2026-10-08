@@ -283,7 +283,6 @@ fun SessionDetailScreen(
                     MapHeader(
                         run = run, route = routePoints, splitCount = detail?.splits?.size ?: 0, isLoading = isLoading, loadFailed = loadFailed,
                         consentRequired = routeConsentRequired, onConsent = { routeConsent.launch(run.id) },
-                        onFlyover = if (canFlyover) ({ showsFlyover = true }) else null,
                     )
                 }
 
@@ -293,6 +292,8 @@ fun SessionDetailScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(run.displayTitle(zone), style = RR.display(27.sp), color = RR.text)
                             if (run.isIndoor) IndoorBadge()
+                            Spacer(Modifier.weight(1f))
+                            if (canFlyover) FlyoverButton(onClick = { showsFlyover = true })
                         }
                     }
 
@@ -479,7 +480,6 @@ private fun MapHeader(
     loadFailed: Boolean,
     consentRequired: Boolean,
     onConsent: () -> Unit,
-    onFlyover: (() -> Unit)?,
 ) {
     Box(Modifier.fillMaxWidth().height(320.dp)) {
         if (route.size >= 2 && BuildConfig.MAPS_API_KEY.isNotEmpty()) {
@@ -532,24 +532,24 @@ private fun MapHeader(
             )
         }
 
-        // 경로 플라이오버 진입 (이슈 #224) — 거리 배지와 같은 오버레이 스타일
-        if (onFlyover != null) {
-            Row(
-                Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(14.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .clickable(role = Role.Button, onClick = onFlyover)
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .minimumInteractiveComponentSize()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(RRIcons.named("play.fill"), null, Modifier.size(12.dp), tint = Color.White)
-                Text("플라이오버", style = TextStyle(fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold), color = Color.White)
-            }
-        }
+    }
+}
+
+/// 제목 옆 플라이오버 진입 — 지도 위에 얹었더니 눈에 띄지 않아 제목 줄로 옮기고 이름도 풀어 썼다 (#232)
+@Composable
+private fun FlyoverButton(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .clip(CircleShape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .background(RR.brandSoft)
+            .minimumInteractiveComponentSize()
+            .padding(horizontal = 11.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(RRIcons.named("play.fill"), null, Modifier.size(12.dp), tint = RR.brand)
+        Text("내 코스 동영상", style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold), color = RR.brand)
     }
 }
 

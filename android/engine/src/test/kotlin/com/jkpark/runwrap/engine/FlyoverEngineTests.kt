@@ -28,9 +28,10 @@ class FlyoverEngineTests {
     }
 
     @Test
-    @DisplayName("키프레임 — duration 합이 재생 길이(18초)와 같다")
+    @DisplayName("키프레임 — duration 합이 재생 길이(3km → 18초)와 같다")
     fun durationsSumToPlayback() {
-        val keyframes = FlyoverEngine.keyframes(assertNotNull(FlyoverEngine.track(route())))
+        // 재생 길이 = 3km × 6초/km = 18초
+        val keyframes = FlyoverEngine.keyframes(assertNotNull(FlyoverEngine.track(route(), distanceM = 3_000.0)))
         assertEquals(FlyoverEngine.keyframeCount + 1, keyframes.size)
         assertEquals(0.0, keyframes[0].durationSec)
         assertEquals(18.0, keyframes.sumOf { it.durationSec }, 1e-9)
@@ -40,8 +41,8 @@ class FlyoverEngineTests {
     @DisplayName("키프레임 — 빨리 달린 구간이 짧은 duration을 받는다")
     fun fastSegmentsAreShorter() {
         // 거리 4등분 → 10·20·30구간 지점의 경과 200·400·800·1,200초
-        // duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
-        val track = assertNotNull(FlyoverEngine.track(route()))
+        // 재생 길이 3km × 6 = 18초. duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
+        val track = assertNotNull(FlyoverEngine.track(route(), distanceM = 3_000.0))
         val durations = FlyoverEngine.keyframes(track, count = 4).map { it.durationSec }
         listOf(0.0, 3.0, 3.0, 6.0, 6.0).zip(durations).forEach { (e, d) -> assertEquals(e, d, 1e-9) }
     }
@@ -112,5 +113,26 @@ class FlyoverEngineTests {
     fun tooFewPoints() {
         assertNull(FlyoverEngine.track(route().take(19)))
         assertNotNull(FlyoverEngine.track(route().take(20)))
+    }
+
+    @Test
+    @DisplayName("재생 길이 — km당 6초, 15~60초로 묶는다")
+    fun playbackLengthByDistance() {
+        // 1km → 6초지만 최소 15초, 5km → 30초, 20km → 120초지만 최대 60초
+        assertEquals(15.0, FlyoverEngine.playbackSec(1_000.0), 1e-9)
+        assertEquals(30.0, FlyoverEngine.playbackSec(5_000.0), 1e-9)
+        assertEquals(60.0, FlyoverEngine.playbackSec(20_000.0), 1e-9)
+    }
+
+    @Test
+    @DisplayName("지나온 꼬리 — 현재 위치에서 경로 거리 500m 뒤 점부터 시작한다")
+    fun trailStartsWithinTrailDistance() {
+        // 4km로 맞추면 점 간격 100m. t=31/60 → 경과 620초 = 앞 20구간(400초) + 뒤 5.5구간 → 2,550m 지점
+        // 꼬리 시작 = 2,050m가 놓인 구간의 앞 점 = 2,000m 지점 = 20번째 점
+        val track = assertNotNull(FlyoverEngine.track(route(), distanceM = 4_000.0))
+        val frame = FlyoverEngine.frame(track, 31.0 / 60)
+        assertEquals(2_550.0, frame.distanceM, 1e-6)
+        assertEquals(20, frame.trailStart)
+        assertEquals(0, FlyoverEngine.frame(track, 0.0).trailStart)
     }
 }
