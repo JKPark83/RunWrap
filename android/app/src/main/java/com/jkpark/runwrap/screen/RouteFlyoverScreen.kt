@@ -162,7 +162,6 @@ private const val cameraPitch = 60f
 private fun cameraAt(k: FlyoverEngine.Keyframe): CameraPosition =
     CameraPosition(LatLng(k.lat, k.lon), 17f, cameraPitch, (((k.headingDeg % 360) + 360) % 360).toFloat())
 
-@Composable
 private val speeds = listOf(0.5, 1.0, 2.0)
 
 @Composable
