@@ -15,9 +15,6 @@ struct RecapScreen: View {
     @AppStorage(ProfileKey.restingHRManual) private var restingHRManual = 0
     @AppStorage(ProfileKey.hrZoneMethod) private var hrZoneMethodRaw = ""
     @Environment(\.dismiss) private var dismiss
-    /// 공유 이미지가 화면과 같은 모드로 그려지도록 명시적으로 주입한다 (ShareSheetView와 같다)
-    @Environment(\.colorScheme) private var colorScheme
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     @State private var saveMessage: String?
@@ -303,8 +300,9 @@ struct RecapScreen: View {
     }
 
     private func save(_ recap: Recap) async {
+        // 세션 공유 카드와 같이 기기 모드와 무관하게 라이트로 저장한다 (이슈 #221)
         let card = RecapShareCardView(recap: recap)
-            .environment(\.colorScheme, colorScheme)
+            .environment(\.colorScheme, .light)
         guard let image = ShareCardRenderer.render(card) else {
             saveMessage = "이미지를 만들지 못했어요 — 잠시 후 다시 시도해 주세요"
             return

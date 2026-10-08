@@ -53,4 +53,42 @@ struct ShareSummaryTests {
         #expect(ShareSummary.weeklyLine(runs: [], sessionStart: session.start,
                                         now: now, calendar: calendar) == nil)
     }
+
+    // MARK: - 구간 페이스 표 (이슈 #221)
+
+    @Test("구간 표 — 10구간 이하는 1km마다 한 줄, 가장 빠른 구간 하나만 강조")
+    func splitRowsPerKm() {
+        let rows = ShareSummary.splitRows(paces: [340, 330, 330, 350, 360])
+        #expect(rows.map(\.label) == ["1km", "2km", "3km", "4km", "5km"])
+        // 2·3km가 330초로 같으면 앞 구간(2km)만 강조
+        #expect(rows.map(\.isFastest) == [false, true, false, false, false])
+        #expect(ShareSummary.splitRows(paces: Array(repeating: 330, count: 10)).count == 10)
+    }
+
+    @Test("구간 표 — 하프(21구간)는 3km씩 묶어 7줄")
+    func splitRowsHalfGrouped() {
+        // 1~20km는 330초, 21km는 300초 → 3km 평균 330초 × 6줄 + 19–21km (330+330+300)/3 = 320초
+        var paces = Array(repeating: 330.0, count: 20)
+        paces.append(300)
+        let rows = ShareSummary.splitRows(paces: paces)
+        #expect(rows.count == 7)
+        #expect(rows.first == .init(label: "1–3km", paceSecPerKm: 330, isFastest: false))
+        #expect(rows.last == .init(label: "19–21km", paceSecPerKm: 320, isFastest: true))
+    }
+
+    @Test("구간 표 — 풀(42구간)은 5km씩 9줄, 마지막은 남은 2km, 묶음 페이스는 평균")
+    func splitRowsFullGrouped() {
+        // 1~5km: 320·330·340·330·330 → 평균 330초
+        let paces = [320.0, 330, 340, 330, 330] + Array(repeating: 350.0, count: 37)
+        let rows = ShareSummary.splitRows(paces: paces)
+        #expect(rows.count == 9)
+        #expect(rows[0] == .init(label: "1–5km", paceSecPerKm: 330, isFastest: true))
+        #expect(rows[8] == .init(label: "41–42km", paceSecPerKm: 350, isFastest: false))
+    }
+
+    @Test("구간 표 — 3구간 미만이면 표를 내지 않는다")
+    func splitRowsTooShort() {
+        #expect(ShareSummary.splitRows(paces: [330, 340]).isEmpty)
+        #expect(ShareSummary.splitRows(paces: []).isEmpty)
+    }
 }

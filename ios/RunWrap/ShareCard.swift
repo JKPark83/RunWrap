@@ -11,10 +11,13 @@ import Photos
 
 struct ShareCardView: View {
     let run: RunSummary
-    var zones: [Double]?
+    /// 세션 상세에서 지연 조회한 값 — 존·케이던스·고도 상승·1km 구간 페이스 (이슈 #221). 없는 항목은 숨긴다
+    var detail: WorkoutDetail?
     var routeImage: UIImage?
     /// "최근 7일 3회 · 24.5 km" — 세션 목록에서 계산해 넘긴다 (기획서 §4.4 주간 요약)
     var weeklySummary: String?
+    /// 날짜 줄에 시작~종료 시각을 적을지 — 끄면 시간대로 흐린다 (이슈 #191·#221)
+    var showsTime = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,23 +25,35 @@ struct ShareCardView: View {
 
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(run.distanceKm.map(Format.km) ?? "—")
-                    .font(.system(size: 62, weight: .heavy, design: .monospaced))
+                    .font(.system(size: 54, weight: .heavy, design: .monospaced))
                     .foregroundStyle(RR.text)
                 Text("km")
-                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundStyle(RR.text3)
             }
-            .padding(.top, 12)
+            .padding(.top, 8)
 
             statRow
-                .padding(.top, 20)
+                .padding(.top, 12)
+            if !extraStats.isEmpty {
+                HStack(spacing: 0) {
+                    ForEach(extraStats, id: \.label) { stat($0.label, $0.value, $0.unit) }
+                    // 3열 정렬 유지 — 빈 칸은 자리만 둔다 (값을 "—"로 채우지 않는다, 이슈 #221)
+                    ForEach(extraStats.count..<3, id: \.self) { _ in
+                        Color.clear.frame(maxWidth: .infinity, maxHeight: 1)
+                    }
+                }
+                .padding(.top, 10)
+            }
 
+            // 구간 표·존 막대가 늘면 지도를 줄여 넘치지 않게 한다 — 남는 높이를 지도가 먼저 가져간다
             Group {
                 if let routeImage {
                     Image(uiImage: routeImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(height: 204)
+                        .frame(maxWidth: .infinity, minHeight: Self.routeHeight(detail: detail),
+                               maxHeight: Self.routeHeight(detail: detail))
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                             .strokeBorder(RR.line))
@@ -47,16 +62,23 @@ struct ShareCardView: View {
                     indoorBlock
                 }
             }
-            .padding(.top, 22)
+            .layoutPriority(1)
+            .padding(.top, 16)
 
-            if let zones {
+            if !splitRows.isEmpty {
+                splitTable
+                    .padding(.top, 14)
+            }
+
+            if let zones = detail?.zones {
                 ZoneBarView(fractions: zones)
-                    .padding(.top, 22)
+                    .padding(.top, 14)
             }
 
             Spacer(minLength: 0)
 
             Divider().overlay(RR.line)
+                .padding(.top, 14)
 
             HStack {
                 Text(weeklySummary ?? "RUNNER REPORT")
@@ -67,7 +89,7 @@ struct ShareCardView: View {
                     .font(.system(size: 13, weight: .heavy))
                     .foregroundStyle(RR.brand)
             }
-            .padding(.top, 16)
+            .padding(.top, 14)
         }
         .padding(28)
         .frame(width: 360, height: 640)
@@ -80,6 +102,63 @@ struct ShareCardView: View {
             stat("시간", Format.duration(run.durationSec), "h:m:s")
             stat("평균 심박", run.avgHeartRate.map { "\(Int($0.rounded()))" } ?? "—", "bpm")
         }
+    }
+
+    /// 케이던스·고도 상승 — 값이 있는 것만 (실내는 고도가 없고, 걸음 수가 없으면 케이던스가 없다)
+    private var extraStats: [(label: String, value: String, unit: String)] {
+        var stats: [(label: String, value: String, unit: String)] = []
+        if let cadence = detail?.cadenceSpm ?? run.cadenceSpm {
+            stats.append(("케이던스", "\(Int(cadence.rounded()))", "spm"))
+        }
+        if let elevation = detail?.elevationM {
+            stats.append(("고도 상승", "\(Int(elevation.rounded()))", "m"))
+        }
+        return stats
+    }
+
+    /// 지도 높이 — 구간 표가 길수록 줄여 640pt 카드 안에 맞춘다 (이슈 #221).
+    /// 지도 스냅샷은 scaledToFill로 깔려 비율이 다르면 경로가 잘리므로 ShareSheetView가 이 높이로 스냅샷을 뜬다.
+    /// 수치는 케이던스 줄·존 막대까지 다 있을 때의 iPhone 17 시뮬레이터 실측(구간 표 한 줄 ≈ 16.5pt)
+    static func routeHeight(detail: WorkoutDetail?) -> CGFloat {
+        let rows = ShareSummary.splitRows(paces: detail?.splits.map(\.paceSecPerKm) ?? []).count
+        guard rows > 0 else { return 204 }
+        return min(204, 194 - 16.5 * CGFloat((rows + 1) / 2))
+    }
+
+    private var splitRows: [ShareSummary.SplitRow] {
+        ShareSummary.splitRows(paces: detail?.splits.map(\.paceSecPerKm) ?? [])
+    }
+
+    /// 구간 페이스 2열 표 — 왼쪽 열을 먼저 채운다. 가장 빠른 구간은 브랜드색 (이슈 #221)
+    private var splitTable: some View {
+        let rows = splitRows
+        let half = (rows.count + 1) / 2
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("구간 페이스")
+                .font(.system(size: 11))
+                .foregroundStyle(RR.text3)
+            HStack(alignment: .top, spacing: 18) {
+                splitColumn(rows[..<half])
+                splitColumn(rows[half...])
+            }
+        }
+    }
+
+    private func splitColumn(_ rows: ArraySlice<ShareSummary.SplitRow>) -> some View {
+        VStack(spacing: 2) {
+            ForEach(rows, id: \.label) { row in
+                HStack {
+                    Text(row.label)
+                        .foregroundStyle(row.isFastest ? RR.brand : RR.text3)
+                    Spacer(minLength: 4)
+                    Text(Format.pace(row.paceSecPerKm))
+                        .fontWeight(row.isFastest ? .heavy : .semibold)
+                        .foregroundStyle(row.isFastest ? RR.brand : RR.text)
+                }
+                .font(.system(size: 11.5, design: .monospaced))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     private func stat(_ label: String, _ value: String, _ unit: String) -> some View {
@@ -113,13 +192,13 @@ struct ShareCardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
-        .frame(height: 204, alignment: .topLeading)
+        .frame(minHeight: 96, maxHeight: 204, alignment: .topLeading)
         .background(RR.surface2, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(RR.line))
     }
 
     private var dateLine: String {
-        RoutePrivacy.cardDateLine(run.start)
+        RoutePrivacy.cardDateLine(run.start, end: showsTime ? run.end : nil)
     }
 }
 
@@ -131,6 +210,8 @@ struct ShareCardView: View {
 struct PhotoCardView: View {
     let run: RunSummary
     var photo: UIImage?
+    /// 날짜 줄에 시작~종료 시각을 적을지 — 미니멀 카드와 같은 토글 (이슈 #221)
+    var showsTime = true
 
     var body: some View {
         ZStack {
@@ -209,7 +290,7 @@ struct PhotoCardView: View {
     }
 
     private var dateLine: String {
-        RoutePrivacy.cardDateLine(run.start)
+        RoutePrivacy.cardDateLine(run.start, end: showsTime ? run.end : nil)
     }
 }
 
@@ -223,6 +304,8 @@ enum RouteSnapshot {
         let options = MKMapSnapshotter.Options()
         options.region = region(for: route)
         options.size = size
+        // 카드가 늘 라이트라 지도 타일·경로 색도 라이트로 고정한다 — 다크 모드 기기에서 어두운 지도가 박히지 않게 (이슈 #221)
+        options.traitCollection = UITraitCollection(userInterfaceStyle: .light)
         guard let snapshot = try? await MKMapSnapshotter(options: options).start() else {
             return nil
         }
@@ -236,7 +319,7 @@ enum RouteSnapshot {
             path.lineWidth = 4.5
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
-            UIColor(RR.brand).setStroke()
+            UIColor(RR.brand).resolvedColor(with: options.traitCollection).setStroke()
             path.stroke()
         }
     }

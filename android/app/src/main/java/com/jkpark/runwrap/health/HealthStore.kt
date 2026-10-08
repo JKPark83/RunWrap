@@ -323,7 +323,8 @@ class HealthStore(context: Context, private val settings: KeyValueStore) {
                           maxHeartRate = bpm.maxOrNull(),
                           calories = kcal,
                           isIndoor = session.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_RUNNING_TREADMILL,
-                          cadenceSpm = cadence)
+                          cadenceSpm = cadence,
+                          end = session.endTime)
     }
 
     // MARK: - 심박존 히스토그램 백필 (기간별 강도 배분, 이슈 #165)

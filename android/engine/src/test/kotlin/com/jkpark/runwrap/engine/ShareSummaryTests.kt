@@ -56,4 +56,43 @@ class ShareSummaryTests {
         assertNull(ShareSummary.weeklyLine(runs = emptyList(), sessionStart = session.start,
                                            now = now, zone = zone))
     }
+
+    // MARK: - 구간 페이스 표 (이슈 #221)
+
+    @Test
+    @DisplayName("구간 표 — 10구간 이하는 1km마다 한 줄, 가장 빠른 구간 하나만 강조")
+    fun splitRowsPerKm() {
+        val rows = ShareSummary.splitRows(listOf(340.0, 330.0, 330.0, 350.0, 360.0))
+        assertEquals(listOf("1km", "2km", "3km", "4km", "5km"), rows.map { it.label })
+        // 2·3km가 330초로 같으면 앞 구간(2km)만 강조
+        assertEquals(listOf(false, true, false, false, false), rows.map { it.isFastest })
+        assertEquals(10, ShareSummary.splitRows(List(10) { 330.0 }).size)
+    }
+
+    @Test
+    @DisplayName("구간 표 — 하프(21구간)는 3km씩 묶어 7줄")
+    fun splitRowsHalfGrouped() {
+        // 1~20km는 330초, 21km는 300초 → 3km 평균 330초 × 6줄 + 19–21km (330+330+300)/3 = 320초
+        val rows = ShareSummary.splitRows(List(20) { 330.0 } + 300.0)
+        assertEquals(7, rows.size)
+        assertEquals(ShareSummary.SplitRow("1–3km", 330.0, false), rows.first())
+        assertEquals(ShareSummary.SplitRow("19–21km", 320.0, true), rows.last())
+    }
+
+    @Test
+    @DisplayName("구간 표 — 풀(42구간)은 5km씩 9줄, 마지막은 남은 2km, 묶음 페이스는 평균")
+    fun splitRowsFullGrouped() {
+        // 1~5km: 320·330·340·330·330 → 평균 330초
+        val rows = ShareSummary.splitRows(listOf(320.0, 330.0, 340.0, 330.0, 330.0) + List(37) { 350.0 })
+        assertEquals(9, rows.size)
+        assertEquals(ShareSummary.SplitRow("1–5km", 330.0, true), rows[0])
+        assertEquals(ShareSummary.SplitRow("41–42km", 350.0, false), rows[8])
+    }
+
+    @Test
+    @DisplayName("구간 표 — 3구간 미만이면 표를 내지 않는다")
+    fun splitRowsTooShort() {
+        assertEquals(emptyList(), ShareSummary.splitRows(listOf(330.0, 340.0)))
+        assertEquals(emptyList(), ShareSummary.splitRows(emptyList()))
+    }
 }

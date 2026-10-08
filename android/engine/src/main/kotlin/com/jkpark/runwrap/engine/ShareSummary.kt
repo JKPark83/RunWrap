@@ -23,4 +23,28 @@ object ShareSummary {
         val label = if (sessionDay == now.atZone(zone).toLocalDate()) "최근 7일" else "그날까지 7일"
         return "$label ${week.size}회 · ${Format.km(km)} km"
     }
+
+    /// 공유 카드 구간 페이스 표의 한 줄 — "3km 5:41" 또는 묶었을 때 "3–4km 5:41" (이슈 #221)
+    data class SplitRow(
+        val label: String,
+        val paceSecPerKm: Double,
+        /// 가장 빠른 줄 — 카드에서 강조한다 (같으면 앞 줄)
+        val isFastest: Boolean,
+    )
+
+    /// 1km 스플릿 페이스 → 카드 표 줄. 9:16 카드에 지도와 함께 2열 × 5줄(`maxRows` 10)까지만 들어가므로
+    /// 그보다 많으면 연속 구간을 ceil(n / maxRows)km씩 묶어 평균 페이스를 적는다 —
+    /// 하프(21구간)는 3km씩 7줄, 풀(42구간)은 5km씩 9줄(마지막은 41–42km). 구간 거리가 같아(1km) 단순 평균이 곧 시간 가중 평균이다.
+    /// 3구간 미만이면 표가 의미 없어 빈 배열 — 세션 상세 스플릿 카드와 같은 가드 (미노출 원칙)
+    fun splitRows(paces: List<Double>, maxRows: Int = 10): List<SplitRow> {
+        if (paces.size < 3 || maxRows <= 0) return emptyList()
+        val size = (paces.size + maxRows - 1) / maxRows
+        val groups = (paces.indices step size).map { start ->
+            val end = minOf(start + size, paces.size)
+            val label = if (end - start == 1) "${start + 1}km" else "${start + 1}–${end}km"
+            label to paces.subList(start, end).sum() / (end - start)
+        }
+        val fastest = groups.indices.minBy { groups[it].second }
+        return groups.mapIndexed { i, (label, pace) -> SplitRow(label, pace, i == fastest) }
+    }
 }

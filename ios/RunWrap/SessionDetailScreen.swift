@@ -119,7 +119,7 @@ struct SessionDetailScreen: View {
         }
         .sheet(isPresented: $showShare) {
             ShareSheetView(run: run,
-                           zones: store.detail?.zones,
+                           detail: store.detail,
                            route: store.detail?.route ?? [],
                            weeklySummary: weeklySummaryLine)
         }
@@ -871,7 +871,8 @@ struct SessionDetailScreen: View {
 /// 스타일 토글 + 카드 미리보기 + 사진 저장(add-only) + 공유 시트
 private struct ShareSheetView: View {
     let run: RunSummary
-    var zones: [Double]?
+    /// 존·케이던스·고도·구간 페이스 재료 — 아직 못 불러왔으면 nil이고 해당 항목은 카드에서 빠진다 (이슈 #221)
+    var detail: WorkoutDetail?
     var route: [CLLocationCoordinate2D]
     var weeklySummary: String?
 
@@ -889,10 +890,10 @@ private struct ShareSheetView: View {
     @AppStorage("share.hidesRoute") private var hidesRoute = false
     /// 양끝을 가릴 반경(300/500/1000m) — 다음 공유 때도 기억한다 (이슈 #191)
     @AppStorage(RoutePrivacy.radiusKey) private var trimRadiusRaw = RoutePrivacy.defaultRadius.rawValue
+    /// 날짜 줄에 시작~종료 시각을 적을지 — 기본 켜짐, 다음 공유 때도 기억한다 (이슈 #221)
+    @AppStorage("share.showsTime") private var showsTime = true
     @State private var rendered: UIImage?
     @State private var saveMessage: String?
-    /// 미리보기와 렌더 이미지가 같은 모드로 그려지도록 명시적으로 주입한다
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 16) {
@@ -914,6 +915,9 @@ private struct ShareSheetView: View {
                 radiusRow
                     .padding(.horizontal, 40)
             }
+            // 날짜 줄은 두 카드 모두에 있어 스타일과 무관하게 보인다
+            showsTimeRow
+                .padding(.horizontal, 40)
 
             cardPreview
                 .padding(.top, 4)
@@ -942,13 +946,13 @@ private struct ShareSheetView: View {
         .background(RR.bg.ignoresSafeArea())
         .presentationDragIndicator(.visible)
         // 시트를 연 뒤 경로가 채워져도 다시 만들도록 route.count를 id로 건다 (이슈 #84)
-        // 가림 반경이 바뀌어도 다시 그린다 (이슈 #191)
-        .task(id: "\(route.count)-\(trimRadiusRaw)") {
+        // 가림 반경이 바뀌어도 다시 그린다 (이슈 #191). 카드 지도 높이와 같은 비율로 떠야 경로가 잘리지 않는다 (이슈 #221)
+        .task(id: "\(route.count)-\(trimRadiusRaw)-\(ShareCardView.routeHeight(detail: detail))") {
             guard route.count >= 2 else { return }
             routeImage = nil
             // 집 근처가 드러나지 않게 시작·끝을 선택한 반경만큼 잘라낸 경로만 그린다 (이슈 #84·#191)
             let image = await RouteSnapshot.image(route: RoutePrivacy.trimmed(route, meters: radius.meters),
-                                                  size: CGSize(width: 360, height: 240))
+                                                  size: CGSize(width: 304, height: ShareCardView.routeHeight(detail: detail)))
             // 스냅샷은 취소를 무시하고 끝나므로, 반경이 바뀐 뒤 늦게 온 옛 반경 이미지를 버린다
             guard !Task.isCancelled else { return }
             routeImage = image
@@ -967,9 +971,9 @@ private struct ShareSheetView: View {
         }
     }
 
-    /// 스타일·사진·경로 이미지·경로 숨김·가림 반경이 바뀔 때만 다시 렌더한다
+    /// 스타일·사진·경로 이미지·경로 숨김·가림 반경·시각 표시·상세 로드가 바뀔 때만 다시 렌더한다
     private var renderKey: String {
-        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)-\(hidesRoute)-\(trimRadiusRaw)"
+        "\(style.rawValue)-\(photoVersion)-\(routeImage != nil)-\(hidesRoute)-\(trimRadiusRaw)-\(showsTime)-\(detail != nil)"
     }
 
     private var radius: RoutePrivacy.Radius {
@@ -1010,19 +1014,40 @@ private struct ShareSheetView: View {
         .opacity(hidesRoute ? 0.5 : 1)
     }
 
+    /// 분 단위 시각 표시 토글 — 끄면 "아침·저녁" 같은 시간대로 흐린다 (이슈 #191·#221)
+    private var showsTimeRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("시각 표시")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(RR.text)
+                Text(showsTime ? "시작~종료 시각이 보여요" : "아침·저녁처럼 시간대만 보여요")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(RR.text3)
+            }
+            Spacer(minLength: 8)
+            Toggle("시각 표시", isOn: $showsTime)
+                .labelsHidden()
+                .tint(RR.brand)
+        }
+    }
+
+    /// 미리보기와 저장 이미지 공통 — 기기 모드와 무관하게 늘 라이트로 그린다.
+    /// 스토리는 남의 피드에 섞여 보여 다크 카드가 튀므로 한 가지로 고정한다 (이슈 #221)
     @ViewBuilder
     private var currentCard: some View {
         Group {
             switch style {
             case .minimal:
-                ShareCardView(run: run, zones: zones,
+                ShareCardView(run: run, detail: detail,
                               routeImage: hidesRoute ? nil : routeImage,
-                              weeklySummary: weeklySummary)
+                              weeklySummary: weeklySummary,
+                              showsTime: showsTime)
             case .photo:
-                PhotoCardView(run: run, photo: photo)
+                PhotoCardView(run: run, photo: photo, showsTime: showsTime)
             }
         }
-        .environment(\.colorScheme, colorScheme)
+        .environment(\.colorScheme, .light)
     }
 
     private var cardPreview: some View {

@@ -151,4 +151,23 @@ class RoutePrivacyTests {
         val date = kstDate("2026-09-30T06:10:00+09:00")
         assertEquals("2026.09.30 (수) 아침", RoutePrivacy.cardDateLine(date, zone = kst))
     }
+
+    @Test
+    @DisplayName("카드 날짜 줄 — 시각 표시를 켜면 시작~종료 시각")
+    fun cardDateLineShowsTime() {
+        // 06:12 출발 · 53분 뒤 07:05 종료
+        val start = kstDate("2026-09-30T06:12:00+09:00")
+        val end = kstDate("2026-09-30T07:05:00+09:00")
+        assertEquals("2026.09.30 (수) 06:12~07:05", RoutePrivacy.cardDateLine(start, end, zone = kst))
+        // 끄면(end 없음) 예전처럼 시간대만
+        assertEquals("2026.09.30 (수) 아침", RoutePrivacy.cardDateLine(start, zone = kst))
+    }
+
+    @Test
+    @DisplayName("카드 날짜 줄 — 자정을 넘긴 러닝은 시작일만 적고 시각은 24시간제로")
+    fun cardDateLineAcrossMidnight() {
+        val start = kstDate("2026-09-30T23:40:00+09:00")
+        val end = kstDate("2026-10-01T00:25:00+09:00")
+        assertEquals("2026.09.30 (수) 23:40~00:25", RoutePrivacy.cardDateLine(start, end, zone = kst))
+    }
 }
