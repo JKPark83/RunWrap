@@ -1,8 +1,11 @@
 package com.jkpark.runwrap.engine
 
+import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -54,6 +57,19 @@ class DemoSyntheticTests {
         assertEquals(second.splits.map { it.paceSecPerKm }, first.splits.map { it.paceSecPerKm })
         assertEquals(second.zones, first.zones)
         assertEquals(second.cadenceSpm, first.cadenceSpm)
+    }
+
+    @Test
+    @DisplayName("고도 프로필 — 합성 경로의 오르내림 폭이 상승 고도와 맞는다")
+    fun syntheticElevationMatchesAscent() {
+        // 한 번 오르고 내리는 언덕이라 프로필 최고 − 최저 ≈ 상승 고도 (60등분 표본이라 꼭대기 근처 오차 1m 안)
+        val detail = WorkoutDetailStore.synthetic(run(), heartRate = profile)
+        val elevations = assertNotNull(RoutePaceEngine.elevationProfile(detail.route)).map { it.elevationM }
+        val ascent = assertNotNull(detail.elevationM)
+        assertTrue(abs((elevations.max() - elevations.min()) - ascent) < 1)
+        // 실내 세션은 경로가 없어 프로필도 없다
+        assertNull(RoutePaceEngine.elevationProfile(
+            WorkoutDetailStore.synthetic(run(indoor = true), heartRate = profile).route))
     }
 
     @Test

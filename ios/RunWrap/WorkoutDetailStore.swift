@@ -13,6 +13,8 @@ struct WorkoutDetail {
 
     /// 경로 원본 — 솎지 않은 전체 점(시각·고도·속도 포함). 솎기는 표시 직전에 한다 (#222)
     var route: [TrackPoint] = []
+    /// 심박 샘플(시각 오름차순) — 존 계산에 쓴 것을 GPX 내보내기가 재사용한다 (추가 쿼리 없음, 이슈 #222)
+    var heartRateSamples: [(time: Date, bpm: Double)] = []
     var splits: [Split] = []
     var zones: [Double]?          // Z1~Z5 비율 (합 1)
     var cadenceSpm: Double?
@@ -149,6 +151,7 @@ final class WorkoutDetailStore: ObservableObject {
             let points = hrSamples.map {
                 (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
             }
+            detail.heartRateSamples = points
             detail.zones = TrainingGuideEngine.heartRateZones(samples: points, profile: heartRate)
             detail.heartRate = heartRate
             detail.maxHeartRateBpm = TrainingGuideEngine.sessionPeakBpm(points.map(\.bpm))
@@ -423,7 +426,15 @@ final class WorkoutDetailStore: ObservableObject {
         detail.strideLengthM = dynamics.strideM
         detail.runningPowerW = dynamics.powerW
         if !run.isIndoor {
-            detail.elevationM = 30 + rng.unit() * 70
+            let ascent = 30 + rng.unit() * 70
+            detail.elevationM = ascent
+            // 고도 프로필 합성 — 한 번 오르고 내리는 언덕(오르내림 폭 = 상승 고도). rng를 쓰지 않아 재현성 유지 (이슈 #222)
+            let last = Double(max(detail.route.count - 1, 1))
+            detail.route = detail.route.enumerated().map { i, p in
+                TrackPoint(lat: p.lat, lon: p.lon, time: p.time,
+                           elevationM: 12 + ascent * (1 - cos(Double(i) / last * 2 * .pi)) / 2,
+                           horizontalAccuracyM: p.horizontalAccuracyM, speedMps: p.speedMps)
+            }
         }
 
         // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다

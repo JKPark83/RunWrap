@@ -12,6 +12,8 @@ import kotlin.math.sqrt
 data class WorkoutDetail(
     /// 경로 원본 — 솎지 않은 전체 점(시각·고도·속도 포함). 솎기는 표시 직전에 한다 (#222)
     val route: List<TrackPoint> = emptyList(),
+    /// 심박 샘플(시각 오름차순) — 존 계산에 쓴 것을 GPX 내보내기가 재사용한다 (추가 쿼리 없음, 이슈 #222)
+    val heartRateSamples: List<TrainingGuideEngine.HeartRateSample> = emptyList(),
     val splits: List<Split> = emptyList(),
     val zones: List<Double>? = null,          // Z1~Z5 비율 (합 1)
     val cadenceSpm: Double? = null,
@@ -138,7 +140,15 @@ object WorkoutDetailStore {
                              strideLengthM = dynamics.strideM,
                              runningPowerW = dynamics.powerW)
         if (!run.isIndoor) {
-            detail = detail.copy(elevationM = 30 + rng.unit() * 70)
+            val ascent = 30 + rng.unit() * 70
+            // 고도 프로필 합성 — 한 번 오르고 내리는 언덕(오르내림 폭 = 상승 고도). rng를 쓰지 않아 재현성 유지 (이슈 #222)
+            val last = maxOf(detail.route.size - 1, 1).toDouble()
+            detail = detail.copy(
+                elevationM = ascent,
+                route = detail.route.mapIndexed { i, p ->
+                    p.copy(elevationM = 12 + ascent * (1 - cos(i / last * 2 * PI)) / 2)
+                },
+            )
         }
 
         // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다

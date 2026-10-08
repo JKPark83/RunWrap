@@ -43,11 +43,14 @@ object RoutePrivacy {
     /// 거리는 직선 반경이 아니라 경로를 따라 쌓은 누적 거리다 (`CLLocation.distance(from:)`).
     /// (Android: CoreLocation이 없어 반지름 6,371km 하버사인으로 잰다 — 차이는 ±0.5% 안이고,
     /// iOS 테스트도 경계에 좌표가 걸리지 않게 간격을 골라 둔다)
-    fun trimmed(route: List<GeoPoint>, meters: Double = 300.0): List<GeoPoint> {
+    fun trimmed(route: List<GeoPoint>, meters: Double = 300.0): List<GeoPoint> = trimmed(route, meters) { it }
+
+    /// 좌표 외 값(시각·고도)을 지닌 점도 같은 규칙으로 자른다 — GPX 내보내기의 "시작·끝 가리기" (이슈 #222)
+    fun <P> trimmed(route: List<P>, meters: Double, coordinate: (P) -> GeoPoint): List<P> {
         if (route.size < 2) return emptyList()
         val cumulative = DoubleArray(route.size)
         for (i in 1 until route.size) {
-            cumulative[i] = cumulative[i - 1] + haversineMeters(route[i - 1], route[i])
+            cumulative[i] = cumulative[i - 1] + haversineMeters(coordinate(route[i - 1]), coordinate(route[i]))
         }
         val total = cumulative[route.size - 1]
         val kept = route.indices

@@ -25,6 +25,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,8 +52,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jkpark.runwrap.engine.Format
 import com.jkpark.runwrap.engine.GeoPoint
+import com.jkpark.runwrap.engine.RoutePaceEngine
 import com.jkpark.runwrap.engine.RoutePrivacy
 import com.jkpark.runwrap.engine.RunSummary
+import com.jkpark.runwrap.engine.TrackPoint
 import com.jkpark.runwrap.engine.swiftRoundedInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -79,7 +82,7 @@ import kotlin.math.tan
 fun ShareCardView(
     run: RunSummary,
     zones: List<Double>? = null,
-    route: List<GeoPoint>? = null,
+    route: List<TrackPoint>? = null,
     /// "최근 7일 3회 · 24.5 km" — 세션 목록에서 계산해 넘긴다 (기획서 §4.4 주간 요약)
     weeklySummary: String? = null,
 ) = FixedFontScale {
@@ -175,25 +178,33 @@ private fun RowScope.Stat(label: String, value: String, unit: String, white: Boo
 /// 경로만 그린 정적 지도 대용 — iOS 스냅샷 크기(360×240, 세션 상세 호출부)의 좌표계에
 /// `RouteSnapshot.region`을 메르카토르로 맞춘 뒤, 블록에 scaledToFill로 채운다
 @Composable
-private fun RouteCanvas(route: List<GeoPoint>, modifier: Modifier) {
-    val brand = RR.brand
+/// 지도 헤더와 같은 페이스 색 구간으로 그린다 — 구간을 못 내면(표본 부족) 단색 brand (이슈 #222)
+private fun RouteCanvas(route: List<TrackPoint>, modifier: Modifier) {
+    val pieces = RoutePaceEngine.segments(route)?.map { it.points to it.color } ?: listOf(route to RR.brand)
     Canvas(modifier) {
         val fill = max(size.width / 360f, size.height / 240f)   // 스냅샷 1pt당 px
-        val region = RouteSnapshot.region(route)
+        val region = RouteSnapshot.region(route.map { GeoPoint(it.lat, it.lon) })
         fun mercY(lat: Double) = ln(tan(PI / 4 + Math.toRadians(lat) / 2))
         val cy = mercY(region.centerLat)
         val spanX = Math.toRadians(region.lonDelta)
         val spanY = mercY(region.centerLat + region.latDelta / 2) - mercY(region.centerLat - region.latDelta / 2)
         val k = min(360 / spanX, 240 / spanY) * fill   // 라디안당 px — 영역 전체가 보이게 맞춘다
-        val path = Path()
-        route.forEachIndexed { i, p ->
-            val x = size.width / 2 + (Math.toRadians(p.lon - region.centerLon) * k).toFloat()
-            val y = size.height / 2 - ((mercY(p.lat) - cy) * k).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        for ((points, color) in pieces) {
+            val path = Path()
+            points.forEachIndexed { i, p ->
+                val x = size.width / 2 + (Math.toRadians(p.lon - region.centerLon) * k).toFloat()
+                val y = size.height / 2 - ((mercY(p.lat) - cy) * k).toFloat()
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, color, style = Stroke(4.5f * fill, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
-        drawPath(path, brand, style = Stroke(4.5f * fill, cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
+
+/// 페이스 색 경로 구간 색 — 판정 불가(정확도 부족, tone nil)는 회색 (이슈 #222).
+/// (iOS는 Theme.swift가 위젯 타깃에도 컴파일돼 공유 카드 파일에 둔다 — 같은 자리를 따른다)
+val RoutePaceEngine.Segment.color: Color
+    @Composable @ReadOnlyComposable get() = tone?.color ?: RR.text3
 
 // MARK: - 사진 배경형 카드
 

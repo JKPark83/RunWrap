@@ -43,6 +43,7 @@ HEALTH DATA (5.1.3)
 4. Race poster images from the external URLs in that JSON (organizer sites or news/portal image hosts).
 5. iCloud (CloudKit private DB): one progress snapshot (level, goals, growth stage, bird collection, hand-entered race results) to survive reinstall. No health data; developer cannot read it; skipped without iCloud sign-in.
 6. Apple Maps (MapKit) tiles.
+- GPX export (session detail → "GPX 파일로 내보내기"): only when the user requests it, the app writes that one run's route/time/elevation/heart rate to a GPX file and hands it to the iOS share sheet. The app sends it nowhere itself; the user picks the destination.
 - No analytics, no ads, no third-party dependencies.
 
 MEDICAL DISCLAIMER (1.4.1)
@@ -96,6 +97,9 @@ Korean-only by design (Korean runners and races). iPhone only, portrait, iOS 17.
 대회 목록(raw.githubusercontent.com), 대회 이미지(대회 JSON의 외부 이미지 URL — 주최측·언론사·포털 CDN), iCloud 진행도
 백업(CloudKit 개인 DB, 건강 데이터 없음), Apple 지도 타일이 전부이고, 어느 것도 건강 데이터를
 싣지 않습니다. 분석 SDK·광고·외부 의존성 없음.
+
+**GPX 내보내기** — 세션 상세의 "GPX 파일로 내보내기"를 누를 때만(사용자가 요청할 때만 GPX 파일로 내보냄) 그 러닝 1건의
+경로·시각·고도·심박을 GPX 파일로 만들어 iOS 공유 시트에 넘깁니다. 앱이 직접 전송하지 않고, 받을 앱은 사용자가 고릅니다.
 
 **캘린더(쓰기 전용)** — 대회 상세의 "캘린더에 추가"를 누를 때만 요청하며, 그 대회 1건을 이벤트로 저장합니다.
 기존 일정은 읽지 않고, 거부하면 설정에서 허용하라는 안내만 뜹니다.

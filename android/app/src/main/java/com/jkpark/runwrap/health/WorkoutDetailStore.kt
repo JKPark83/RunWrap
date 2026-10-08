@@ -162,6 +162,7 @@ class WorkoutDetailStore(context: Context, private val settings: KeyValueStore) 
 
         return WorkoutDetail(
             route = route,
+            heartRateSamples = hrSamples,
             splits = ActiveTimeline.splits(distanceSamples, pauses).map { WorkoutDetail.Split(it.index, it.paceSecPerKm) },
             zones = if (hrSamples.isEmpty()) null else TrainingGuideEngine.heartRateZones(hrSamples, heartRate),
             cadenceSpm = if (steps != null && durationSec > 60) steps.toDouble() / (durationSec / 60) else null,
