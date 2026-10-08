@@ -52,6 +52,8 @@ struct SessionDetailScreen: View {
                                 .font(RR.display(27))
                                 .foregroundStyle(RR.text)
                             if run.isIndoor { IndoorBadge() }
+                            Spacer(minLength: 0)
+                            if flyoverTrack != nil { flyoverButton }
                         }
                     }
 
@@ -230,37 +232,29 @@ struct SessionDetailScreen: View {
                     .padding(14)
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            // 플라이오버 화면과 같은 가드 — 경로가 없거나 점이 너무 적거나(20점 미만) 거리·시간이 0이면
-            // 진입하지 않는다. 버튼만 따로 거르면 닫기 버튼도 없는 빈 fullScreenCover에 갇힌다 (이슈 #224)
-            if flyoverTrack != nil {
-                flyoverButton
-            }
-        }
     }
 
-    /// 플라이오버 재생 경로 — 진입 버튼과 화면이 같은 값을 본다.
+    /// 플라이오버 재생 경로 — 진입 버튼과 화면이 같은 값을 본다. 경로가 없거나 점이 너무 적거나(20점 미만)
+    /// 거리·시간이 0이면 nil — 버튼만 따로 거르면 닫기 버튼도 없는 빈 fullScreenCover에 갇힌다 (이슈 #224).
     /// 표시용 솎기(~600점)로 충분 — 원본 시각이 남아 있어 시간 비례 재생이 그대로다
     private var flyoverTrack: FlyoverEngine.Track? {
         FlyoverEngine.track(store.detail?.route.thinned() ?? [], distanceM: run.distanceKm.map { $0 * 1_000 })
     }
 
-    /// 지도 오른쪽 아래 플라이오버 진입 — 거리 배지와 같은 지도 위 오버레이 스타일
+    /// 제목 옆 플라이오버 진입 — 지도 위에 얹었더니 눈에 띄지 않아 제목 줄로 옮기고 이름도 풀어 썼다 (#232)
     private var flyoverButton: some View {
         Button {
             showsFlyover = true
         } label: {
-            Label("플라이오버", systemImage: "play.fill")
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.black.opacity(0.5),
-                            in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            Label("내 코스 동영상", systemImage: "play.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(RR.brand)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(RR.brandSoft, in: Capsule())
                 .rrTapTarget()
         }
         .buttonStyle(.plain)
-        .padding(14)
     }
 
     /// 페이스 색 구간마다 MapPolyline을 따로 칠한다 — 구간을 못 내면(표본 부족) 단색 brand.

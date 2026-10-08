@@ -17,8 +17,11 @@ import kotlin.math.sqrt
 object FlyoverEngine {
     /// 이보다 점이 적으면 경로가 너무 성겨 플라이오버를 내지 않는다(진입 버튼 미노출)
     const val minPoints = 20
-    /// 재생 길이(초) — 이슈 #224 "15~20초로 정규화"
-    const val playbackSec = 18.0
+    /// 재생 길이 — 거리 비례(km당 10초), 20~180초 (#232: 고정 18초는 10km에서 초속 550m라 너무 빨랐고,
+    /// km당 6초·최대 60초도 26km에서 초속 430m로 장거리가 여전히 빨랐다 — 실기기 확인)
+    const val playbackSecPerKm = 10.0
+    val playbackSecRange = 20.0..180.0
+    fun playbackSec(distanceM: Double): Double = (distanceM / 1_000 * playbackSecPerKm).coerceIn(playbackSecRange)
     /// 카메라 키프레임 구간 수 — 이슈 #224 "30~60개"
     const val keyframeCount = 40
     /// heading 이동 평균 반폭 — 앞뒤 2개씩 5개 평균 (급커브에서 카메라가 튀지 않게)
@@ -27,6 +30,8 @@ object FlyoverEngine {
     const val paceWindowM = 500.0
     /// 이보다 덜 달렸으면 페이스 표본이 부족해 내지 않는다(null)
     const val minPaceDistanceM = 100.0
+    /// 화면 위 층에 그리는 지나온 꼬리 길이(경로 거리 m) — iOS는 기울인 카메라 뒤쪽 점의 화면 좌표가 튀어 최근 구간만 그린다 (#232)
+    const val trailM = 500.0
 
     /// 카메라 키프레임 — `durationSec`는 직전 키프레임에서 여기까지 걸리는 재생 시간(첫 키프레임은 0)
     data class Keyframe(val lat: Double, val lon: Double, val headingDeg: Double, val durationSec: Double)
@@ -40,12 +45,15 @@ object FlyoverEngine {
         val elapsedSec: Double,
         /// 직전 500m 평균 페이스(초/km) — 100m 미만이면 null
         val paceSecPerKm: Double?,
+        /// 지나온 꼬리(`trailM`)의 첫 경로 점 인덱스 — `trailStart until passedCount` + 현재 위치
+        val trailStart: Int,
     )
 
     /// 누적 거리·경과 시간을 미리 쌓아 둔 경로
     class Track(val points: List<TrackPoint>, val cumulativeM: List<Double>, val elapsedSec: List<Double>) {
         val totalM: Double get() = cumulativeM.last()
         val totalSec: Double get() = elapsedSec.last()
+        val playbackSec: Double get() = playbackSec(totalM)
     }
 
     /// 점이 `minPoints` 미만이거나 거리·시간이 0이면 null — 플라이오버를 내지 않는다.
@@ -67,8 +75,9 @@ object FlyoverEngine {
         return Track(route, scaled, elapsed)
     }
 
-    /// 경로를 거리로 `count` 등분한 `count + 1`개 키프레임. duration 합 = `playbackSec`
-    fun keyframes(track: Track, count: Int = keyframeCount, playbackSec: Double = FlyoverEngine.playbackSec): List<Keyframe> {
+    /// 경로를 거리로 `count` 등분한 `count + 1`개 키프레임. duration 합 = `track.playbackSec`
+    fun keyframes(track: Track, count: Int = keyframeCount): List<Keyframe> {
+        val playbackSec = track.playbackSec
         val stops = (0..count).map { sample(track, track.cumulativeM, track.totalM * it / count) }
         // 방위: 다음 지점을 향한다(마지막은 직전 방향 유지)
         val raw = stops.indices.map { k ->
@@ -96,6 +105,21 @@ object FlyoverEngine {
         }
     }
 
+    /// 재생 경과 시각의 카메라 방위 — 키프레임 사이를 시간으로 선형 보간한다(범위 밖은 양 끝 값).
+    /// 카메라를 매 프레임 점 위치에 직접 놓으므로(#232) 방위도 같은 시계에서 읽는다
+    fun heading(keyframes: List<Keyframe>, atSec: Double): Double {
+        var t = 0.0
+        for (k in 1 until keyframes.size) {
+            val next = t + keyframes[k].durationSec
+            if (atSec < next) {
+                val f = if (keyframes[k].durationSec > 0) max(0.0, atSec - t) / keyframes[k].durationSec else 1.0
+                return keyframes[k - 1].headingDeg + (keyframes[k].headingDeg - keyframes[k - 1].headingDeg) * f
+            }
+            t = next
+        }
+        return keyframes.last().headingDeg
+    }
+
     /// 진행률 t(0~1) → 경로 위 위치. 카메라 키프레임과 같은 시간축(실제 경과 시간 비례)이다
     fun frame(track: Track, progress: Double): Frame {
         val current = sample(track, track.elapsedSec, progress.coerceIn(0.0, 1.0) * track.totalSec)
@@ -104,7 +128,9 @@ object FlyoverEngine {
             val from = sample(track, track.cumulativeM, max(0.0, current.distanceM - paceWindowM))
             pace = (current.elapsedSec - from.elapsedSec) / (current.distanceM - from.distanceM) * 1_000
         }
-        return Frame(current.lat, current.lon, current.passedCount, current.distanceM, current.elapsedSec, pace)
+        val trail = sample(track, track.cumulativeM, max(0.0, current.distanceM - trailM))
+        return Frame(current.lat, current.lon, current.passedCount, current.distanceM, current.elapsedSec, pace,
+                     min(max(0, trail.passedCount - 1), current.passedCount))
     }
 
     // 보간

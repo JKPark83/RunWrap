@@ -8,8 +8,13 @@ import Foundation
 enum FlyoverEngine {
     /// 이보다 점이 적으면 경로가 너무 성겨 플라이오버를 내지 않는다(진입 버튼 미노출)
     static let minPoints = 20
-    /// 재생 길이(초) — 이슈 #224 "15~20초로 정규화"
-    static let playbackSec: Double = 18
+    /// 재생 길이 — 거리 비례(km당 10초), 20~180초 (#232: 고정 18초는 10km에서 초속 550m라 너무 빨랐고,
+    /// km당 6초·최대 60초도 26km에서 초속 430m로 장거리가 여전히 빨랐다 — 실기기 확인)
+    static let playbackSecPerKm: Double = 10
+    static let playbackSecRange: ClosedRange<Double> = 20...180
+    static func playbackSec(distanceM: Double) -> Double {
+        min(max(distanceM / 1_000 * playbackSecPerKm, playbackSecRange.lowerBound), playbackSecRange.upperBound)
+    }
     /// 카메라 키프레임 구간 수 — 이슈 #224 "30~60개"
     static let keyframeCount = 40
     /// heading 이동 평균 반폭 — 앞뒤 2개씩 5개 평균 (급커브에서 카메라가 튀지 않게)
@@ -18,6 +23,9 @@ enum FlyoverEngine {
     static let paceWindowM: Double = 500
     /// 이보다 덜 달렸으면 페이스 표본이 부족해 내지 않는다(nil)
     static let minPaceDistanceM: Double = 100
+    /// 화면 위 층에 그리는 지나온 꼬리 길이(경로 거리 m) — 기울인 카메라(거리 800m) 뒤쪽 점은 화면 좌표 변환이
+    /// 반대편으로 튀어 엉뚱한 직선이 되므로, 카메라 앞에 있는 최근 구간만 그린다 (#232)
+    static let trailM: Double = 500
 
     /// 카메라 키프레임 — `durationSec`는 직전 키프레임에서 여기까지 걸리는 재생 시간(첫 키프레임은 0)
     struct Keyframe: Equatable {
@@ -38,6 +46,8 @@ enum FlyoverEngine {
         let elapsedSec: Double
         /// 직전 500m 평균 페이스(초/km) — 100m 미만이면 nil
         let paceSecPerKm: Double?
+        /// 지나온 꼬리(`trailM`)의 첫 경로 점 인덱스 — 화면 층에는 `trailStart..<passedCount` + 현재 위치만 그린다
+        let trailStart: Int
     }
 
     /// 누적 거리·경과 시간을 미리 쌓아 둔 경로
@@ -47,6 +57,7 @@ enum FlyoverEngine {
         let elapsedSec: [Double]
         var totalM: Double { cumulativeM[cumulativeM.count - 1] }
         var totalSec: Double { elapsedSec[elapsedSec.count - 1] }
+        var playbackSec: Double { FlyoverEngine.playbackSec(distanceM: totalM) }
     }
 
     /// 점이 `minPoints` 미만이거나 거리·시간이 0이면 nil — 플라이오버를 내지 않는다.
@@ -72,9 +83,9 @@ enum FlyoverEngine {
         return Track(points: route, cumulativeM: cumulative, elapsedSec: elapsed)
     }
 
-    /// 경로를 거리로 `count` 등분한 `count + 1`개 키프레임. duration 합 = `playbackSec`
-    static func keyframes(_ track: Track, count: Int = keyframeCount,
-                          playbackSec: Double = playbackSec) -> [Keyframe] {
+    /// 경로를 거리로 `count` 등분한 `count + 1`개 키프레임. duration 합 = `track.playbackSec`
+    static func keyframes(_ track: Track, count: Int = keyframeCount) -> [Keyframe] {
+        let playbackSec = track.playbackSec
         let stops = (0...count).map { sample(track, keys: track.cumulativeM,
                                              value: track.totalM * Double($0) / Double(count)) }
         // 방위: 다음 지점을 향한다(마지막은 직전 방향 유지)
@@ -103,6 +114,21 @@ enum FlyoverEngine {
         }
     }
 
+    /// 재생 경과 시각의 카메라 방위 — 키프레임 사이를 시간으로 선형 보간한다(범위 밖은 양 끝 값).
+    /// 카메라를 매 프레임 점 위치에 직접 놓으므로(#232) 방위도 같은 시계에서 읽는다
+    static func heading(_ keyframes: [Keyframe], at elapsedSec: Double) -> Double {
+        var t: Double = 0
+        for k in keyframes.indices.dropFirst() {
+            let next = t + keyframes[k].durationSec
+            if elapsedSec < next {
+                let f = keyframes[k].durationSec > 0 ? max(0, elapsedSec - t) / keyframes[k].durationSec : 1
+                return keyframes[k - 1].headingDeg + (keyframes[k].headingDeg - keyframes[k - 1].headingDeg) * f
+            }
+            t = next
+        }
+        return keyframes[keyframes.count - 1].headingDeg
+    }
+
     /// 진행률 t(0~1) → 경로 위 위치. 카메라 키프레임과 같은 시간축(실제 경과 시간 비례)이다
     static func frame(_ track: Track, progress t: Double) -> Frame {
         let current = sample(track, keys: track.elapsedSec, value: min(max(t, 0), 1) * track.totalSec)
@@ -112,8 +138,10 @@ enum FlyoverEngine {
                               value: max(0, current.distanceM - paceWindowM))
             pace = (current.elapsedSec - from.elapsedSec) / (current.distanceM - from.distanceM) * 1_000
         }
+        let trail = sample(track, keys: track.cumulativeM, value: max(0, current.distanceM - trailM))
         return Frame(lat: current.lat, lon: current.lon, passedCount: current.passedCount,
-                     distanceM: current.distanceM, elapsedSec: current.elapsedSec, paceSecPerKm: pace)
+                     distanceM: current.distanceM, elapsedSec: current.elapsedSec, paceSecPerKm: pace,
+                     trailStart: min(max(0, trail.passedCount - 1), current.passedCount))
     }
 
     // MARK: 보간

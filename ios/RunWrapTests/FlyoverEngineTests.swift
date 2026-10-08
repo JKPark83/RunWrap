@@ -17,22 +17,23 @@ struct FlyoverEngineTests {
         }
     }
 
-    @Test("키프레임 — duration 합이 재생 길이(18초)와 같다")
+    @Test("키프레임 — duration 합이 재생 길이(3km → 30초)와 같다")
     func durationsSumToPlayback() throws {
-        let track = try #require(FlyoverEngine.track(route()))
+        // 재생 길이 = 3km × 10초/km = 30초
+        let track = try #require(FlyoverEngine.track(route(), distanceM: 3_000))
         let keyframes = FlyoverEngine.keyframes(track)
         #expect(keyframes.count == FlyoverEngine.keyframeCount + 1)
         #expect(keyframes[0].durationSec == 0)
-        #expect(abs(keyframes.map(\.durationSec).reduce(0, +) - 18) < 1e-9)
+        #expect(abs(keyframes.map(\.durationSec).reduce(0, +) - 30) < 1e-9)
     }
 
     @Test("키프레임 — 빨리 달린 구간이 짧은 duration을 받는다")
     func fastSegmentsAreShorter() throws {
         // 거리 4등분 → 10·20·30구간 지점의 경과 200·400·800·1,200초
-        // duration = 구간 소요 / 1,200 × 18 → 0, 3, 3, 6, 6
-        let track = try #require(FlyoverEngine.track(route()))
+        // 재생 길이 3km × 10 = 30초. duration = 구간 소요 / 1,200 × 30 → 0, 5, 5, 10, 10
+        let track = try #require(FlyoverEngine.track(route(), distanceM: 3_000))
         let durations = FlyoverEngine.keyframes(track, count: 4).map(\.durationSec)
-        let expected: [Double] = [0, 3, 3, 6, 6]
+        let expected: [Double] = [0, 5, 5, 10, 10]
         for (d, e) in zip(durations, expected) { #expect(abs(d - e) < 1e-9) }
     }
 
@@ -95,5 +96,39 @@ struct FlyoverEngineTests {
     func tooFewPoints() {
         #expect(FlyoverEngine.track(Array(route().prefix(19))) == nil)
         #expect(FlyoverEngine.track(Array(route().prefix(20))) != nil)
+    }
+
+    @Test("재생 길이 — km당 10초, 20~180초로 묶는다")
+    func playbackLengthByDistance() {
+        // 1km → 10초지만 최소 20초, 5km → 50초, 20km → 200초지만 최대 180초
+        #expect(FlyoverEngine.playbackSec(distanceM: 1_000) == 20)
+        #expect(FlyoverEngine.playbackSec(distanceM: 5_000) == 50)
+        #expect(FlyoverEngine.playbackSec(distanceM: 20_000) == 180)
+    }
+
+    @Test("지나온 꼬리 — 현재 위치에서 경로 거리 500m 뒤 점부터 시작한다")
+    func trailStartsWithinTrailDistance() throws {
+        // 4km로 맞추면 점 간격 100m. t=31/60 → 경과 620초 = 앞 20구간(400초) + 뒤 5.5구간 → 2,550m 지점
+        // 꼬리 시작 = 2,050m가 놓인 구간의 앞 점 = 2,000m 지점 = 20번째 점
+        let track = try #require(FlyoverEngine.track(route(), distanceM: 4_000))
+        let frame = FlyoverEngine.frame(track, progress: 31.0 / 60)
+        #expect(abs(frame.distanceM - 2_550) < 1e-6)
+        #expect(frame.trailStart == 20)
+        #expect(FlyoverEngine.frame(track, progress: 0).trailStart == 0)
+    }
+
+    @Test("카메라 방위 — 키프레임 사이를 시간으로 선형 보간하고 범위 밖은 양 끝 값")
+    func headingInterpolatesByTime() {
+        // 0초 0° → 2초 10° → 6초 30°
+        let keyframes = [
+            FlyoverEngine.Keyframe(lat: 0, lon: 0, headingDeg: 0, durationSec: 0),
+            FlyoverEngine.Keyframe(lat: 0, lon: 0, headingDeg: 10, durationSec: 2),
+            FlyoverEngine.Keyframe(lat: 0, lon: 0, headingDeg: 30, durationSec: 4),
+        ]
+        #expect(abs(FlyoverEngine.heading(keyframes, at: 1) - 5) < 1e-9)
+        #expect(abs(FlyoverEngine.heading(keyframes, at: 2) - 10) < 1e-9)
+        #expect(abs(FlyoverEngine.heading(keyframes, at: 4) - 20) < 1e-9)
+        #expect(FlyoverEngine.heading(keyframes, at: -1) == 0)
+        #expect(FlyoverEngine.heading(keyframes, at: 10) == 30)
     }
 }
