@@ -134,4 +134,21 @@ struct RoutePrivacyTests {
         let date = try kstDate("2026-09-30T06:10:00+09:00")
         #expect(RoutePrivacy.cardDateLine(date, calendar: kst) == "2026.09.30 (수) 아침")
     }
+
+    @Test("카드 날짜 줄 — 시각 표시를 켜면 시작~종료 시각")
+    func cardDateLineShowsTime() throws {
+        // 06:12 출발 · 53분 뒤 07:05 종료
+        let start = try kstDate("2026-09-30T06:12:00+09:00")
+        let end = try kstDate("2026-09-30T07:05:00+09:00")
+        #expect(RoutePrivacy.cardDateLine(start, end: end, calendar: kst) == "2026.09.30 (수) 06:12~07:05")
+        // 끄면(end 없음) 예전처럼 시간대만
+        #expect(RoutePrivacy.cardDateLine(start, calendar: kst) == "2026.09.30 (수) 아침")
+    }
+
+    @Test("카드 날짜 줄 — 자정을 넘긴 러닝은 시작일만 적고 시각은 24시간제로")
+    func cardDateLineAcrossMidnight() throws {
+        let start = try kstDate("2026-09-30T23:40:00+09:00")
+        let end = try kstDate("2026-10-01T00:25:00+09:00")
+        #expect(RoutePrivacy.cardDateLine(start, end: end, calendar: kst) == "2026.09.30 (수) 23:40~00:25")
+    }
 }

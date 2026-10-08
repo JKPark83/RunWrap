@@ -40,11 +40,26 @@ struct DemoSyntheticTests {
         let first = WorkoutDetailStore.synthetic(for: run(), heartRate: profile)
         let second = WorkoutDetailStore.synthetic(for: run(), heartRate: profile)
         #expect(!first.route.isEmpty)
-        #expect(first.route.map(\.latitude) == second.route.map(\.latitude))
-        #expect(first.route.map(\.longitude) == second.route.map(\.longitude))
+        #expect(first.route.map(\.lat) == second.route.map(\.lat))
+        #expect(first.route.map(\.lon) == second.route.map(\.lon))
+        // 경로 시각은 시작 시각부터 일정 간격 (#222 선행 — GPX 재료)
+        #expect(first.route.first?.time == now)
+        #expect(first.route.map(\.time) == second.route.map(\.time))
         #expect(first.splits.map(\.paceSecPerKm) == second.splits.map(\.paceSecPerKm))
         #expect(first.zones == second.zones)
         #expect(first.cadenceSpm == second.cadenceSpm)
+    }
+
+    @Test("고도 프로필 — 합성 경로의 오르내림 폭이 상승 고도와 맞는다")
+    func syntheticElevationMatchesAscent() throws {
+        // 한 번 오르고 내리는 언덕이라 프로필 최고 − 최저 ≈ 상승 고도 (60등분 표본이라 꼭대기 근처 오차 1m 안)
+        let detail = WorkoutDetailStore.synthetic(for: run(), heartRate: profile)
+        let elevations = try #require(RoutePaceEngine.elevationProfile(detail.route)).map(\.elevationM)
+        let ascent = try #require(detail.elevationM)
+        #expect(abs((elevations.max()! - elevations.min()!) - ascent) < 1)
+        // 실내 세션은 경로가 없어 프로필도 없다
+        #expect(RoutePaceEngine.elevationProfile(
+            WorkoutDetailStore.synthetic(for: run(indoor: true), heartRate: profile).route) == nil)
     }
 
     @Test("DemoData.runs — 두 번 읽어도 같은 목록(id·시작 시각), id는 인덱스 기반이며 중복 없다")

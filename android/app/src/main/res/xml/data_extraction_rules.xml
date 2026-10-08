@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup 규칙 (API 31+ — minSdk 34라 fullBackupContent는 쓰이지 않는다).
+     iOS 진행도 백업(ProgressBackupStore — CloudKit 스냅샷) 범위를 따른다: 설정 + 도감 + 직접 입력한 대회 기록.
+     include를 쓰면 목록 밖은 전부 빠진다 — 건강 데이터 캐시(weekly-report·best-efforts·zone-histograms·pb-baseline),
+     러닝화(shoes.json·shoes/ — iOS도 백업 제외), filesDir의 AirQuality.json·Races.json·LastCourse.gpx는 백업하지 않는다.
+     파일 이름은 엔진 상수와 같다: CollectionCache.filename, RaceRecordCache.filename·deletedFilename. 설정은 SettingsStore의 SharedPreferences 파일 `settings`. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="sharedpref" path="settings.xml" />
+        <include domain="file" path="RunWrap/collection.json" />
+        <include domain="file" path="RunWrap/race-records.json" />
+        <include domain="file" path="RunWrap/race-record-tombstones.json" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="sharedpref" path="settings.xml" />
+        <include domain="file" path="RunWrap/collection.json" />
+        <include domain="file" path="RunWrap/race-records.json" />
+        <include domain="file" path="RunWrap/race-record-tombstones.json" />
+    </device-transfer>
+</data-extraction-rules>

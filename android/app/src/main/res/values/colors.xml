@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 기동 스플래시 배경 — iOS LaunchBackground.colorset (RR.launchBg도 이 값을 읽는다) -->
+    <color name="launch_bg">#16A5FB</color>
+    <!-- 앱 아이콘 배경 — 그라데이션 중간 톤. 런처가 다크 모드여도 바뀌지 않게 values-night에 두지 않는다 -->
+    <color name="ic_launcher_background">#16A5FB</color>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider로 다른 앱에 넘기는 파일 자리 — 둘 다 cacheDir라 Auto Backup에 들어가지 않는다.
+     share/: 공유 카드 이미지·GPX 파일(ACTION_SEND). camera/: 완주증 촬영(TakePicture) 임시 파일 — 읽고 나면 저장하지 않는다. -->
+<paths>
+    <cache-path name="share" path="share/" />
+    <cache-path name="camera" path="camera/" />
+</paths>

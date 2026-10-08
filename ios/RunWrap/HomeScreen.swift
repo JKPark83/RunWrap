@@ -135,7 +135,7 @@ struct HomeScreen: View {
         switch weather.state {
         case .idle, .loading: .loading
         case .loaded(let current):
-            .current(current, bestWindow: RunWindowEngine.bestWindow(hourly: current.hourly, now: Date()))
+            .current(current, windows: RunWindowEngine.windows(hourly: current.hourly, now: Date()))
         case .denied: .denied
         case .unavailable: .unavailable
         }
@@ -1266,7 +1266,7 @@ private struct VerdictCard: View {
         }
     }
 
-    /// 하늘 상태 아이콘 + 체감온도 + 복장 — '오늘' 시트의 세 카드를 한 장으로 줄인 요약
+    /// 하늘 상태 아이콘 + 기온(체감은 작게, 이슈 #220) + 복장 — '오늘' 시트의 세 카드를 한 장으로 줄인 요약
     @ViewBuilder
     private var weatherArt: some View {
         switch weather {
@@ -1280,10 +1280,10 @@ private struct VerdictCard: View {
                             .symbolRenderingMode(.palette)
                             .foregroundStyle(condition.tint, condition.tint2)
                     }
-                    Text("\(Int(current.apparentC.rounded()))")
+                    Text("\(Int(current.temperatureC.rounded()))")
                         .font(RR.numeral(25))
                         .foregroundStyle(RR.text)
-                    Text("°C 체감")
+                    Text("°C · 체감 \(Int(current.apparentC.rounded()))°")
                         .font(.system(size: 10.5))
                         .foregroundStyle(RR.text3)
                 }

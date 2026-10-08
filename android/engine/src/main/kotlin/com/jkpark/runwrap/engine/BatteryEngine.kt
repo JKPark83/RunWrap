@@ -1,0 +1,234 @@
+package com.jkpark.runwrap.engine
+
+import java.time.Instant
+import java.time.ZoneId
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/// 활력징후 스냅샷 — 오늘 값과 최근 28일 개인 기준선
+///
+/// Apple Watch가 주로 수면 중에 기록하는 값들이다. 기준선은 오늘을 제외한
+/// 일평균의 평균으로, Apple 활력징후 앱과 같은 "내 평소 범위" 개념이다.
+data class VitalsSnapshot(
+    var hrvMs: Reading? = null,            // 심박 변이도 SDNN (ms) — 높을수록 회복
+    var restingHR: Reading? = null,        // 안정 심박 (bpm) — 낮을수록 회복
+    /// 심박 회복(운동 종료 후 1분 하락 폭, bpm). 야외 러닝 후 워치가 자동 기록.
+    /// 주의: HRR은 매일 생기지 않으므로 Reading.baselineDays 자리를 '기저 표본 개수'로 쓴다.
+    var hrr: Reading? = null,
+    var respiratoryRate: Reading? = null,  // 수면 중 호흡수 (회/분) — 이탈 시 감점
+    var wristTempC: Reading? = null,       // 수면 중 손목 온도 (°C) — 상승 시 감점
+    var sleepHours: Double? = null,        // 지난밤 수면 시간
+    /// 최근 밤별 수면 상세 (스토어가 최근 2주치를 넘긴다). 단계 데이터가 없는 밤은 deepRemFraction이 nil.
+    var sleepNights: List<SleepNight> = emptyList(),
+) {
+    data class Reading(
+        val today: Double,
+        val baseline: Double,      // 오늘을 제외한 최근 28일 일평균의 평균
+        val baselineDays: Int,     // 기준선 계산에 쓰인 날짜 수
+    )
+
+    /// 밤별 수면 상세 — 단계(깊은+렘)와 취침 시각 규칙성을 다룰 때만 쓰인다
+    data class SleepNight(
+        val date: Instant,                 // 기상일 자정
+        val asleepHours: Double,
+        val deepRemFraction: Double?,      // (깊은 수면 + 렘) ÷ 총 수면, 0...1
+        val bedtimeMinutes: Double?,       // 취침 시각 — 정오(12:00) 기준 경과 분. 자정 넘김(23시=660, 새벽 1시=780)을 연속값으로 다루기 위한 좌표계
+    )
+}
+
+/// 체력 배터리 결과 — 남은 체력 추정치(0–100)와 요인별 기여
+data class BatteryReport(
+    val level: Int,                // 0–100
+    val tone: RRTone,              // 색상 매핑용
+    val statusLabel: String,       // "충전 충분" / "양호" / "주의" / "방전 임박"
+    val headline: String,
+    val factors: List<Factor>,
+) {
+    data class Factor(
+        val name: String,
+        val detail: String,        // "55 ms · 평소 62 ms"
+        val points: Int,           // 기여 포인트 (충전 +, 소모 −)
+        val systemImage: String,
+        /// 이 요인의 수치가 묶인 카드 게이트 — nil이면 전 레벨 노출.
+        /// 엔진은 카드 종류만 표기하고, 레벨별 문구 처리는 화면이 `ReportGate`로 정한다 (이슈 #125)
+        var gate: ReportCard? = null,
+    )
+}
+
+/// 체력 배터리 엔진 — 활력징후(회복)와 훈련 부하(소모)를 합산한다
+///
+/// 모델: 중립 50에서 시작해 요인별 포인트를 더한다.
+/// - 심박 변이(HRV): 기준선 대비 ±25% 편차가 ±20pt
+/// - 안정 심박: 기준선 대비 ∓10% 편차가 ±15pt (낮을수록 +)
+/// - 심박 회복(HRR): 기준선 대비 ±25% 편차가 ±10pt (높을수록 +, Cole 1999)
+/// - 수면: 7시간 기준, ±2시간이 ±15pt
+/// - 호흡수·손목 온도: 평소 범위를 벗어나면 각각 −6pt (감점 전용)
+/// - 수면 질(깊은+렘 비율 하락)·수면 리듬(취침 시각 표준편차): 이탈 시 각각 −8pt·−6pt (감점 전용)
+/// - 오늘 훈련: 오늘 뛴 거리 km × 2pt 소모 (최대 −25)
+/// - 훈련 부하: ACWR > 1.3이면 초과분만큼 소모 (최대 −15)
+///
+/// 가드: 핵심 신호(HRV·안정 심박·HRR·수면) 중 2개 이상이 있어야 계산한다.
+/// 기준선은 최소 7일(HRR은 매일 생기지 않아 표본 5개) — 부족하면 그 요인은 없는 것으로 친다.
+/// "틀린 인사이트는 없느니만 못하다."
+object BatteryEngine {
+    const val minBaselineDays = 7   // Apple 활력징후 앱과 같은 최소 기준선
+    const val hrrMinBaselineCount = 5   // HRV·안정 심박과 달리 매일 기록되지 않아 표본 기준을 별도로 둔다
+
+    /// (Android: iOS `now: Date = .now` 기본값은 두지 않는다. `Calendar.current` 자리에 `zone`을 받는다)
+    fun compute(vitals: VitalsSnapshot,
+                runs: List<RunSummary>,
+                now: Instant,
+                zone: ZoneId): BatteryReport? {
+        val factors = mutableListOf<BatteryReport.Factor>()
+        var coreSignals = 0
+
+        valid(vitals.hrvMs)?.let { r ->
+            val pts = points((r.today / r.baseline - 1) / 0.25, scale = 20.0)
+            factors.add(BatteryReport.Factor(name = "심박 변이",
+                                             detail = "${fmt(r.today, 0)} ms · 평소 ${fmt(r.baseline, 0)} ms",
+                                             points = pts,
+                                             systemImage = "waveform.path.ecg"))
+            coreSignals += 1
+        }
+
+        valid(vitals.restingHR)?.let { r ->
+            val pts = points((1 - r.today / r.baseline) / 0.10, scale = 15.0)
+            factors.add(BatteryReport.Factor(name = "안정 심박",
+                                             detail = "${fmt(r.today, 0)} bpm · 평소 ${fmt(r.baseline, 0)} bpm",
+                                             points = pts,
+                                             systemImage = "heart.fill"))
+            coreSignals += 1
+        }
+
+        valid(vitals.hrr, minCount = hrrMinBaselineCount)?.let { r ->
+            val pts = points((r.today / r.baseline - 1) / 0.25, scale = 10.0)
+            factors.add(BatteryReport.Factor(name = "심박 회복",
+                                             detail = "${fmt(r.today, 0)} bpm · 평소 ${fmt(r.baseline, 0)} bpm",
+                                             points = pts,
+                                             systemImage = "arrow.clockwise.heart"))
+            coreSignals += 1
+        }
+
+        vitals.sleepHours?.let { hours ->
+            val pts = points((hours - 7) / 2, scale = 15.0)
+            factors.add(BatteryReport.Factor(name = "수면",
+                                             detail = sleepText(hours),
+                                             points = pts,
+                                             systemImage = "moon.zzz.fill"))
+            coreSignals += 1
+        }
+
+        if (coreSignals < 2) return null
+
+        // 감점 전용 보조 신호 — 평소 범위 안이면 표시하지 않는다
+        valid(vitals.respiratoryRate)?.takeIf { abs(it.today / it.baseline - 1) > 0.12 }?.let { r ->
+            factors.add(BatteryReport.Factor(name = "호흡수",
+                                             detail = "분당 ${fmt(r.today, 1)}회 · 평소 ${fmt(r.baseline, 1)}회",
+                                             points = -6,
+                                             systemImage = "lungs.fill"))
+        }
+        valid(vitals.wristTempC)?.takeIf { it.today - it.baseline >= 0.4 }?.let { r ->
+            factors.add(BatteryReport.Factor(name = "손목 온도",
+                                             detail = "평소보다 +${fmt(r.today - r.baseline, 1)}°C",
+                                             points = -6,
+                                             systemImage = "thermometer.medium"))
+        }
+
+        // 수면 질 — 깊은+렘 비율이 있는 밤이 7개 이상일 때만, 가장 최근 밤 vs 나머지 밤 평균(기저)
+        // 신선도 가드: 가장 최근 밤의 기상일이 오늘 또는 어제일 때만 — 지난밤 워치를 안 찼으면
+        // 며칠 전 밤이 '최근 밤'이 되어 오늘 배터리를 깎는다 (HRR 3일 가드와 같은 취지, 이슈 #99)
+        val yesterdayStart = now.atZone(zone).toLocalDate().atStartOfDay(zone).minusDays(1).toInstant()
+        val qualityNights = vitals.sleepNights.filter { it.deepRemFraction != null }.sortedBy { it.date }
+        val latest = qualityNights.lastOrNull()
+        val todayFraction = latest?.deepRemFraction
+        if (qualityNights.size >= 7 && latest != null && latest.date >= yesterdayStart && todayFraction != null) {
+            val baselineNights = qualityNights.dropLast(1)
+            val baselineFraction = baselineNights.mapNotNull { it.deepRemFraction }.sum() / baselineNights.size
+            if (baselineFraction > 0 && (baselineFraction - todayFraction) / baselineFraction >= 0.20) {
+                factors.add(BatteryReport.Factor(name = "수면 질",
+                                                 detail = "깊은+렘 ${fmt(todayFraction * 100, 0)}% · 평소 ${fmt(baselineFraction * 100, 0)}%",
+                                                 points = -8,
+                                                 systemImage = "bed.double.fill"))
+            }
+        }
+
+        // 수면 리듬 — 취침 시각이 있는 밤이 7개 이상일 때만, 모집단 표준편차 > 90분이면 감점
+        val bedtimes = vitals.sleepNights.mapNotNull { it.bedtimeMinutes }
+        if (bedtimes.size >= 7) {
+            val mean = bedtimes.sum() / bedtimes.size
+            val variance = bedtimes.map { (it - mean) * (it - mean) }.sum() / bedtimes.size
+            val sd = sqrt(variance)
+            if (sd > 90) {
+                factors.add(BatteryReport.Factor(name = "수면 리듬",
+                                                 detail = "취침 시각 편차 " + bedtimeSDText(sd),
+                                                 points = -6,
+                                                 systemImage = "clock.arrow.circlepath"))
+            }
+        }
+
+        val todayKm = kmToday(runs, now = now, zone = zone)
+        if (todayKm > 0.1) {
+            factors.add(BatteryReport.Factor(name = "오늘 훈련",
+                                             detail = "${fmt(todayKm, 1)} km",
+                                             points = -min(25, (todayKm * 2).swiftRoundedInt()),
+                                             systemImage = "figure.run"))
+        }
+
+        // ReportEngine과 같은 ACWR 산식·가드 (기록 4주 이상, 만성 주평균 3km 이상 — 이슈 #49)
+        val load = ReportEngine.acwrLoad(runs = runs, now = now)
+        if (load != null && load.acute / load.chronic > 1.3) {
+            val ratio = load.acute / load.chronic
+            factors.add(BatteryReport.Factor(name = "훈련 부하",
+                                             detail = "부하 비율 ${fmt(ratio, 2)}",
+                                             points = -min(15, ((ratio - 1.3) * 25).swiftRoundedInt()),
+                                             systemImage = "speedometer",
+                                             gate = ReportCard.acwr))
+        }
+
+        val level = max(0, min(100, 50 + factors.sumOf { it.points }))
+        val (tone, label, headline) = status(level)
+        return BatteryReport(level = level, tone = tone, statusLabel = label,
+                             headline = headline, factors = factors)
+    }
+
+    // MARK: - 내부
+
+    /// 기준선이 최소 표본 이상 쌓인 정상 측정값만 통과시킨다 (기본 7일, HRR은 표본 5개)
+    private fun valid(reading: VitalsSnapshot.Reading?,
+                      minCount: Int = minBaselineDays): VitalsSnapshot.Reading? {
+        if (reading == null || reading.baselineDays < minCount || !(reading.baseline > 0)) {
+            return null
+        }
+        return reading
+    }
+
+    private fun points(normalized: Double, scale: Double): Int =
+        (max(-1.0, min(1.0, normalized)) * scale).swiftRoundedInt()
+
+    private fun status(level: Int): Triple<RRTone, String, String> = when {
+        level >= 75 -> Triple(RRTone.improving, "충전 충분", "몸이 충분히 충전됐어요")
+        level in 50 until 75 -> Triple(RRTone.steady, "양호", "무리하지 않으면 충분한 상태예요")
+        level in 25 until 50 -> Triple(RRTone.caution, "주의", "회복이 덜 됐어요, 오늘은 가볍게 가세요")
+        else -> Triple(RRTone.overload, "방전 임박", "오늘은 훈련보다 충전이 먼저예요")
+    }
+
+    private fun sleepText(hours: Double): String {
+        val totalMin = (hours * 60).swiftRoundedInt()
+        return "${totalMin / 60}시간 ${totalMin % 60}분"
+    }
+
+    private fun bedtimeSDText(minutes: Double): String {
+        val totalMin = minutes.swiftRoundedInt()
+        return "±${totalMin / 60}시간 ${totalMin % 60}분"
+    }
+
+    /// 오늘 0시 이후 뛴 거리 — 어제까지의 훈련은 밤사이 활력징후에 이미 반영돼 있다
+    private fun kmToday(runs: List<RunSummary>, now: Instant, zone: ZoneId): Double {
+        val dayStart = now.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+        return runs.filter { it.start >= dayStart && it.start <= now }
+            .mapNotNull { it.distanceKm }
+            .sum()
+    }
+}

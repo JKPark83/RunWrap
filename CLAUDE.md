@@ -3,6 +3,18 @@
 애플워치 러닝 데이터를 해석해 주는 아이폰 전용 SwiftUI 앱 (iOS 17+, 온디바이스 전용).
 개요·로드맵은 [README](README.md), 제품 결정은 [기획서](docs/plan/기획서-v0.1.md) 참조.
 
+## iOS ↔ Android — 기능은 양쪽에 같이 반영한다
+
+`android/`에 이 앱의 Android 이식본이 있다(Kotlin·Compose·Health Connect, 규칙은 [android/CLAUDE.md](android/CLAUDE.md)).
+**iOS가 사양 원본**이고 Android는 같은 결과를 내는 이식본이다. 이 문서의 나머지는 iOS 작업 지침이다.
+
+- iOS 기능을 추가·수정하면 **같은 작업 안에서** Android 대응 파일에도 옮긴다 (`/port-feature`).
+  대응 규칙은 파일 이름(`Foo.swift` ↔ `Foo.kt`), 테스트는 표시 이름(`@Test("…")` ↔ `@DisplayName("…")`)이다.
+- 옮길 것이 없거나(iOS 전용 API 등) 한쪽에만 두기로 한 것은 [docs/parity.md](docs/parity.md)에 이유와 함께 적는다.
+- `python3 tools/ci/parity_check.py`가 대응을 점검한다 — 세션 종료 시 Stop 훅이 한 번 경고하고,
+  PR에서는 `android-test.yml`이 실패시킨다. 경고를 끄려고 검사를 고치지 않는다.
+- Android에서 먼저 만든 기능도 같다: iOS에 옮기거나 `docs/parity.md`에 `android-only`로 적는다.
+
 ## 프로젝트·스택
 
 | 항목 | 값 |

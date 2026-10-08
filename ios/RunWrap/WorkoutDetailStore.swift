@@ -11,7 +11,10 @@ struct WorkoutDetail {
         var id: Int { index }
     }
 
-    var route: [CLLocationCoordinate2D] = []
+    /// 경로 원본 — 솎지 않은 전체 점(시각·고도·속도 포함). 솎기는 표시 직전에 한다 (#222)
+    var route: [TrackPoint] = []
+    /// 심박 샘플(시각 오름차순) — 존 계산에 쓴 것을 GPX 내보내기가 재사용한다 (추가 쿼리 없음, 이슈 #222)
+    var heartRateSamples: [(time: Date, bpm: Double)] = []
     var splits: [Split] = []
     var zones: [Double]?          // Z1~Z5 비율 (합 1)
     var cadenceSpm: Double?
@@ -65,6 +68,10 @@ final class WorkoutDetailStore: ObservableObject {
     /// 스냅샷 조회 세대 — 마지막으로 시작한 조회만 결과를 반영한다.
     /// load()는 detail 조회 중 세대가 바뀌었으면 옛 others로 재조회하지 않는다
     private var snapshotGeneration = 0
+    /// 같은 코스 기록(시작 순, 이 세션 포함) — 3회 미만·실내·경로 없음이면 nil (이슈 #223)
+    @Published private(set) var courseMatches: [RunSummary]?
+    /// 코스 매칭 중복 실행 방지 — 진입 시 load와 목록 로드 뒤 onChange가 겹칠 수 있다
+    private var isLoadingCourse = false
 
     private let store = HKHealthStore()
 
@@ -86,8 +93,49 @@ final class WorkoutDetailStore: ObservableObject {
             detail = await fetch(run: run, heartRate: heartRate)
             loadFailed = detail == nil
         }
+        await loadCourse(run: run, others: others)
         guard snapshotGeneration == startGeneration else { return }
         await reloadSnapshots(others: others, excluding: run)
+    }
+
+    /// 같은 코스 비교 (이슈 #223) — 이 세션의 지문을 캐시에 쌓고, 처음 한 번은 최근 90일 야외 세션을
+    /// 채운 뒤 매칭한다. 목록(others)이 아직 없으면 백필을 미루고, 목록이 로드되면 화면이 다시 부른다.
+    /// 데모 모드는 합성 경로로 지문을 바로 만들고 캐시에 쓰지 않는다 — 합성 지문이 실기록 캐시에 섞이지 않게
+    func loadCourse(run: RunSummary, others: [RunSummary]) async {
+        guard !run.isIndoor, !isLoadingCourse, let route = detail?.route,
+              let target = CourseMatchEngine.fingerprint(route, distanceM: run.distanceMeters ?? 0)
+        else { return }
+        isLoadingCourse = true
+        defer { isLoadingCourse = false }
+        let candidates = others.filter { !$0.isIndoor && $0.id != run.id }
+        var cache: [UUID: CourseMatchEngine.Fingerprint]
+        if DemoMode.isActive {
+            cache = [:]
+            for other in candidates {
+                cache[other.id] = CourseMatchEngine.fingerprint(Self.syntheticRoute(for: other),
+                                                                distanceM: other.distanceMeters ?? 0)
+            }
+        } else {
+            cache = CourseFingerprintCache.load()
+            cache[run.id] = target
+            let defaults = UserDefaults.standard
+            if !candidates.isEmpty, !defaults.bool(forKey: CourseFingerprintCache.backfillDoneKey) {
+                // 최초 1회 백필 — 경로를 세션마다 다시 읽는 비용을 한 번만 치른다. 실내는 경로가 없어 건너뛴다.
+                // ponytail: 화면을 닫아도 진행 중인 HealthKit 쿼리는 끝까지 돈다 — 중단되면 다음 진입 때 처음부터
+                let cutoff = Date().addingTimeInterval(-CourseFingerprintCache.backfillDays * 86_400)
+                for other in candidates where other.start >= cutoff && cache[other.id] == nil {
+                    guard let workout = try? await fetchWorkout(id: other.id),
+                          let points = try? await fetchRoute(of: workout),
+                          let fingerprint = CourseMatchEngine.fingerprint(points, distanceM: other.distanceMeters ?? 0)
+                    else { continue }
+                    cache[other.id] = fingerprint
+                }
+                defaults.set(true, forKey: CourseFingerprintCache.backfillDoneKey)
+            }
+            CourseFingerprintCache.save(cache)
+        }
+        let history = [(run, target)] + candidates.compactMap { other in cache[other.id].map { (other, $0) } }
+        courseMatches = CourseMatchEngine.matches(of: target, in: history)
     }
 
     /// 기준선 스냅샷만 다시 조회한다 — 진입 시 목록이 아직 로드 전이라 빈 목록으로
@@ -148,6 +196,7 @@ final class WorkoutDetailStore: ObservableObject {
             let points = hrSamples.map {
                 (time: $0.startDate, bpm: $0.quantity.doubleValue(for: bpmUnit))
             }
+            detail.heartRateSamples = points
             detail.zones = TrainingGuideEngine.heartRateZones(samples: points, profile: heartRate)
             detail.heartRate = heartRate
             detail.maxHeartRateBpm = TrainingGuideEngine.sessionPeakBpm(points.map(\.bpm))
@@ -260,7 +309,7 @@ final class WorkoutDetailStore: ObservableObject {
         }
     }
 
-    private func fetchRoute(of workout: HKWorkout) async throws -> [CLLocationCoordinate2D] {
+    private func fetchRoute(of workout: HKWorkout) async throws -> [TrackPoint] {
         let routeSample: HKWorkoutRoute? = try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(sampleType: HKSeriesType.workoutRoute(),
                                       predicate: HKQuery.predicateForObjects(from: workout),
@@ -278,12 +327,15 @@ final class WorkoutDetailStore: ObservableObject {
                 if let error { continuation.resume(throwing: error); return }
                 locations.append(contentsOf: batch ?? [])
                 if done {
-                    // 폴리라인은 ~600점이면 충분 — 과한 포인트는 솎는다
-                    let stride = max(1, locations.count / 600)
-                    let thinned = locations.enumerated()
-                        .filter { $0.offset % stride == 0 }
-                        .map { $0.element.coordinate }
-                    continuation.resume(returning: thinned)
+                    // 원본 전체를 보관한다 — 음수 정확도·속도는 '측정 무효'라 nil로 둔다 (애플 문서)
+                    continuation.resume(returning: locations.map { location in
+                        TrackPoint(lat: location.coordinate.latitude,
+                                   lon: location.coordinate.longitude,
+                                   time: location.timestamp,
+                                   elevationM: location.verticalAccuracy < 0 ? nil : location.altitude,
+                                   horizontalAccuracyM: location.horizontalAccuracy,
+                                   speedMps: location.speed < 0 ? nil : location.speed)
+                    })
                 }
             }
             store.execute(query)
@@ -380,17 +432,7 @@ final class WorkoutDetailStore: ObservableObject {
 
         // 실내(트레드밀)에는 경로·고도가 없다 — 스플릿·존·케이던스는 그대로 만든다 (계획서 M1)
         if !run.isIndoor {
-            // 한강 언저리 순환 코스 느낌의 타원 + 흔들림
-            let center = (lat: 37.520 + rng.unit() * 0.02, lon: 126.94 + rng.unit() * 0.03)
-            let radius = 0.0016 * km.squareRoot()
-            let points = 140
-            detail.route = (0...points).map { i in
-                let t = Double(i) / Double(points) * 2 * .pi
-                let wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
-                return CLLocationCoordinate2D(
-                    latitude: center.lat + radius * wobble * sin(t) * 0.72,
-                    longitude: center.lon + radius * wobble * cos(t))
-            }
+            detail.route = syntheticRoute(for: run, rng: &rng)
         }
 
         // 스플릿: 기본 페이스 ± 8초 흔들림, 마지막 1/4은 점점 처진다 (시안의 후반 드리프트)
@@ -416,7 +458,15 @@ final class WorkoutDetailStore: ObservableObject {
         detail.strideLengthM = dynamics.strideM
         detail.runningPowerW = dynamics.powerW
         if !run.isIndoor {
-            detail.elevationM = 30 + rng.unit() * 70
+            let ascent = 30 + rng.unit() * 70
+            detail.elevationM = ascent
+            // 고도 프로필 합성 — 한 번 오르고 내리는 언덕(오르내림 폭 = 상승 고도). rng를 쓰지 않아 재현성 유지 (이슈 #222)
+            let last = Double(max(detail.route.count - 1, 1))
+            detail.route = detail.route.enumerated().map { i, p in
+                TrackPoint(lat: p.lat, lon: p.lon, time: p.time,
+                           elevationM: 12 + ascent * (1 - cos(Double(i) / last * 2 * .pi)) / 2,
+                           horizontalAccuracyM: p.horizontalAccuracyM, speedMps: p.speedMps)
+            }
         }
 
         // 최고 심박·드리프트 합성 — 기존 rng 호출 뒤에 둬 위 값들의 재현성을 깨지 않는다
@@ -453,6 +503,33 @@ final class WorkoutDetailStore: ObservableObject {
         // 노력도 합성 — 4~8 정수(Apple 추정). 맨 끝에서 뽑아 위 값들의 재현성을 깨지 않는다 (이슈 #178)
         detail.effort = EffortScore(score: Double(4 + Int(rng.unit() * 5)), isEstimated: true)
         return detail
+    }
+
+    /// 합성 경로만 — 데모 코스 매칭이 세션마다 상세 전체를 만들지 않게 (이슈 #223). 상세의 경로와 같다
+    static func syntheticRoute(for run: RunSummary) -> [TrackPoint] {
+        guard !run.isIndoor else { return [] }
+        var rng = SplitMix64(seed: syntheticSeed(for: run))
+        return syntheticRoute(for: run, rng: &rng)
+    }
+
+    /// 한강 언저리 순환 코스 느낌의 타원 + 흔들림. 공유 코스 세션은 중심을 고정해
+    /// '같은 코스' 카드가 시뮬레이터에서 보이게 한다 — 중심 난수는 그래도 뽑아 뒤 값의 재현성을 지킨다
+    private static func syntheticRoute(for run: RunSummary, rng: inout SplitMix64) -> [TrackPoint] {
+        let km = run.distanceKm ?? 8
+        let random = (lat: 37.520 + rng.unit() * 0.02, lon: 126.94 + rng.unit() * 0.03)
+        let center = DemoData.sharedCourseRunIDs.contains(run.id) ? DemoData.sharedCourseCenter : random
+        let radius = 0.0016 * km.squareRoot()
+        let points = 140
+        // 시각은 시작부터 세션 시간을 points 등분한 일정 간격
+        let interval = run.durationSec / Double(points)
+        return (0...points).map { i in
+            let t = Double(i) / Double(points) * 2 * .pi
+            let wobble = 1 + 0.10 * sin(t * 3 + rng.offset) + 0.05 * sin(t * 7)
+            return TrackPoint(lat: center.lat + radius * wobble * sin(t) * 0.72,
+                              lon: center.lon + radius * wobble * cos(t),
+                              time: run.start.addingTimeInterval(interval * Double(i)),
+                              elevationM: nil, horizontalAccuracyM: 5, speedMps: nil)
+        }
     }
 
     /// 다이내믹스 합성 — 상세와 기준선 스냅샷이 같은 값을 보도록 시드를 분리해 둔다.
