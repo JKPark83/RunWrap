@@ -2,6 +2,7 @@ package com.jkpark.runwrap.ui
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Environment
 import android.provider.MediaStore
@@ -15,17 +16,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -41,6 +46,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -50,12 +56,15 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jkpark.runwrap.engine.ActiveTimeline
 import com.jkpark.runwrap.engine.Format
 import com.jkpark.runwrap.engine.GeoPoint
 import com.jkpark.runwrap.engine.RoutePaceEngine
 import com.jkpark.runwrap.engine.RoutePrivacy
 import com.jkpark.runwrap.engine.RunSummary
+import com.jkpark.runwrap.engine.ShareSummary
 import com.jkpark.runwrap.engine.TrackPoint
+import com.jkpark.runwrap.engine.WorkoutDetail
 import com.jkpark.runwrap.engine.swiftRoundedInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -81,79 +90,100 @@ import kotlin.math.tan
 @Composable
 fun ShareCardView(
     run: RunSummary,
-    zones: List<Double>? = null,
+    /// 세션 상세에서 지연 조회한 값 — 존·케이던스·고도 상승·1km 구간 페이스 (이슈 #221). 없는 항목은 숨긴다
+    detail: WorkoutDetail? = null,
     route: List<TrackPoint>? = null,
     /// "최근 7일 3회 · 24.5 km" — 세션 목록에서 계산해 넘긴다 (기획서 §4.4 주간 요약)
     weeklySummary: String? = null,
+    /// 날짜 줄에 시작~종료 시각을 적을지 — 끄면 시간대로 흐린다 (이슈 #191·#221)
+    showsTime: Boolean = true,
 ) = FixedFontScale {
     val cardShape = RoundedCornerShape(18.dp)
+    // 케이던스·고도 상승 — 값이 있는 것만 (실내는 고도가 없고, 걸음 수가 없으면 케이던스가 없다)
+    val extraStats = buildList {
+        (detail?.cadenceSpm ?: run.cadenceSpm)?.let { add(Triple("케이던스", "${it.swiftRoundedInt()}", "spm")) }
+        detail?.elevationM?.let { add(Triple("고도 상승", "${it.swiftRoundedInt()}", "m")) }
+    }
+    val splitRows = ShareSummary.splitRows(detail?.splits.orEmpty().map { ActiveTimeline.Split(it.index, it.paceSecPerKm) })
     Column(
         Modifier
             .size(360.dp, 640.dp)
             .background(RR.bg)
             .padding(28.dp),
     ) {
-        Eyebrow("런미새 · " + RoutePrivacy.cardDateLine(run.start, ZoneId.systemDefault()))
+        // 지도 아래 남는 높이는 여기서 비운다 — iOS VStack의 Spacer 대응
+        Column(Modifier.weight(1f)) {
+            Eyebrow("런미새 · " + RoutePrivacy.cardDateLine(run.start, if (showsTime) run.end else null, ZoneId.systemDefault()))
 
-        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            Text(
-                run.distanceKm?.let(Format::km) ?: "—", Modifier.alignByBaseline(),
-                style = mono(62.sp, FontWeight.ExtraBold), color = RR.text,
-            )
-            Text("km", Modifier.alignByBaseline(), style = mono(20.sp, FontWeight.Bold), color = RR.text3)
-        }
-
-        Row(Modifier.padding(top = 20.dp)) {
-            Stat("평균 페이스", run.paceSecPerKm?.let(Format::pace) ?: "—", "/km")
-            Stat("시간", Format.duration(run.durationSec), "h:m:s")
-            Stat("평균 심박", run.avgHeartRate?.let { "${it.swiftRoundedInt()}" } ?: "—", "bpm")
-        }
-
-        if (route != null && route.size >= 2) {
-            RouteCanvas(
-                route,
-                Modifier
-                    .padding(top = 22.dp)
-                    .fillMaxWidth()
-                    .height(204.dp)
-                    .clip(cardShape)
-                    .background(RR.surface2)
-                    .border(1.dp, RR.line, cardShape),
-            )
-        } else {
-            // 경로 이미지가 없으면(실내·경로 숨기기·트림 후 잔여 없음) 지도 대신 수치 강조 블록 (계획서 M5 완료 기준, 이슈 #84)
-            Column(
-                Modifier
-                    .padding(top = 22.dp)
-                    .fillMaxWidth()
-                    .height(204.dp)
-                    .background(RR.surface2, cardShape)
-                    .border(1.dp, RR.line, cardShape)
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // 경로를 숨긴 야외 러닝도 이 블록을 쓴다 — 트레드밀로 오표기하지 않는다 (이슈 #84)
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(
-                    if (run.isIndoor) "TREADMILL RUN" else "OUTDOOR RUN",
-                    style = mono(11.sp, FontWeight.SemiBold).copy(letterSpacing = 1.4.sp),
-                    color = RR.text3,
+                    run.distanceKm?.let(Format::km) ?: "—", Modifier.alignByBaseline(),
+                    style = mono(54.sp, FontWeight.ExtraBold), color = RR.text,
                 )
-                Row {
-                    Stat("시간", Format.duration(run.durationSec), "h:m:s")
-                    Stat("칼로리", run.calories?.let(Format::kcal) ?: "—", "kcal")
+                Text("km", Modifier.alignByBaseline(), style = mono(18.sp, FontWeight.Bold), color = RR.text3)
+            }
+
+            Row(Modifier.padding(top = 12.dp)) {
+                Stat("평균 페이스", run.paceSecPerKm?.let(Format::pace) ?: "—", "/km")
+                Stat("시간", Format.duration(run.durationSec), "h:m:s")
+                Stat("평균 심박", run.avgHeartRate?.let { "${it.swiftRoundedInt()}" } ?: "—", "bpm")
+            }
+            if (extraStats.isNotEmpty()) {
+                Row(Modifier.padding(top = 10.dp)) {
+                    extraStats.forEach { (label, value, unit) -> Stat(label, value, unit) }
+                    // 3열 정렬 유지 — 빈 칸은 자리만 둔다 (값을 "—"로 채우지 않는다, 이슈 #221)
+                    repeat(3 - extraStats.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
+
+            // 구간 표·존 막대가 늘면 지도를 줄여 넘치지 않게 한다 — 남는 높이를 지도가 먼저 가져간다
+            val blockModifier = Modifier
+                .weight(1f, fill = false)
+                .padding(top = 16.dp)
+                .heightIn(min = 96.dp, max = 204.dp)
+                .fillMaxWidth()
+            if (route != null && route.size >= 2) {
+                RouteCanvas(
+                    route,
+                    blockModifier
+                        .fillMaxHeight()
+                        .clip(cardShape)
+                        .background(RR.surface2)
+                        .border(1.dp, RR.line, cardShape),
+                )
+            } else {
+                // 경로 이미지가 없으면(실내·경로 숨기기·트림 후 잔여 없음) 지도 대신 수치 강조 블록 (계획서 M5 완료 기준, 이슈 #84)
+                Column(
+                    blockModifier
+                        .fillMaxHeight()
+                        .background(RR.surface2, cardShape)
+                        .border(1.dp, RR.line, cardShape)
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    // 경로를 숨긴 야외 러닝도 이 블록을 쓴다 — 트레드밀로 오표기하지 않는다 (이슈 #84)
+                    Text(
+                        if (run.isIndoor) "TREADMILL RUN" else "OUTDOOR RUN",
+                        style = mono(11.sp, FontWeight.SemiBold).copy(letterSpacing = 1.4.sp),
+                        color = RR.text3,
+                    )
+                    Row {
+                        Stat("시간", Format.duration(run.durationSec), "h:m:s")
+                        Stat("칼로리", run.calories?.let(Format::kcal) ?: "—", "kcal")
+                    }
+                }
+            }
+
+            if (splitRows.isNotEmpty()) {
+                SplitTable(splitRows, Modifier.padding(top = 14.dp))
+            }
+
+            detail?.zones?.let { ZoneBarView(it, Modifier.padding(top = 14.dp)) }
         }
 
-        if (zones != null) {
-            ZoneBarView(zones, Modifier.padding(top = 22.dp))
-        }
+        HorizontalDivider(Modifier.padding(top = 14.dp), thickness = Dp.Hairline, color = RR.line)
 
-        Spacer(Modifier.weight(1f))
-
-        HorizontalDivider(thickness = Dp.Hairline, color = RR.line)
-
-        Row(Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 weeklySummary ?: "RUNNER REPORT",
                 style = mono(12.sp, FontWeight.SemiBold), color = RR.text2,
@@ -162,6 +192,47 @@ fun ShareCardView(
             Text("런미새", style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.ExtraBold), color = RR.brand)
         }
     }
+}
+
+/// 구간 페이스 2열 표 — 왼쪽 열을 먼저 채운다. 가장 빠른 구간은 브랜드색 (이슈 #221)
+@Composable
+private fun SplitTable(rows: List<ShareSummary.SplitRow>, modifier: Modifier) {
+    val half = (rows.size + 1) / 2
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("구간 페이스", style = TextStyle(fontSize = 11.sp), color = RR.text3)
+        Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            for (column in listOf(rows.subList(0, half), rows.subList(half, rows.size))) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    column.forEach { row ->
+                        Row {
+                            Text(row.label, style = mono(11.5.sp), color = if (row.isFastest) RR.brand else RR.text3)
+                            Spacer(Modifier.weight(1f).widthIn(min = 4.dp))
+                            Text(
+                                Format.pace(row.paceSecPerKm),
+                                style = mono(11.5.sp, if (row.isFastest) FontWeight.ExtraBold else FontWeight.SemiBold),
+                                color = if (row.isFastest) RR.brand else RR.text,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 공유 카드는 기기 모드와 무관하게 늘 라이트로 그린다 — 스토리는 남의 피드에 섞여 보여
+/// 다크 카드가 튀므로 한 가지로 고정한다 (이슈 #221).
+/// (Android: iOS `.environment(\.colorScheme, .light)` 대응 — RR 토큰이 읽는 `isSystemInDarkTheme()`의
+/// 근거인 uiMode만 라이트로 바꾼 Configuration을 내려준다)
+@Composable
+fun ForceLightScheme(content: @Composable () -> Unit) {
+    val base = LocalConfiguration.current
+    val light = remember(base) {
+        Configuration(base).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or Configuration.UI_MODE_NIGHT_NO
+        }
+    }
+    CompositionLocalProvider(LocalConfiguration provides light, content = content)
 }
 
 @Composable
@@ -182,13 +253,14 @@ private fun RowScope.Stat(label: String, value: String, unit: String, white: Boo
 private fun RouteCanvas(route: List<TrackPoint>, modifier: Modifier) {
     val pieces = RoutePaceEngine.segments(route)?.map { it.points to it.color } ?: listOf(route to RR.brand)
     Canvas(modifier) {
-        val fill = max(size.width / 360f, size.height / 240f)   // 스냅샷 1pt당 px
         val region = RouteSnapshot.region(route.map { GeoPoint(it.lat, it.lon) })
         fun mercY(lat: Double) = ln(tan(PI / 4 + Math.toRadians(lat) / 2))
         val cy = mercY(region.centerLat)
         val spanX = Math.toRadians(region.lonDelta)
         val spanY = mercY(region.centerLat + region.latDelta / 2) - mercY(region.centerLat - region.latDelta / 2)
-        val k = min(360 / spanX, 240 / spanY) * fill   // 라디안당 px — 영역 전체가 보이게 맞춘다
+        // 라디안당 px — 캔버스 크기 그대로 영역 전체가 보이게 맞춘다. 지도 높이가 구간 표에 따라 바뀌어도
+        // 경로가 잘리지 않는다 (iOS는 카드 지도 높이와 같은 비율로 스냅샷을 뜬다, 이슈 #221)
+        val k = min(size.width / spanX, size.height / spanY)
         for ((points, color) in pieces) {
             val path = Path()
             points.forEachIndexed { i, p ->
@@ -196,7 +268,7 @@ private fun RouteCanvas(route: List<TrackPoint>, modifier: Modifier) {
                 val y = size.height / 2 - ((mercY(p.lat) - cy) * k).toFloat()
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, color, style = Stroke(4.5f * fill, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(path, color, style = Stroke(4.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     }
 }
@@ -212,7 +284,12 @@ val RoutePaceEngine.Segment.color: Color
 /// 사진 위 텍스트는 모드와 무관하게 읽혀야 해서 RR 적응 토큰 대신
 /// 고정 흑백을 쓴다 — 지도 헤더 오버레이와 같은 예외 (SessionDetailScreen).
 @Composable
-fun PhotoCardView(run: RunSummary, photo: ImageBitmap? = null) = FixedFontScale {
+fun PhotoCardView(
+    run: RunSummary,
+    photo: ImageBitmap? = null,
+    /// 날짜 줄에 시작~종료 시각을 적을지 — 미니멀 카드와 같은 토글 (이슈 #221)
+    showsTime: Boolean = true,
+) = FixedFontScale {
     Box(Modifier.size(360.dp, 640.dp)) {
         if (photo != null) {
             Image(photo, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -236,7 +313,7 @@ fun PhotoCardView(run: RunSummary, photo: ImageBitmap? = null) = FixedFontScale 
 
         Column(Modifier.fillMaxSize().padding(28.dp)) {
             Text(
-                "런미새 · ${RoutePrivacy.cardDateLine(run.start, ZoneId.systemDefault())}",
+                "런미새 · ${RoutePrivacy.cardDateLine(run.start, if (showsTime) run.end else null, ZoneId.systemDefault())}",
                 style = mono(11.sp, FontWeight.SemiBold).copy(letterSpacing = 1.4.sp),
                 color = Color.White.copy(alpha = 0.85f),
             )

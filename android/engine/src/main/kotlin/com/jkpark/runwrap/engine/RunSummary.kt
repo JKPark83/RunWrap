@@ -27,6 +27,10 @@ data class RunSummary(
     /// 열 보정 페이스(HeatEngine)의 재료라 추가 쿼리 비용이 없다 (제안 문서 A1). 실내는 nil.
     var weatherTempC: Double? = null,
     var weatherHumidityPct: Double? = null,
+    /// 종료 시각 — 공유 카드의 "06:12~07:05" 표기용 (이슈 #221). 일시정지가 있으면 durationSec(활동 시간)보다
+    /// 늦으므로 워크아웃 종료 시각을 따로 받는다. 없으면(데모·테스트) 시작 + 활동 시간
+    @Serializable(with = ReferenceDateInstantSerializer::class)
+    val end: Instant = start.plusMillis((durationSec * 1_000).toLong()),
 ) {
     val distanceKm: Double? get() = distanceMeters?.let { it / 1000 }
 

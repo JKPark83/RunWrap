@@ -23,4 +23,32 @@ object ShareSummary {
         val label = if (sessionDay == now.atZone(zone).toLocalDate()) "최근 7일" else "그날까지 7일"
         return "$label ${week.size}회 · ${Format.km(km)} km"
     }
+
+    /// 공유 카드 구간 페이스 표의 한 줄 — "3km 5:41" 또는 묶었을 때 "3–4km 5:41" (이슈 #221)
+    data class SplitRow(
+        val label: String,
+        val paceSecPerKm: Double,
+        /// 가장 빠른 줄 — 카드에서 강조한다 (같으면 앞 줄)
+        val isFastest: Boolean,
+    )
+
+    /// 1km 스플릿 페이스 → 카드 표 줄. 9:16 카드에 지도와 함께 2열 × 5줄(`maxRows` 10)까지만 들어가므로
+    /// 그보다 많으면 연속 구간을 ceil(n / maxRows)km씩 묶어 평균 페이스를 적는다 —
+    /// 하프(21구간)는 3km씩 7줄, 풀(42구간)은 5km씩 9줄(마지막은 41–42km). 구간 거리가 같아(1km) 단순 평균이 곧 시간 가중 평균이다.
+    /// 3구간 미만이면 표가 의미 없어 빈 배열 — 세션 상세 스플릿 카드와 같은 가드 (미노출 원칙)
+    /// 라벨은 배열 위치가 아니라 실제 km 번호(`index`)로 적는다 — ActiveTimeline이 데이터 오류 구간을
+    /// 건너뛰어 번호가 비어도(1·2·4km…) 뒤 라벨이 밀리지 않게, 세션 상세 스플릿 차트와 같은 번호를 쓴다.
+    /// (Android: iOS `(index:paceSecPerKm:)` 튜플 대신 ActiveTimeline.Split)
+    fun splitRows(splits: List<ActiveTimeline.Split>, maxRows: Int = 10): List<SplitRow> {
+        if (splits.size < 3 || maxRows <= 0) return emptyList()
+        val size = (splits.size + maxRows - 1) / maxRows
+        val groups = splits.chunked(size).map { group ->
+            val first = group.first().index
+            val last = group.last().index
+            val label = if (group.size == 1) "${first}km" else "${first}–${last}km"
+            label to group.sumOf { it.paceSecPerKm } / group.size
+        }
+        val fastest = groups.indices.minBy { groups[it].second }
+        return groups.mapIndexed { i, (label, pace) -> SplitRow(label, pace, i == fastest) }
+    }
 }

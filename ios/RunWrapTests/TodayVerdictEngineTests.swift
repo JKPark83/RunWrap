@@ -159,42 +159,62 @@ struct TodayVerdictEngineTests {
         }
     }
 
-    @Test("날씨 줄 — '체감 온도 · 상의+하의', 비가 오면 가운데에 '비'가 낀다")
+    @Test("날씨 줄 — '기온 체감 N° · 상의+하의', 비가 오면 가운데에 '비'가 낀다")
     func weatherPhrase() throws {
-        // 체감 22.4°C·습도 60% → 16~24 구간의 반팔 티+반바지 (소품은 제외한다)
-        let mild = try #require(verdict(weather: .current(weather(apparentC: 22.4))))
-        #expect(mild.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+        // 기온 12.4°C(체감 11)·습도 60% → 달릴 때 22.4°C → 16~24 구간의 반팔 티+반바지 (소품은 제외한다)
+        let mild = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11))))
+        #expect(mild.weather.content == .value("12°C 체감 11° · 반팔 티+반바지"))
 
+        // 기온 8°C → 달릴 때 18°C → 반팔 티+반바지 (방수 자켓은 소품이라 문구에서 빠진다)
         let rainy = try #require(verdict(weather: .current(
-            weather(apparentC: 18, precipitationMm: 2))))
-        #expect(rainy.weather.content == .value("체감 18°C · 비 · 반팔 티+반바지"))
+            weather(temperatureC: 8, apparentC: 6, precipitationMm: 2))))
+        #expect(rainy.weather.content == .value("8°C 체감 6° · 비 · 반팔 티+반바지"))
     }
 
-    @Test("날씨 캡션 — 달리기 좋은 시간이 있으면 '18~20시가 좋아요', 없으면 nil (이슈 #173)")
-    func weatherBestWindowCaption() throws {
-        // now = KST 18:00 → 창 18:00~20:00, 판정문(값)은 추천과 무관하게 그대로
-        let window = RunWindow(start: now, end: now.addingTimeInterval(7_200),
-                               avgScore: 100, apparentC: 20, precipitationProbabilityPct: 10)
-        let withWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4),
-                                                                bestWindow: window)))
-        #expect(withWindow.weather.caption == "18~20시가 좋아요")
-        #expect(withWindow.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+    @Test("날씨 조각 — 실제 기온이 주 숫자, 체감은 뒤에 붙는다 (이슈 #220)")
+    func weatherPartsTemperature() {
+        let parts = TodayVerdictEngine.weatherParts(
+            weather(temperatureC: 29.4, apparentC: 33.1), now: now)
+        #expect(parts.temperature == "29°C 체감 33°")
+    }
 
-        let withoutWindow = try #require(verdict(weather: .current(weather(apparentC: 22.4))))
+    @Test("날씨 캡션 — 구간 2개까지 나열해 '6~9시 · 18~21시가 좋아요', 넘으면 '외 N곳이', 없으면 nil (이슈 #173, #219)")
+    func weatherWindowsCaption() throws {
+        // now = KST 18:00 → 구간 06:00~09:00(now − 12h)와 18:00~21:00. 판정문(값)은 추천과 무관하게 그대로
+        let morning = RunWindow(start: now.addingTimeInterval(-43_200), end: now.addingTimeInterval(-32_400),
+                                avgScore: 100, temperatureC: 10, apparentC: 8,
+                                precipitationProbabilityPct: 0)
+        let evening = RunWindow(start: now, end: now.addingTimeInterval(10_800),
+                                avgScore: 70, temperatureC: 16, apparentC: 15,
+                                precipitationProbabilityPct: 10)
+        let withWindows = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11),
+                                                                 windows: [morning, evening])))
+        #expect(withWindows.weather.caption == "6~9시 · 18~21시가 좋아요")
+        #expect(withWindows.weather.content == .value("12°C 체감 11° · 반팔 티+반바지"))
+
+        // 세 번째 구간(21~22시)은 홈 캡션 한 줄 폭을 넘지 않게 "외 1곳"으로 줄인다
+        let late = RunWindow(start: now.addingTimeInterval(10_800), end: now.addingTimeInterval(14_400),
+                             avgScore: 70, temperatureC: 15, apparentC: 14,
+                             precipitationProbabilityPct: 0)
+        let withThree = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11),
+                                                               windows: [morning, evening, late])))
+        #expect(withThree.weather.caption == "6~9시 · 18~21시 외 1곳이 좋아요")
+
+        let withoutWindow = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11))))
         #expect(withoutWindow.weather.caption == nil)
     }
 
     @Test("날씨 줄 대기질 — 나쁨 이상이면 문구 뒤에 ' · 대기질 <공식 등급>'을 붙인다 (이슈 #183)")
     func weatherAirSuffix() throws {
-        let bad = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .bad))
-        #expect(bad.weather.content == .value("체감 22°C · 반팔 티+반바지 · 대기질 나쁨"))
+        let bad = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11)), air: .bad))
+        #expect(bad.weather.content == .value("12°C 체감 11° · 반팔 티+반바지 · 대기질 나쁨"))
 
-        let veryBad = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .veryBad))
-        #expect(veryBad.weather.content == .value("체감 22°C · 반팔 티+반바지 · 대기질 매우나쁨"))
+        let veryBad = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11)), air: .veryBad))
+        #expect(veryBad.weather.content == .value("12°C 체감 11° · 반팔 티+반바지 · 대기질 매우나쁨"))
 
         // 보통 이하는 붙이지 않는다
-        let moderate = try #require(verdict(weather: .current(weather(apparentC: 22.4)), air: .moderate))
-        #expect(moderate.weather.content == .value("체감 22°C · 반팔 티+반바지"))
+        let moderate = try #require(verdict(weather: .current(weather(temperatureC: 12.4, apparentC: 11)), air: .moderate))
+        #expect(moderate.weather.content == .value("12°C 체감 11° · 반팔 티+반바지"))
     }
 
     @Test("날씨 줄 대기질 — 날씨 값이 없는 유도 문구 줄에는 붙이지 않는다")
@@ -213,13 +233,13 @@ struct TodayVerdictEngineTests {
     @Test("날씨 조각 — 강수량 0mm여도 이슬비 코드(WMO 51)면 raining (이슈 #109)")
     func weatherPartsRainCode() {
         let parts = TodayVerdictEngine.weatherParts(
-            weather(apparentC: 18, weatherCode: 51), now: now)
+            weather(temperatureC: 18, apparentC: 18, weatherCode: 51), now: now)
         #expect(parts.raining)
     }
 
-    private func weather(apparentC: Double, precipitationMm: Double = 0,
+    private func weather(temperatureC: Double, apparentC: Double, precipitationMm: Double = 0,
                          weatherCode: Int? = nil) -> CurrentWeather {
-        CurrentWeather(temperatureC: apparentC, apparentC: apparentC, humidityPct: 60,
+        CurrentWeather(temperatureC: temperatureC, apparentC: apparentC, humidityPct: 60,
                        windMs: 2, precipitationMm: precipitationMm, forecastMaxC: nil,
                        weatherCode: weatherCode, uvIndex: 1)
     }
