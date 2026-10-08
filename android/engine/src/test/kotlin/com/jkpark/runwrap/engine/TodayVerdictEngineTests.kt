@@ -176,44 +176,57 @@ class TodayVerdictEngineTests {
     }
 
     @Test
-    @DisplayName("날씨 줄 — '체감 온도 · 상의+하의', 비가 오면 가운데에 '비'가 낀다")
+    @DisplayName("날씨 줄 — '기온 체감 N° · 상의+하의', 비가 오면 가운데에 '비'가 낀다")
     fun weatherPhrase() {
-        // 체감 22.4°C·습도 60% → 16~24 구간의 반팔 티+반바지 (소품은 제외한다)
-        val mild = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(apparentC = 22.4))))
-        assertEquals(value("체감 22°C · 반팔 티+반바지"), mild.weather.content)
+        // 기온 12.4°C(체감 11)·습도 60% → 달릴 때 22.4°C → 16~24 구간의 반팔 티+반바지 (소품은 제외한다)
+        val mild = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(temperatureC = 12.4, apparentC = 11.0))))
+        assertEquals(value("12°C 체감 11° · 반팔 티+반바지"), mild.weather.content)
 
+        // 기온 8°C → 달릴 때 18°C → 반팔 티+반바지 (방수 자켓은 소품이라 문구에서 빠진다)
         val rainy = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(
-            weather(apparentC = 18.0, precipitationMm = 2.0))))
-        assertEquals(value("체감 18°C · 비 · 반팔 티+반바지"), rainy.weather.content)
+            weather(temperatureC = 8.0, apparentC = 6.0, precipitationMm = 2.0))))
+        assertEquals(value("8°C 체감 6° · 비 · 반팔 티+반바지"), rainy.weather.content)
     }
 
     @Test
-    @DisplayName("날씨 캡션 — 달리기 좋은 시간이 있으면 '18~20시가 좋아요', 없으면 nil (이슈 #173)")
-    fun weatherBestWindowCaption() {
-        // now = KST 18:00 → 창 18:00~20:00, 판정문(값)은 추천과 무관하게 그대로
-        val window = RunWindow(start = now, end = now.plusSeconds(7_200),
-                               avgScore = 100, apparentC = 20.0, precipitationProbabilityPct = 10)
-        val withWindow = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(apparentC = 22.4),
-                                                                                                bestWindow = window)))
-        assertEquals("18~20시가 좋아요", withWindow.weather.caption)
-        assertEquals(value("체감 22°C · 반팔 티+반바지"), withWindow.weather.content)
+    @DisplayName("날씨 조각 — 실제 기온이 주 숫자, 체감은 뒤에 붙는다 (이슈 #220)")
+    fun weatherPartsTemperature() {
+        val parts = TodayVerdictEngine.weatherParts(
+            weather(temperatureC = 29.4, apparentC = 33.1), now = now, zone = testZone)
+        assertEquals("29°C 체감 33°", parts.temperature)
+    }
 
-        val withoutWindow = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(apparentC = 22.4))))
+    @Test
+    @DisplayName("날씨 캡션 — 달리기 좋은 구간을 모두 나열해 '6~9시 · 18~21시가 좋아요', 없으면 nil (이슈 #173, #219)")
+    fun weatherWindowsCaption() {
+        // now = KST 18:00 → 구간 06:00~09:00(now − 12h)와 18:00~21:00. 판정문(값)은 추천과 무관하게 그대로
+        val morning = RunWindow(start = now.minusSeconds(43_200), end = now.minusSeconds(32_400),
+                                avgScore = 100, temperatureC = 10.0, apparentC = 8.0,
+                                precipitationProbabilityPct = 0)
+        val evening = RunWindow(start = now, end = now.plusSeconds(10_800),
+                                avgScore = 70, temperatureC = 16.0, apparentC = 15.0,
+                                precipitationProbabilityPct = 10)
+        val withWindows = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(
+            weather(temperatureC = 12.4, apparentC = 11.0), windows = listOf(morning, evening))))
+        assertEquals("6~9시 · 18~21시가 좋아요", withWindows.weather.caption)
+        assertEquals(value("12°C 체감 11° · 반팔 티+반바지"), withWindows.weather.content)
+
+        val withoutWindow = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(temperatureC = 12.4, apparentC = 11.0))))
         assertNull(withoutWindow.weather.caption)
     }
 
     @Test
     @DisplayName("날씨 줄 대기질 — 나쁨 이상이면 문구 뒤에 ' · 대기질 <공식 등급>'을 붙인다 (이슈 #183)")
     fun weatherAirSuffix() {
-        val bad = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(apparentC = 22.4)), air = AirGrade.bad))
-        assertEquals(value("체감 22°C · 반팔 티+반바지 · 대기질 나쁨"), bad.weather.content)
+        val bad = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(temperatureC = 12.4, apparentC = 11.0)), air = AirGrade.bad))
+        assertEquals(value("12°C 체감 11° · 반팔 티+반바지 · 대기질 나쁨"), bad.weather.content)
 
-        val veryBad = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(apparentC = 22.4)), air = AirGrade.veryBad))
-        assertEquals(value("체감 22°C · 반팔 티+반바지 · 대기질 매우나쁨"), veryBad.weather.content)
+        val veryBad = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(temperatureC = 12.4, apparentC = 11.0)), air = AirGrade.veryBad))
+        assertEquals(value("12°C 체감 11° · 반팔 티+반바지 · 대기질 매우나쁨"), veryBad.weather.content)
 
         // 보통 이하는 붙이지 않는다
-        val moderate = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(apparentC = 22.4)), air = AirGrade.moderate))
-        assertEquals(value("체감 22°C · 반팔 티+반바지"), moderate.weather.content)
+        val moderate = assertNotNull(verdict(weather = TodayVerdictEngine.WeatherInput.current(weather(temperatureC = 12.4, apparentC = 11.0)), air = AirGrade.moderate))
+        assertEquals(value("12°C 체감 11° · 반팔 티+반바지"), moderate.weather.content)
     }
 
     @Test
@@ -234,13 +247,13 @@ class TodayVerdictEngineTests {
     @DisplayName("날씨 조각 — 강수량 0mm여도 이슬비 코드(WMO 51)면 raining (이슈 #109)")
     fun weatherPartsRainCode() {
         val parts = TodayVerdictEngine.weatherParts(
-            weather(apparentC = 18.0, weatherCode = 51), now = now, zone = testZone)
+            weather(temperatureC = 18.0, apparentC = 18.0, weatherCode = 51), now = now, zone = testZone)
         assertTrue(parts.raining)
     }
 
-    private fun weather(apparentC: Double, precipitationMm: Double = 0.0,
+    private fun weather(temperatureC: Double, apparentC: Double, precipitationMm: Double = 0.0,
                         weatherCode: Int? = null): CurrentWeather =
-        CurrentWeather(temperatureC = apparentC, apparentC = apparentC, humidityPct = 60.0,
+        CurrentWeather(temperatureC = temperatureC, apparentC = apparentC, humidityPct = 60.0,
                        windMs = 2.0, precipitationMm = precipitationMm, forecastMaxC = null,
                        weatherCode = weatherCode, uvIndex = 1.0)
 

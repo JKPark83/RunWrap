@@ -31,7 +31,7 @@ struct TodayVerdict: Equatable {
         let content: Content
         /// 값이 있고 상태 판정이 가능할 때만 — 유도 문구 줄은 항상 nil
         let tone: RRTone?
-        /// 값 아래 덧붙이는 짧은 한 줄 — 날씨 줄의 "18~20시가 좋아요" (이슈 #173). 없으면 nil
+        /// 값 아래 덧붙이는 짧은 한 줄 — 날씨 줄의 "6~9시 · 18~21시가 좋아요" (이슈 #173). 없으면 nil
         var caption: String? = nil
     }
 
@@ -55,8 +55,8 @@ enum TodayVerdictEngine {
         case loading
         case denied         // 위치 권한 거부 — 앱 안에서 다시 물을 수 없어 설정으로 보내야 한다
         case unavailable    // 위치·날씨 조회 실패
-        /// bestWindow: 오늘 달리기 좋은 시간(RunWindowEngine) — 추천이 없으면 nil (이슈 #173)
-        case current(CurrentWeather, bestWindow: RunWindow? = nil)
+        /// windows: 오늘 달리기 좋은 시간 구간 전부(RunWindowEngine) — 추천이 없으면 빈 배열 (이슈 #173, #219)
+        case current(CurrentWeather, windows: [RunWindow] = [])
     }
 
     /// - Parameters:
@@ -178,7 +178,7 @@ enum TodayVerdictEngine {
         case .unavailable:
             return .init(kind: .weather, label: label,
                          content: .hint("날씨를 불러오지 못했어요"), tone: nil)
-        case .current(let current, let bestWindow):
+        case .current(let current, let windows):
             // 추천 시간은 판정문에 이어 붙이지 않고 캡션으로 — 홈 타일은 문구 대신 그림으로 값을 그려서
             // 문구 끝에 붙이면 보이지 않는다.
             // 공기가 나쁨 이상이면 날씨 문구 뒤에 공식 등급을 덧붙인다 (이슈 #183) — 헤드라인을 끌어내린 이유가
@@ -186,7 +186,7 @@ enum TodayVerdictEngine {
             let airSuffix = air.flatMap { $0 >= .bad ? " · 대기질 \($0.label)" : nil } ?? ""
             return .init(kind: .weather, label: label,
                          content: .value(weatherPhrase(current, now: now) + airSuffix), tone: nil,
-                         caption: bestWindow.map { "\(RunWindowEngine.rangeLabel($0))가 좋아요" })
+                         caption: RunWindowEngine.rangesLabel(windows).map { "\($0)가 좋아요" })
         }
     }
 
@@ -194,26 +194,26 @@ enum TodayVerdictEngine {
     /// 하늘 상태(WMO 코드)는 여기 없다. 복장이 이미 조건을 요약하고,
     /// 판단을 가르는 건 맑음/흐림이 아니라 강수 여부다 (아이콘은 화면 몫).
     struct WeatherParts: Equatable {
-        let temperature: String     // "체감 22°C"
+        let temperature: String     // "22°C 체감 21°" — 실제 기온이 주 숫자 (이슈 #220)
         let raining: Bool
         let outfit: String?         // "반팔 티+반바지" — 상·하의를 낼 수 없으면 nil
     }
 
     static func weatherParts(_ current: CurrentWeather, now: Date) -> WeatherParts {
-        let outfit = OutfitRules.outfit(apparentC: current.apparentC,
+        let outfit = OutfitRules.outfit(temperatureC: current.temperatureC,
                                         humidityPct: current.humidityPct,
                                         windMs: current.windMs,
                                         precipitationMm: current.precipitationMm,
                                         weatherCode: current.weatherCode,
                                         uvIndex: current.uvIndex,
                                         now: now)
-        return WeatherParts(temperature: "체감 \(Int(current.apparentC.rounded()))°C",
+        return WeatherParts(temperature: "\(Int(current.temperatureC.rounded()))°C 체감 \(Int(current.apparentC.rounded()))°",
                             raining: WeatherAdviceRules.isRaining(code: current.weatherCode,
                                                                   precipitationMm: current.precipitationMm),
                             outfit: outfitPhrase(outfit))
     }
 
-    /// "체감 22°C · 반팔 티+반바지" — 비가 오면 가운데에 "비"를 끼운다
+    /// "22°C 체감 21° · 반팔 티+반바지" — 비가 오면 가운데에 "비"를 끼운다
     private static func weatherPhrase(_ current: CurrentWeather, now: Date) -> String {
         let parts = weatherParts(current, now: now)
         return ([parts.temperature, parts.raining ? "비" : nil, parts.outfit]
