@@ -1,7 +1,7 @@
 # App Review 심사 노트 초안 (런미새 1.3 이상)
 
 App Store Connect → 앱 심사 정보 → **비고(App Review Notes)** 칸에 붙여 넣을 원문입니다.
-ASC 칸은 **4,000자 제한**이라 아래 영문은 그 안에 맞춘 판본이다(1.3 제출본, 2026-10-01).
+ASC 칸은 **4,000자 제한**이라 아래 영문은 그 안에 맞춘 판본이다(1.4 제출본, 2026-10-09).
 Guideline 2.1 리젝(2026-08-14) 때 Apple이 요구한 기능·대상 사용자·테스트 기기·지역 차이 항목을 반드시 유지한다.
 심사자는 대부분 영어권이므로 **영문을 본문으로 넣고 국문은 참고용**으로 둡니다.
 
@@ -16,14 +16,14 @@ Guideline 2.1 리젝(2026-08-14) 때 Apple이 요구한 기능·대상 사용자
 No account or sign-in is required.
 
 ABOUT THE APP (Guideline 2.1)
-- What it does: interprets the user's own Apple Watch running workouts into plain-Korean reports (training load, recovery, pace, race prediction) and suggests today's training. Audience: Korean recreational runners who own an Apple Watch. No accounts, purchases, or user-generated content.
-- Tested on: iPhone 17 Pro Max (iOS 27.0) paired with an Apple Watch, plus the iPhone 17 Pro simulator.
+- What it does: interprets the user's own Apple Watch running workouts into plain-Korean reports (training load, recovery, pace, race prediction, course replay) and suggests today's training. Audience: Korean recreational runners who own an Apple Watch. No accounts, purchases, or user-generated content.
+- Tested on: iPhone 17 Pro Max (iOS 27.0.1) paired with an Apple Watch, plus the iPhone 17 Pro simulator.
 - Regions: features are identical in all regions; the UI and race data are Korean.
 
 HOW TO SEE THE FULL APP WITHOUT AN APPLE WATCH
-The app interprets running workouts recorded by Apple Watch and read from Apple Health. A device with no running history shows empty states by design, so we ship a visible built-in demo mode:
-1. Launch the app and complete onboarding (short tap-only survey, tap "다음" (Next) on the result card, then allow or deny the Health prompt; either choice continues).
-2. Open the "리포트" tab (2nd of 4 tabs: 홈 / 리포트 / 코스 / 대회) and tap the gear icon at the top right.
+The app interprets running workouts recorded by Apple Watch and read from Apple Health. A device with no running history shows empty states by design, so a built-in demo mode is provided:
+1. Launch the app and complete onboarding (tap-only survey; tap "다음" (Next), then allow or deny the Health prompt; either choice continues).
+2. On the "홈" tab (1st of 4 tabs: 홈 / 리포트 / 코스 / 대회) tap the gear icon at the top right.
 3. In "데모 모드" (Demo mode), turn on "샘플 데이터로 둘러보기" (Browse with sample data).
 4. Go back. Every tab now shows ~6 months of synthetic running data.
 Shortcut: on the empty report screen, tap "샘플 리포트 둘러보기" to open a sample weekly report.
@@ -35,23 +35,23 @@ A metric is never shown when the sample is too small to compute it honestly (e.g
 HEALTH DATA (5.1.3)
 - HealthKit is READ-ONLY (toShare: []). The app never writes to Health.
 - All read types are requested together at onboarding: running workouts, route, heart rate and running-form metrics, workout effort score (iOS 18+), sleep, HRV, resting HR, HR recovery, respiratory rate, wrist temperature, and date of birth (max-HR estimate only). Body mass is never requested.
-- The widget extension has no HealthKit entitlement. It only reads a derived snapshot (battery level, today's verdict, weekly distance) written by the app to the App Group container.
+- The widget extension has no HealthKit entitlement; it only reads a derived snapshot (battery level, today's verdict, weekly distance) the app writes to the App Group container.
 - All health data is processed on device and NEVER transmitted. Network hosts (none receives health data):
 1. api.open-meteo.com: weather and 24-hour forecast (coordinates rounded to 2 decimals, nothing stored).
 2. apis.data.go.kr: Korean air-quality API. Only the nearest station name is sent, no coordinates.
 3. raw.githubusercontent.com: public JSON of upcoming Korean races.
-4. Race poster images from the external URLs in that JSON (organizer sites or news/portal image hosts).
-5. iCloud (CloudKit private DB): one progress snapshot (level, goals, growth stage, bird collection, hand-entered race results) to survive reinstall. No health data; developer cannot read it; skipped without iCloud sign-in.
-6. Apple Maps (MapKit) tiles.
-- GPX export (session detail → "GPX 파일로 내보내기"): only when the user requests it, the app writes that one run's route/time/elevation/heart rate to a GPX file and hands it to the iOS share sheet. The app sends it nowhere itself; the user picks the destination.
+4. Race poster images from the external URLs in that JSON.
+5. iCloud (CloudKit private DB): one progress snapshot (level, goals, bird collection, hand-entered race results) to survive reinstall. No health data; skipped without iCloud sign-in.
+6. Apple Maps (MapKit) tiles, incl. the 3D course replay.
+- GPX export: only on user request, one run's route is written to a GPX file and handed to the iOS share sheet; the user picks the destination.
 - No analytics, no ads, no third-party dependencies.
 
 MEDICAL DISCLAIMER (1.4.1)
-Every interpretive card shows a disclaimer that the app does not diagnose or give medical advice and that users should consult a professional for pain or anything abnormal. Also in section 7 of the privacy policy.
+Every interpretive card states that the app does not diagnose or give medical advice and that users should consult a professional for pain or anything abnormal. Also in section 7 of the privacy policy.
 
 PRIVACY POLICY (5.1.1(i))
 https://runmisae-privacy.vercel.app/privacy.html
-In app: 리포트 tab, gear icon, "개인정보" section, "개인정보 처리방침".
+In app: 홈 tab, gear icon, "개인정보" section, "개인정보 처리방침".
 
 OTHER PERMISSIONS (all optional; declining only hides the related card)
 - Location (when in use): weather/air quality on "홈"; nearby fountains, restrooms, stores on "코스".
